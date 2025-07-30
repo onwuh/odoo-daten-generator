@@ -1,0 +1,7 @@
+{
+  "name": "Odoo Data Generator",
+  "image": "mcr.microsoft.com/devcontainers/python:3",
+  
+  // This command runs automatically after the Codespace is created
+  "postCreateCommand": "pip install -r requirements.txt"
+}
