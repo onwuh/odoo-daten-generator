@@ -6,13 +6,14 @@ import configparser
 import questionary
 import odoo_actions
 import gemini_client
-
+## Updated Interactive Wizard
 def run_interactive_wizard():
-    """Guides the user through a series of detailed questions."""
+    """Führt den Benutzer durch eine Reihe von detaillierten Fragen."""
     print("🚀 Willkommen beim Odoo Demo-Daten Assistenten!")
     
     criteria = {}
     
+    # Mode and Industry questions remain the same
     criteria['mode'] = questionary.select(
         "Was möchtest du tun?",
         choices=[
@@ -20,7 +21,6 @@ def run_interactive_wizard():
             "Stammdaten anlegen UND Bewegungsdaten (Angebote) erstellen"
         ]
     ).ask()
-
     criteria['industry'] = questionary.text(
         "Für welche Branche sollen die Daten sein? (z.B. 'IT-Dienstleistung')",
         default="IT-Dienstleistung"
@@ -32,6 +32,7 @@ def run_interactive_wizard():
         validate=lambda text: text.isdigit(), default="1"
     ).ask())
     
+    # NEU: Granulare Abfrage der Kontakt-Typen
     criteria['num_delivery_contacts'] = int(questionary.text(
         "Anzahl der Lieferadressen pro Firma?",
         validate=lambda text: text.isdigit(), default="1"
@@ -41,9 +42,10 @@ def run_interactive_wizard():
         validate=lambda text: text.isdigit(), default="1"
     ).ask())
     criteria['num_other_contacts'] = int(questionary.text(
-        "Anzahl sonstiger Kontakte pro Firma?",
-        validate=lambda text: text.isdigit(), default="0"
+        "Anzahl sonstiger Ansprechpartner pro Firma?",
+        validate=lambda text: text.isdigit(), default="1"
     ).ask())
+
 
     print("\n--- PRODUKT-DEFINITION ---")
     criteria['num_services'] = int(questionary.text(
@@ -117,11 +119,13 @@ def populate_odoo_with_data(creative_data, criteria, models, db_info):
                 new_id = odoo_actions.create_product(models, db_info, final_product_data)
                 all_product_ids.append(new_id)
 
+ # --- 2. KUNDEN & KONTAKTE ERSTELLEN ---
     print("\n--- Erstelle Kunden und Kontakte ---")
     for company_scenario in creative_data.get('companies', []):
         company_data = company_scenario.get('company_data', {})
         if not company_data.get('name'): continue
         
+        # Process main company address
         valid_company_data = {k: v for k, v in company_data.items() if v is not None}
         country_code = valid_company_data.pop('country_code', 'DE')
         country_id = odoo_actions.get_country_id(models, db_info, country_code)
@@ -132,10 +136,18 @@ def populate_odoo_with_data(creative_data, criteria, models, db_info):
         company_id = odoo_actions.create_customer(models, db_info, valid_company_data)
         created_company_ids.append(company_id)
         
+        # Process sub-contacts
         for contact_data in company_scenario.get('contacts', []):
-            if not contact_data.get('name'): continue
             valid_contact_data = {k: v for k, v in contact_data.items() if v is not None}
             valid_contact_data['parent_id'] = company_id
+            
+            # NEU: Verarbeite die individuelle Adresse des Sub-Kontakts, falls vorhanden
+            if 'country_code' in valid_contact_data:
+                contact_country_code = valid_contact_data.pop('country_code', 'DE')
+                contact_country_id = odoo_actions.get_country_id(models, db_info, contact_country_code)
+                if contact_country_id:
+                    valid_contact_data['country_id'] = contact_country_id
+            
             odoo_actions.create_customer(models, db_info, valid_contact_data)
 
     if "Bewegungsdaten" in criteria['mode'] and created_company_ids and all_product_ids:

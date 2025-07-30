@@ -3,33 +3,30 @@ import json
 import signal
 from typing import Dict, Any, List
 
-# Timeout handling for the API request
-class TimeoutException(Exception): pass
-def timeout_handler(signum, frame):
-    raise TimeoutException("Die API-Anfrage hat das Zeitlimit überschritten.")
-
-
+## Updated Prompt Builder
 def build_prompt_from_criteria(criteria: Dict[str, Any]) -> str:
-    """Creates the Gemini prompt from the collected criteria."""
+    """Erstellt den Gemini-Prompt mit detaillierten Anweisungen."""
+    
     prompt = f"""
-    Erstelle fiktive, aber realistische Demodaten für Odoo basierend auf diesen Kriterien:
+    Erstelle fiktive, realistische Demodaten für Odoo basierend auf diesen Kriterien:
     - Branche: {criteria['industry']}
     - Anzahl der Firmen: {criteria['num_companies']}
-    - Pro Firma, erstelle:
-        - {criteria['num_delivery_contacts']} Lieferadressen
-        - {criteria['num_invoice_contacts']} Rechnungsadressen
-        - {criteria['num_other_contacts']} sonstige Kontakte
-    - Erstelle außerdem {criteria['num_services']} Dienstleistungen, {criteria['num_consumables']} Verbrauchsprodukte, und {criteria['num_storables']} lagerfähige Produkte.
 
     Gib NUR ein sauberes JSON-Objekt zurück.
-    Das JSON muss die Struktur {{"companies": [...], "products":{{"services": [...], "consumables": [...], "storables": [...]}} }} haben.
-    Jedes Firmen-Objekt in der 'companies'-Liste muss enthalten:
-    {{
-      "company_data": {{ "name": "...", "email": "...", "phone": "...", "street": "...", "city": "...", "zip": "...", "country_code": "DE" }},
-      "contacts": [ /* eine Liste mit allen oben angeforderten Kontakt-Typen */ ]
-    }}
-    Jeder Kontakt in der 'contacts'-Liste muss "name" und "type": "delivery", "invoice" oder "other" enthalten.
-    Jedes Produktobjekt sollte "name" und "list_price" enthalten.
+    Das JSON muss die Struktur {{"companies": [...], "products":{{...}} }} haben.
+
+    Für jede Firma, beachte folgende Regeln:
+    1.  Die Firma selbst ("company_data") muss eine vollständige Adresse haben.
+    2.  Erstelle exakt {criteria['num_delivery_contacts']} Kontakte vom Typ 'delivery'.
+        - Der 'name' dieser Kontakte soll ein Ort sein (z.B. "Lagerhalle West", "Hauptsitz Berlin").
+        - Diese Kontakte MÜSSEN eine eigene, vollständige Adresse haben ("street", "city", "zip", "country_code").
+    3.  Erstelle exakt {criteria['num_invoice_contacts']} Kontakte vom Typ 'invoice'.
+        - Diese Kontakte sollen KEINEN 'name' haben, nur den Typ.
+    4.  Erstelle exakt {criteria['num_other_contacts']} Kontakte vom Typ 'other'.
+        - Der 'name' dieser Kontakte soll ein voller Personenname sein (z.B. "Sabine Schmidt").
+    5.  Alle E-Mail-Adressen MÜSSEN die Domain "@example.com" verwenden.
+
+    Erstelle außerdem die von mir angeforderte Anzahl an Produkten.
     """
     return prompt
 
