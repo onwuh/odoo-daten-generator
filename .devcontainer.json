@@ -2,6 +2,23 @@
   "name": "Odoo Data Generator",
   "image": "mcr.microsoft.com/devcontainers/python:3",
   
-  // This command runs automatically after the Codespace is created
-  "postCreateCommand": "pip install -r requirements.txt"
+  // This command now creates the venv AND installs packages into it.
+  "postCreateCommand": "python3 -m venv .venv && .venv/bin/pip install -r requirements.txt",
+
+  // This section configures VS Code for a seamless experience.
+  "customizations": {
+    "vscode": {
+      "settings": {
+        // Tells VS Code which Python interpreter to use by default.
+        "python.defaultInterpreterPath": ".venv/bin/python",
+
+        // Automatically runs 'source .venv/bin/activate' in new terminals.
+        "python.terminal.activateEnvironment": true
+      },
+      // Ensures the official Python extension is installed.
+      "extensions": [
+        "ms-python.python"
+      ]
+    }
+  }
 }
