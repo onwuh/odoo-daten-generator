@@ -3,6 +3,12 @@ import json
 import signal
 from typing import Dict, Any, List
 
+class TimeoutException(Exception):
+    pass
+
+def timeout_handler(signum, frame):
+    raise TimeoutException("Gemini request timed out")
+
 ## Updated Prompt Builder
 def build_prompt_from_criteria(criteria: Dict[str, Any]) -> str:
     """Erstellt den Gemini-Prompt mit detaillierten Anweisungen."""
@@ -40,9 +46,9 @@ def fetch_creative_data(criteria: Dict[str, Any], gemini_model_name: str) -> Dic
     
     signal.signal(signal.SIGALRM, timeout_handler)
     try:
-        signal.alarm(120) 
+        signal.alarm(120)
         response = model.generate_content(prompt)
-        signal.alarm(0) 
+        signal.alarm(0)
         
         json_text = response.text.strip().replace("```json", "").replace("```", "")
         creative_data = json.loads(json_text)
@@ -54,3 +60,8 @@ def fetch_creative_data(criteria: Dict[str, Any], gemini_model_name: str) -> Dic
     except json.JSONDecodeError:
         print("❌ Fehler: Gemini hat ungültiges JSON zurückgegeben.")
         return None
+    finally:
+        try:
+            signal.alarm(0)
+        except Exception:
+            pass

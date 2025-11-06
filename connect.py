@@ -1,4 +1,3 @@
-import xmlrpc.client
 import ssl
 import getpass
 import os
@@ -6,6 +5,7 @@ import configparser
 import questionary
 import odoo_actions
 import gemini_client
+from odoo_client import OdooJson2Client
 ## Updated Interactive Wizard
 def run_interactive_wizard():
     """Führt den Benutzer durch eine Reihe von detaillierten Fragen."""
@@ -66,35 +66,62 @@ def run_interactive_wizard():
     return criteria
 
 def setup_connections():
-    """Reads configs, prompts for password, and connects to Odoo."""
+    """Prompts for credentials (with config/env defaults) and connects to Odoo (JSON 2 API)."""
     config = configparser.ConfigParser()
-    if not config.read('config.ini'): raise FileNotFoundError("config.ini nicht gefunden.")
-    odoo_config = config['odoo']
-    url, db, username = odoo_config.get('url'), odoo_config.get('db'), odoo_config.get('username')
-    gemini_config = config['gemini']
-    gemini_model_name = gemini_config.get('model', 'gemini-1.5-flash')
+    if not config.read('config.ini'):
+        print("Warnung: config.ini nicht gefunden. Es werden alle Zugangsdaten abgefragt.")
+        odoo_config = {}
+        gemini_config = {}
+    else:
+        odoo_config = config['odoo'] if 'odoo' in config else {}
+        gemini_config = config['gemini'] if 'gemini' in config else {}
+
+    # Defaults from config if available
+    url_default = (odoo_config.get('url') if isinstance(odoo_config, dict) else odoo_config.get('url', '') ) or ''
+    db_default = (odoo_config.get('db') if isinstance(odoo_config, dict) else odoo_config.get('db', '') ) or ''
+    username_default = (odoo_config.get('username') if isinstance(odoo_config, dict) else odoo_config.get('username', '') ) or ''
+    gemini_model_name = (gemini_config.get('model') if isinstance(gemini_config, dict) else gemini_config.get('model', 'gemini-1.5-flash')) or 'gemini-1.5-flash'
+
+    # Prompt for Odoo connection parameters
+    url = questionary.text("Odoo URL (z.B. https://my.odoo.com):", default=url_default).ask()
+    db = questionary.text("Odoo Datenbankname:", default=db_default, validate=lambda t: len(t.strip()) > 0).ask()
+    username = questionary.text("Odoo Benutzername/Email:", default=username_default, validate=lambda t: len(t.strip()) > 0).ask()
     
-    gemini_api_key = os.environ.get("GEMINI_API_KEY")
-    if not gemini_api_key: raise Exception("GEMINI_API_KEY nicht als Secret hinterlegt.")
+    # Prompt for Odoo API Key (mask input)
+    env_odoo_key = os.environ.get("ODOO_API_KEY", "")
+    print("Geben Sie den Odoo API Key ein (JSON 2 API).")
+    if env_odoo_key:
+        print("Hinweis: Es ist bereits ein ODOO_API_KEY in der Umgebung gesetzt; Eingabe überschreibt diesen.")
+    api_key = ''
+    while not api_key:
+        api_key = getpass.getpass(f"API Key für Odoo-Benutzer '{username}': ")
+        if not api_key and env_odoo_key:
+            api_key = env_odoo_key
+    
+    # Prompt for Gemini API Key (mask input)
+    env_gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    print("Geben Sie den Google Gemini API Key ein.")
+    if env_gemini_key:
+        print("Hinweis: Es ist bereits ein GEMINI_API_KEY in der Umgebung gesetzt; Eingabe überschreibt diesen.")
+    gemini_api_key = ''
+    while not gemini_api_key:
+        gemini_api_key = getpass.getpass("GEMINI_API_KEY: ")
+        if not gemini_api_key and env_gemini_key:
+            gemini_api_key = env_gemini_key
     gemini_client.genai.configure(api_key=gemini_api_key)
-    
-    password = getpass.getpass(f"Passwort für Odoo-Benutzer '{username}': ")
+
     print("-" * 30)
-    
-    print("Verbinde mit Odoo...")
-    common = xmlrpc.client.ServerProxy(url + '/xmlrpc/2/common', context=ssl._create_unverified_context())
-    models = xmlrpc.client.ServerProxy(url + '/xmlrpc/2/object', context=ssl._create_unverified_context())
-    uid = common.authenticate(db, username, password, {})
-    if not uid: raise Exception("Odoo Authentifizierung fehlgeschlagen.")
-    print(f"✅ Odoo Authentifizierung erfolgreich (User-ID: {uid}).\n")
-    
+
+    print("Verbinde mit Odoo (JSON 2 API)...")
+    client = OdooJson2Client(url, db, api_key)
+    print("✅ Odoo JSON 2 Client initialisiert.\n")
+
     return {
-        "models": models,
-        "db_info": (db, uid, password),
+        "client": client,
         "gemini_model_name": gemini_model_name
     }
 
-def populate_odoo_with_data(creative_data, criteria, models, db_info):
+def populate_odoo_with_data(creative_data, criteria, client):
     """Iterates through the creative data and creates the entries in Odoo."""
     if not creative_data:
         print("Keine Daten zum Verarbeiten vorhanden.")
@@ -116,7 +143,7 @@ def populate_odoo_with_data(creative_data, criteria, models, db_info):
             final_product_data.update(valid_creative_data)
             
             if 'name' in final_product_data:
-                new_id = odoo_actions.create_product(models, db_info, final_product_data)
+                new_id = odoo_actions.create_product(client, final_product_data)
                 all_product_ids.append(new_id)
 
  # --- 2. KUNDEN & KONTAKTE ERSTELLEN ---
@@ -128,12 +155,12 @@ def populate_odoo_with_data(creative_data, criteria, models, db_info):
         # Process main company address
         valid_company_data = {k: v for k, v in company_data.items() if v is not None}
         country_code = valid_company_data.pop('country_code', 'DE')
-        country_id = odoo_actions.get_country_id(models, db_info, country_code)
+        country_id = odoo_actions.get_country_id(client, country_code)
         if country_id:
             valid_company_data['country_id'] = country_id
         
         valid_company_data['company_type'] = 'company'
-        company_id = odoo_actions.create_customer(models, db_info, valid_company_data)
+        company_id = odoo_actions.create_customer(client, valid_company_data)
         created_company_ids.append(company_id)
         
         # Process sub-contacts
@@ -144,11 +171,11 @@ def populate_odoo_with_data(creative_data, criteria, models, db_info):
             # NEU: Verarbeite die individuelle Adresse des Sub-Kontakts, falls vorhanden
             if 'country_code' in valid_contact_data:
                 contact_country_code = valid_contact_data.pop('country_code', 'DE')
-                contact_country_id = odoo_actions.get_country_id(models, db_info, contact_country_code)
+                contact_country_id = odoo_actions.get_country_id(client, contact_country_code)
                 if contact_country_id:
                     valid_contact_data['country_id'] = contact_country_id
             
-            odoo_actions.create_customer(models, db_info, valid_contact_data)
+            odoo_actions.create_customer(client, valid_contact_data)
 
     if "Bewegungsdaten" in criteria['mode'] and created_company_ids and all_product_ids:
         print("\n--- Erstelle Angebote (Bewegungsdaten) ---")
@@ -162,7 +189,7 @@ def populate_odoo_with_data(creative_data, criteria, models, db_info):
                 order_lines_payload.append((0, 0, {'product_id': product_id, 'product_uom_qty': 1}))
             
             order_payload = {'partner_id': company_id, 'order_line': order_lines_payload}
-            odoo_actions.create_sale_order(models, db_info, order_payload)
+            odoo_actions.create_sale_order(client, order_payload)
 
 # ==============================================================================
 #  HAUPT-SKRIPT
@@ -178,10 +205,9 @@ if __name__ == "__main__":
         )
         
         populate_odoo_with_data(
-            creative_data, 
-            criteria, 
-            connections['models'], 
-            connections['db_info']
+            creative_data,
+            criteria,
+            connections['client'],
         )
         
         print("\n" + "-"*30)
