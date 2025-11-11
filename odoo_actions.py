@@ -253,3 +253,42 @@ def create_vendor_bill(client, supplier_id, product_ids, description_prefix="Ven
     bill_id = client.create('account.move', values)
     post_invoices(client, [bill_id])
     return bill_id
+
+def create_bom(client, product_tmpl_id, product_id=None, quantity=1.0, code=None, bom_type="normal"):
+    """Create a manufacturing BOM for a given product template (and optional variant)."""
+    values = {
+        "product_tmpl_id": product_tmpl_id,
+        "type": bom_type,
+        "product_qty": quantity,
+    }
+    if product_id:
+        values["product_id"] = product_id
+    if code:
+        values["code"] = code
+    print(f"-> Creating BOM for template {product_tmpl_id} (variant: {product_id})")
+    return client.create('mrp.bom', values)
+
+def create_bom_line(client, bom_id, product_id, quantity=1.0):
+    """Create a BOM line referencing a component product."""
+    values = {
+        "bom_id": bom_id,
+        "product_id": product_id,
+        "product_qty": quantity,
+    }
+    print(f"->   Adding BOM line: product {product_id} x{quantity}")
+    return client.create('mrp.bom.line', values)
+
+def get_product_template_id(client, product_id):
+    """Return the product template id for a given product variant."""
+    record = client.search_read(
+        'product.product',
+        [["id", "=", product_id]],
+        fields=["product_tmpl_id"],
+        limit=1
+    )
+    if record:
+        tmpl = record[0].get("product_tmpl_id")
+        if isinstance(tmpl, (list, tuple)) and tmpl:
+            return tmpl[0]
+        return tmpl
+    return None

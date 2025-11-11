@@ -180,3 +180,49 @@ def fetch_project_stage_names(industry: str, project_name: str = None, gemini_mo
             signal.alarm(0)
         except Exception:
             pass
+
+def build_bom_component_prompt(main_product_name: str, count: int, industry: str | None = None, language: str = "German") -> str:
+    """Build prompt to request BOM component names tailored to a product."""
+    industry_context = f" in the {industry} industry" if industry else ""
+    return f"""
+    You act as a senior manufacturing engineer naming components for a bill of materials{industry_context}.
+    The main product is "{main_product_name}".
+    Provide ONLY a JSON array with exactly {count} distinct {language} component names.
+    - Each component name must relate clearly to the main product (e.g. include functional hints, variants, or stages).
+    - Names must be realistic manufacturing sub-assemblies or parts.
+    - Avoid numbering unless it adds clarity; keep names concise (max 6 words).
+    - Return strictly a JSON array like ["Component A", "Component B"] with {count} entries.
+    - No code blocks, comments, prose, or trailing text.
+    """
+
+def fetch_bom_component_names(main_product_name: str, count: int, gemini_model_name: str, language: str = "German", industry: str | None = None) -> List[str] | None:
+    """Fetch creative component names for a BOM from Gemini."""
+    prompt = build_bom_component_prompt(main_product_name, count, industry, language)
+    print(f"Frage Gemini ({gemini_model_name}) nach Komponenten-Namen für '{main_product_name}'...")
+    model = genai.GenerativeModel(gemini_model_name)
+    signal.signal(signal.SIGALRM, timeout_handler)
+    try:
+        signal.alarm(45)
+        response = model.generate_content(prompt)
+        signal.alarm(0)
+        json_text = response.text.strip().replace("```json", "").replace("```", "")
+        data = json.loads(json_text)
+        if isinstance(data, list):
+            print(f"✅ Komponenten-Namen von Gemini empfangen: {len(data)}")
+            return data
+        print("❌ Gemini hat kein Array für Komponenten zurückgegeben.")
+        return None
+    except TimeoutException as e:
+        print(f"❌ Zeitüberschreitung bei Komponenten-Namen: {e}")
+        return None
+    except json.JSONDecodeError:
+        print("❌ Fehler: Gemini hat ungültiges JSON für Komponenten zurückgegeben.")
+        return None
+    except Exception as e:
+        print(f"❌ Fehler bei Komponenten-Namen: {e}")
+        return None
+    finally:
+        try:
+            signal.alarm(0)
+        except Exception:
+            pass

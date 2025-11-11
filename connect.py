@@ -215,7 +215,8 @@ def ask_module_selections(installed_modules):
         "account": "Accounting",
         "hr": "Employees",
         "project": "Project",
-        "hr_timesheet": "Timesheet"
+        "hr_timesheet": "Timesheet",
+        "mrp": "Manufacturing"
     }
     
     selections = {}
@@ -224,7 +225,7 @@ def ask_module_selections(installed_modules):
     print("Bitte geben Sie für jedes Modul an, ob Daten erstellt werden sollen und wie viele.\n")
     
     # Ask all questions in sequence - this happens in one function call
-    module_order = ["crm", "sale", "account", "hr", "project", "hr_timesheet"]
+    module_order = ["crm", "sale", "account", "hr", "project", "hr_timesheet", "mrp"]
     
     for module_code in module_order:
         if module_code in installed_modules:
@@ -286,11 +287,36 @@ def ask_module_selections(installed_modules):
                         validate=lambda t: t.isdigit() and int(t) > 0
                     ).ask())
                     selections[module_code] = count
+                elif module_code == "mrp":
+                    num_products = int(questionary.text(
+                        f"Wie viele Fertigungsprodukte für {module_name}? (empfohlen: 3)",
+                        default="3",
+                        validate=lambda t: t.isdigit() and int(t) > 0
+                    ).ask())
+                    components_per_bom = int(questionary.text(
+                        "Wie viele Komponenten sollen pro Stückliste angelegt werden? (inkl. möglicher Sub-Stücklisten, empfohlen: 4)",
+                        default="4",
+                        validate=lambda t: t.isdigit() and int(t) > 0
+                    ).ask())
+                    while True:
+                        sub_boms = int(questionary.text(
+                            "Wie viele Komponenten pro Produkt sollen eigene Sub-Stücklisten erhalten?",
+                            default=str(min(2, components_per_bom)),
+                            validate=lambda t: t.isdigit()
+                        ).ask())
+                        if sub_boms <= components_per_bom:
+                            break
+                        print("⚠️  Hinweis: Die Anzahl der Sub-Stücklisten darf die Gesamtanzahl der Komponenten nicht überschreiten.")
+                    selections[module_code] = {
+                        "num_products": num_products,
+                        "components_per_bom": components_per_bom,
+                        "sub_boms_per_product": sub_boms
+                    }
     
     return selections
 
 def create_module_demo_data(client, created_ids, gemini_model_name=None, language_name="German", module_selections=None):
-    desired_modules = ["crm", "sale", "account", "hr", "project", "hr_timesheet"]
+    desired_modules = ["crm", "sale", "account", "hr", "project", "hr_timesheet", "mrp"]
     installed = odoo_actions.get_installed_modules(client, desired_modules)
     company_ids = created_ids.get("company_ids", [])
     product_ids = created_ids.get("product_ids", [])
@@ -332,6 +358,16 @@ def create_module_demo_data(client, created_ids, gemini_model_name=None, languag
     num_invoices = module_selections.get("account", 0)
     num_employees = module_selections.get("hr", 0)
     num_timesheets = module_selections.get("hr_timesheet", 0)
+    mrp_config = module_selections.get("mrp", {})
+    num_mrp_products = 0
+    components_per_bom = 0
+    sub_boms_per_product = 0
+    if isinstance(mrp_config, dict):
+        num_mrp_products = max(0, int(mrp_config.get("num_products", 0)))
+        components_per_bom = max(1, int(mrp_config.get("components_per_bom", 1)))
+        sub_boms_per_product = max(0, int(mrp_config.get("sub_boms_per_product", 0)))
+        if sub_boms_per_product > components_per_bom:
+            sub_boms_per_product = components_per_bom
 
     if "crm" in installed and num_opps > 0:
         print("\n--- CRM: Erstelle Opportunities ---")
@@ -539,6 +575,114 @@ def create_module_demo_data(client, created_ids, gemini_model_name=None, languag
             if proj:
                 odoo_actions.create_timesheet(client, emp, proj, hours=float(random.randint(1, 8)), description=f"Arbeitstag {i+1}", date_str="2025-01-01")
 
+    if "mrp" in installed and num_mrp_products > 0:
+        print("\n--- MANUFACTURING: Erstelle Fertigungsprodukte und Stücklisten ---")
+        env_products = os.environ.get('NAMES_PRODUCT', '')
+        product_name_bank = [p for p in env_products.split('||') if p]
+        industry = os.environ.get('INDUSTRY', 'Fertigung')
+        language = os.environ.get('LANGUAGE_NAME', language_name)
+        created_bom_ids = []
+
+        for idx in range(num_mrp_products):
+            base_name = None
+            if product_name_bank:
+                base_name = product_name_bank.pop(random.randrange(len(product_name_bank)))
+            if not base_name:
+                base_name = f"{industry} Baugruppe"
+            main_product_name = f"{base_name} #{idx+1}" if base_name == base_name.strip() else base_name
+            list_price = round(random.uniform(250, 1200), 2)
+            standard_price = round(list_price * random.uniform(0.35, 0.65), 2)
+            main_product_vals = {
+                "name": main_product_name,
+                "type": "product",
+                "detailed_type": "product",
+                "sale_ok": True,
+                "purchase_ok": True,
+                "list_price": list_price,
+                "standard_price": standard_price,
+                "tracking": "none",
+            }
+            main_product_id = odoo_actions.create_product(client, main_product_vals)
+            product_ids.append(main_product_id)
+
+            tmpl_id = odoo_actions.get_product_template_id(client, main_product_id)
+            if not tmpl_id:
+                print(f"⚠️  Konnte Template für Produkt {main_product_id} nicht ermitteln – überspringe Fertigungseintrag.")
+                continue
+
+            bom_code = f"BOM-{main_product_id}"
+            bom_id = odoo_actions.create_bom(client, tmpl_id, product_id=main_product_id, quantity=1.0, code=bom_code)
+            created_bom_ids.append(bom_id)
+
+            component_count = max(components_per_bom, sub_boms_per_product or 0, 1)
+            component_names: list[str] = []
+            if gemini_model_name:
+                gemini_components = gemini_client.fetch_bom_component_names(
+                    main_product_name,
+                    component_count,
+                    gemini_model_name,
+                    language,
+                    industry
+                )
+                if gemini_components:
+                    component_names.extend(gemini_components[:component_count])
+            while len(component_names) < component_count:
+                component_names.append(f"{main_product_name} Modul {len(component_names)+1}")
+
+            for comp_idx, component_name in enumerate(component_names):
+                comp_list_price = round(random.uniform(80, list_price * 0.6), 2)
+                comp_standard_price = round(comp_list_price * random.uniform(0.4, 0.7), 2)
+                component_vals = {
+                    "name": component_name,
+                    "type": "product",
+                    "detailed_type": "product",
+                    "sale_ok": False,
+                    "purchase_ok": True,
+                    "list_price": comp_list_price,
+                    "standard_price": comp_standard_price,
+                    "tracking": "none",
+                }
+                component_product_id = odoo_actions.create_product(client, component_vals)
+                product_ids.append(component_product_id)
+                component_qty = max(1, random.randint(1, 4))
+                odoo_actions.create_bom_line(client, bom_id, component_product_id, quantity=component_qty)
+
+                if comp_idx < sub_boms_per_product:
+                    component_template_id = odoo_actions.get_product_template_id(client, component_product_id)
+                    if not component_template_id:
+                        print(f"⚠️  Konnte Template für Komponente {component_product_id} nicht laden – Sub-Stückliste übersprungen.")
+                        continue
+                    sub_bom_code = f"SUB-{bom_id}-{comp_idx+1}"
+                    sub_bom_id = odoo_actions.create_bom(
+                        client,
+                        component_template_id,
+                        product_id=component_product_id,
+                        quantity=1.0,
+                        code=sub_bom_code
+                    )
+                    created_bom_ids.append(sub_bom_id)
+                    raw_count = max(2, min(4, components_per_bom // 2 + 1))
+                    for raw_idx in range(raw_count):
+                        raw_name = f"{component_name} Rohteil {raw_idx+1}"
+                        raw_list_price = round(max(15, comp_standard_price * random.uniform(0.4, 0.9)), 2)
+                        raw_standard_price = round(raw_list_price * random.uniform(0.5, 0.85), 2)
+                        raw_vals = {
+                            "name": raw_name,
+                            "type": "product",
+                            "detailed_type": "product",
+                            "sale_ok": False,
+                            "purchase_ok": True,
+                            "list_price": raw_list_price,
+                            "standard_price": raw_standard_price,
+                            "tracking": "none",
+                        }
+                        raw_product_id = odoo_actions.create_product(client, raw_vals)
+                        product_ids.append(raw_product_id)
+                        raw_qty = round(random.uniform(1.0, 3.0), 2)
+                        odoo_actions.create_bom_line(client, sub_bom_id, raw_product_id, quantity=raw_qty)
+
+        print(f"✅ {len(created_bom_ids)} Stücklisten für {num_mrp_products} Fertigungsprodukte erstellt.")
+
     # Create vendor invoices (bills)
     if "account" in installed and num_invoices > 0:
         print("\n--- ACCOUNTING: Erstelle Eingangsrechnungen ---")
@@ -573,7 +717,7 @@ if __name__ == "__main__":
 
         # Detect installed modules and ask user for selections
         print("\n--- Installierte Module erkennen ---")
-        desired_modules = ["crm", "sale", "account", "hr", "project", "hr_timesheet"]
+        desired_modules = ["crm", "sale", "account", "hr", "project", "hr_timesheet", "mrp"]
         installed_modules = odoo_actions.get_installed_modules(connections['client'], desired_modules)
         if installed_modules:
             print(f"✅ Gefundene installierte Module: {', '.join([m.upper() for m in installed_modules])}")
