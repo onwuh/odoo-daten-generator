@@ -64,6 +64,11 @@ def build_prompt_from_criteria(criteria: Dict[str, Any]) -> str:
     5.  Alle E-Mail-Adressen MÜSSEN die Domain "@example.com" verwenden.
     6.  WICHTIG: Erstelle KEINE USt-IdNr. (VAT ID / vat / vat_id Felder) - diese werden nicht benötigt.
 
+    Für Produkte, beachte folgende Regeln:
+    - Verwende nur gültige Felder: "name", "description", "list_price", "standard_price", "sale_ok", "purchase_ok"
+    - Erstelle KEINE Felder wie: "uom", "detailed_type", "vat", "vat_id" - diese sind ungültig oder werden automatisch gesetzt.
+    - Produkttypen werden automatisch basierend auf der Kategorie gesetzt.
+
     Erstelle außerdem die von mir angeforderte Anzahl an Produkten.
     """
     return prompt
@@ -100,11 +105,99 @@ def build_names_prompt(criteria: Dict[str, Any], language: str = "German") -> st
       "company_names": [min 25 company names],
       "project_names": [min 25 project titles],
       "task_names": [min 50 concise task names],
-      "opportunity_titles": [min 25 sales opportunity titles]
+      "opportunity_titles": [min 25 sales opportunity titles],
+      "supplier_names": [min 15 supplier/vendor company names with legal form suffix like GmbH, AG, KG, Ltd.]
     }}
     - No code blocks, no backticks, no comments, only valid compact JSON.
     - Names must fit the given industry.
+    - Supplier names should be realistic vendor/supplier company names for the industry.
     """
+
+def build_recruiting_prompt(industry: str, num_jobs: int, num_candidates: int, num_skill_types: int, skills_per_type: int, language: str = "German") -> str:
+    """Build prompt for generating recruiting data (jobs, candidates, skills)."""
+    return f"""
+    Based on the industry "{industry}", generate ONLY a JSON object with realistic {language} recruiting data:
+    {{
+      "job_titles": [exactly {num_jobs} job titles/positions],
+      "candidate_names": [exactly {num_candidates} full person names],
+      "candidate_emails": [exactly {num_candidates} email addresses using @example.com domain],
+      "candidate_phones": [exactly {num_candidates} phone numbers in German format],
+      "skill_types": [
+        {{
+          "name": "skill type name",
+          "skills": [exactly {skills_per_type} skill names],
+          "levels": [at least 3 level names that logically fit the skill type]
+        }}
+      ] (exactly {num_skill_types} skill types)
+    }}
+    
+    Examples for skill types:
+    - "Sprachen": skills: ["Englisch", "Französisch", "Deutsch"], levels: ["A1", "A2", "B1", "B2", "C1", "C2"]
+    - "Programmiersprachen": skills: ["Python", "Java", "JavaScript"], levels: ["Anfänger", "Fortgeschritten", "Experte"]
+    - "Soft Skills": skills: ["Kommunikation", "Teamarbeit", "Führung"], levels: ["Grundlagen", "Fortgeschritten", "Experte"]
+    
+    - No code blocks, no backticks, no comments, only valid compact JSON.
+    - All data must be realistic and fit the industry "{industry}".
+    - Skill types, skills, and levels must logically fit together.
+    - Use {language} language.
+    """
+
+def fetch_recruiting_data(industry: str, num_jobs: int, num_candidates: int, num_skill_types: int, skills_per_type: int, gemini_model_name: str, language: str = "German") -> Dict[str, Any] | None:
+    """Fetch recruiting data from Gemini."""
+    prompt = build_recruiting_prompt(industry, num_jobs, num_candidates, num_skill_types, skills_per_type, language)
+    print(f"Frage Gemini ({gemini_model_name}) nach Recruiting-Daten für {industry}...")
+    model = genai.GenerativeModel(gemini_model_name)
+    signal.signal(signal.SIGALRM, timeout_handler)
+    try:
+        signal.alarm(120)
+        response = model.generate_content(prompt)
+        signal.alarm(0)
+        json_text = response.text.strip().replace("```json", "").replace("```", "")
+        data = json.loads(json_text)
+        print("✅ Recruiting-Daten von Gemini empfangen.")
+        return data
+    except TimeoutException as e:
+        print(f"❌ Zeitüberschreitung bei der Gemini-Recruiting-Anfrage: {e}")
+        return None
+    except json.JSONDecodeError:
+        print("❌ Fehler: Gemini hat ungültiges JSON zurückgegeben.")
+        return None
+    except Exception as e:
+        print(f"❌ Fehler bei Recruiting-Daten: {e}")
+        return None
+    finally:
+        try:
+            signal.alarm(0)
+        except Exception:
+            pass
+
+def build_job_summary_prompt(job_title: str, industry: str, language: str = "German") -> str:
+    """Build prompt for generating job summary/description."""
+    return f"""
+    Generate a brief job summary (2-3 sentences) in {language} for the position "{job_title}" in the "{industry}" industry.
+    Return ONLY the summary text, no JSON, no quotes, no code blocks.
+    """
+
+def fetch_job_summary(job_title: str, industry: str, gemini_model_name: str, language: str = "German") -> str | None:
+    """Fetch job summary from Gemini."""
+    prompt = build_job_summary_prompt(job_title, industry, language)
+    model = genai.GenerativeModel(gemini_model_name)
+    signal.signal(signal.SIGALRM, timeout_handler)
+    try:
+        signal.alarm(30)
+        response = model.generate_content(prompt)
+        signal.alarm(0)
+        summary = response.text.strip().strip('"').strip("'")
+        return summary
+    except TimeoutException:
+        return None
+    except Exception:
+        return None
+    finally:
+        try:
+            signal.alarm(0)
+        except Exception:
+            pass
 
 def fetch_name_suggestions(criteria: Dict[str, Any], gemini_model_name: str, language: str = "German") -> Dict[str, List[str]] | None:
     prompt = build_names_prompt(criteria, language)
@@ -174,6 +267,88 @@ def fetch_project_stage_names(industry: str, project_name: str = None, gemini_mo
         return None
     except Exception as e:
         print(f"❌ Fehler bei Phasennamen: {e}")
+        return None
+    finally:
+        try:
+            signal.alarm(0)
+        except Exception:
+            pass
+
+def build_bom_component_prompt(main_product_name: str, count: int, industry: str | None = None, language: str = "German") -> str:
+    """Build prompt to request BOM component names tailored to a product."""
+    industry_context = f" in the {industry} industry" if industry else ""
+    return f"""
+    You act as a senior manufacturing engineer naming components for a bill of materials{industry_context}.
+    The main product is "{main_product_name}".
+    Provide ONLY a JSON array with exactly {count} distinct {language} component names.
+    - Each component name must relate clearly to the main product (e.g. include functional hints, variants, or stages).
+    - Names must be realistic manufacturing sub-assemblies or parts.
+    - Avoid numbering unless it adds clarity; keep names concise (max 6 words).
+    - Return strictly a JSON array like ["Component A", "Component B"] with {count} entries.
+    - No code blocks, comments, prose, or trailing text.
+    """
+
+def fetch_bom_component_names(main_product_name: str, count: int, gemini_model_name: str, language: str = "German", industry: str | None = None) -> List[str] | None:
+    """Fetch creative component names for a BOM from Gemini."""
+    prompt = build_bom_component_prompt(main_product_name, count, industry, language)
+    print(f"Frage Gemini ({gemini_model_name}) nach Komponenten-Namen für '{main_product_name}'...")
+    model = genai.GenerativeModel(gemini_model_name)
+    signal.signal(signal.SIGALRM, timeout_handler)
+    try:
+        signal.alarm(45)
+        response = model.generate_content(prompt)
+        signal.alarm(0)
+        json_text = response.text.strip().replace("```json", "").replace("```", "")
+        data = json.loads(json_text)
+        if isinstance(data, list):
+            print(f"✅ Komponenten-Namen von Gemini empfangen: {len(data)}")
+            return data
+        print("❌ Gemini hat kein Array für Komponenten zurückgegeben.")
+        return None
+    except TimeoutException as e:
+        print(f"❌ Zeitüberschreitung bei Komponenten-Namen: {e}")
+        return None
+    except json.JSONDecodeError:
+        print("❌ Fehler: Gemini hat ungültiges JSON für Komponenten zurückgegeben.")
+        return None
+    except Exception as e:
+        print(f"❌ Fehler bei Komponenten-Namen: {e}")
+        return None
+    finally:
+        try:
+            signal.alarm(0)
+        except Exception:
+            pass
+
+def determine_industry_from_company_name(company_name: str, gemini_model_name: str = "gemini-1.5-flash") -> str | None:
+    """Use Gemini to determine the industry from a company name."""
+    if not company_name:
+        return None
+    
+    prompt = f"""
+    Based on the company name "{company_name}", determine the most likely industry/sector.
+    
+    Return ONLY a single word or short phrase (2-3 words max) describing the industry in German.
+    Examples: "IT", "Fertigung", "Handel", "Dienstleistung", "Medizin", "Bildung", "IT-Dienstleistung"
+    
+    Return ONLY the industry name, no explanation, no JSON, no quotes, just the text.
+    """
+    
+    print(f"Frage Gemini ({gemini_model_name}) nach Branche für '{company_name}'...")
+    model = genai.GenerativeModel(gemini_model_name)
+    signal.signal(signal.SIGALRM, timeout_handler)
+    try:
+        signal.alarm(30)
+        response = model.generate_content(prompt)
+        signal.alarm(0)
+        industry = response.text.strip().strip('"').strip("'").strip()
+        print(f"✅ Erkannte Branche: {industry}")
+        return industry
+    except TimeoutException as e:
+        print(f"❌ Zeitüberschreitung bei der Gemini-Branchenanfrage: {e}")
+        return None
+    except Exception as e:
+        print(f"❌ Fehler bei Branchenbestimmung: {e}")
         return None
     finally:
         try:
