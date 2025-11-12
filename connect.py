@@ -359,6 +359,15 @@ def ask_module_selections(installed_modules):
                         "skills_per_type": skills_per_type
                     }
     
+    # Ask if activities should be created
+    print("\n--- AKTIVITÄTEN ---")
+    create_activities = questionary.confirm(
+        "Sollen Aktivitäten (Mail Activities) auf Datensätzen erstellt werden?",
+        default=True
+    ).ask()
+    if create_activities:
+        selections["create_activities"] = True
+    
     return selections
 
 def create_module_demo_data(client, created_ids, gemini_model_name=None, language_name="German", module_selections=None):
@@ -956,6 +965,282 @@ def create_module_demo_data(client, created_ids, gemini_model_name=None, languag
     # Manufacturing data is already created above (before sales orders)
     # This section is intentionally removed to avoid duplication
 
+    # ==============================================================================
+    # CREATE ACTIVITIES (as last step)
+    # ==============================================================================
+    if module_selections.get("create_activities", False):
+        print("\n--- AKTIVITÄTEN: Erstelle Mail Activities ---")
+        from datetime import datetime, timedelta
+        
+        # Get activity types
+        activity_types = odoo_actions.get_activity_types(client)
+        if not activity_types:
+            print("⚠️  Keine Aktivitätstypen gefunden. Überspringe Aktivitäten-Erstellung.")
+        else:
+            # Get current user for activities
+            current_user_id = odoo_actions.get_current_user_id(client)
+            
+            # Activity summaries based on record type
+            activity_summaries = {
+                'crm.lead': ['Follow-up Meeting', 'Angebot versenden', 'Kundentermin vereinbaren', 'Nachfassaktion'],
+                'hr.applicant': ['Interview terminieren', 'Bewerbungsunterlagen prüfen', 'Referenzen einholen', 'Entscheidung treffen'],
+                'project.task': ['Status-Update', 'Code Review', 'Testing durchführen', 'Dokumentation aktualisieren'],
+                'res.partner': ['Kontaktaufnahme', 'Meeting vereinbaren', 'Angebot senden', 'Follow-up Call']
+            }
+            
+            # Get today's date
+            today = datetime.now().date()
+            
+            # 1. CRM Opportunities
+            if "crm" in installed:
+                opportunities = client.search_read(
+                    'crm.lead',
+                    [],
+                    fields=["id", "name"],
+                    limit=0
+                )
+                if opportunities:
+                    print(f"-> Erstelle Aktivitäten für {len(opportunities)} Opportunities")
+                    summaries = activity_summaries.get('crm.lead', ['Follow-up'])
+                    for opp in opportunities:
+                        opp_id = opp.get("id")
+                        # Debug: Check what we got
+                        if opp_id is None:
+                            continue
+                        if opp_id == 0:
+                            continue
+                        # Handle tuple/list format
+                        if isinstance(opp_id, (list, tuple)) and len(opp_id) > 0:
+                            opp_id = opp_id[0]
+                        if not isinstance(opp_id, int) or opp_id <= 0:
+                            continue
+                        
+                        # Create 1-3 activities per record with different activity types
+                        num_activities = random.randint(1, 3)
+                        used_activity_types = set()  # Track used types to ensure variety
+                        
+                        for _ in range(num_activities):
+                            # Random deadline: past (max 5 days), today, or future (max 10 days)
+                            days_offset = random.choice([
+                                random.randint(-5, -1),  # Past
+                                0,  # Today
+                                random.randint(1, 10)  # Future
+                            ])
+                            deadline = today + timedelta(days=days_offset)
+                            
+                            # Select a different activity type if we have multiple
+                            available_types = [at for at in activity_types if at.get("id") not in used_activity_types]
+                            if not available_types:
+                                # If all types used, reset and allow reuse
+                                available_types = activity_types
+                                used_activity_types.clear()
+                            
+                            activity_type = random.choice(available_types)
+                            activity_type_id = activity_type.get("id")
+                            if not activity_type_id:
+                                continue
+                            # Handle tuple/list format
+                            if isinstance(activity_type_id, (list, tuple)) and len(activity_type_id) > 0:
+                                activity_type_id = activity_type_id[0]
+                            if not isinstance(activity_type_id, int) or activity_type_id <= 0:
+                                continue
+                            
+                            used_activity_types.add(activity_type_id)
+                            summary = random.choice(summaries)
+                            
+                            try:
+                                odoo_actions.create_activity(
+                                    client, 'crm.lead', opp_id,
+                                    activity_type_id, summary,
+                                    deadline.strftime("%Y-%m-%d"), user_id=current_user_id
+                                )
+                            except Exception as e:
+                                print(f"   ⚠️  Fehler beim Erstellen der Aktivität für Opportunity {opp_id}: {e}")
+            
+            # 2. HR Applicants
+            if "hr_recruitment" in installed:
+                applicants = client.search_read(
+                    'hr.applicant',
+                    [],
+                    fields=["id", "partner_name"],
+                    limit=0
+                )
+                if applicants:
+                    print(f"-> Erstelle Aktivitäten für {len(applicants)} Bewerber")
+                    summaries = activity_summaries.get('hr.applicant', ['Follow-up'])
+                    for applicant in applicants:
+                        applicant_id = applicant.get("id")
+                        if applicant_id is None or applicant_id == 0:
+                            continue
+                        # Handle tuple/list format
+                        if isinstance(applicant_id, (list, tuple)) and len(applicant_id) > 0:
+                            applicant_id = applicant_id[0]
+                        if not isinstance(applicant_id, int) or applicant_id <= 0:
+                            continue
+                        
+                        # Create 1-3 activities per record with different activity types
+                        num_activities = random.randint(1, 3)
+                        used_activity_types = set()
+                        
+                        for _ in range(num_activities):
+                            days_offset = random.choice([
+                                random.randint(-5, -1),
+                                0,
+                                random.randint(1, 10)
+                            ])
+                            deadline = today + timedelta(days=days_offset)
+                            
+                            # Select a different activity type if we have multiple
+                            available_types = [at for at in activity_types if at.get("id") not in used_activity_types]
+                            if not available_types:
+                                available_types = activity_types
+                                used_activity_types.clear()
+                            
+                            activity_type = random.choice(available_types)
+                            activity_type_id = activity_type.get("id")
+                            if not activity_type_id:
+                                continue
+                            # Handle tuple/list format
+                            if isinstance(activity_type_id, (list, tuple)) and len(activity_type_id) > 0:
+                                activity_type_id = activity_type_id[0]
+                            if not isinstance(activity_type_id, int) or activity_type_id <= 0:
+                                continue
+                            
+                            used_activity_types.add(activity_type_id)
+                            summary = random.choice(summaries)
+                            
+                            try:
+                                odoo_actions.create_activity(
+                                    client, 'hr.applicant', applicant_id,
+                                    activity_type_id, summary,
+                                    deadline.strftime("%Y-%m-%d"), user_id=current_user_id
+                                )
+                            except Exception as e:
+                                print(f"   ⚠️  Fehler beim Erstellen der Aktivität für Bewerber {applicant_id}: {e}")
+            
+            # 3. Project Tasks
+            if "project" in installed:
+                tasks = client.search_read(
+                    'project.task',
+                    [],
+                    fields=["id", "name"],
+                    limit=0
+                )
+                if tasks:
+                    print(f"-> Erstelle Aktivitäten für {len(tasks)} Aufgaben")
+                    summaries = activity_summaries.get('project.task', ['Follow-up'])
+                    for task in tasks:
+                        task_id = task.get("id")
+                        if task_id is None or task_id == 0:
+                            continue
+                        # Handle tuple/list format
+                        if isinstance(task_id, (list, tuple)) and len(task_id) > 0:
+                            task_id = task_id[0]
+                        if not isinstance(task_id, int) or task_id <= 0:
+                            continue
+                        
+                        # Create 1-3 activities per record with different activity types
+                        num_activities = random.randint(1, 3)
+                        used_activity_types = set()
+                        
+                        for _ in range(num_activities):
+                            days_offset = random.choice([
+                                random.randint(-5, -1),
+                                0,
+                                random.randint(1, 10)
+                            ])
+                            deadline = today + timedelta(days=days_offset)
+                            
+                            # Select a different activity type if we have multiple
+                            available_types = [at for at in activity_types if at.get("id") not in used_activity_types]
+                            if not available_types:
+                                available_types = activity_types
+                                used_activity_types.clear()
+                            
+                            activity_type = random.choice(available_types)
+                            activity_type_id = activity_type.get("id")
+                            if not activity_type_id:
+                                continue
+                            # Handle tuple/list format
+                            if isinstance(activity_type_id, (list, tuple)) and len(activity_type_id) > 0:
+                                activity_type_id = activity_type_id[0]
+                            if not isinstance(activity_type_id, int) or activity_type_id <= 0:
+                                continue
+                            
+                            used_activity_types.add(activity_type_id)
+                            summary = random.choice(summaries)
+                            
+                            try:
+                                odoo_actions.create_activity(
+                                    client, 'project.task', task_id,
+                                    activity_type_id, summary,
+                                    deadline.strftime("%Y-%m-%d"), user_id=current_user_id
+                                )
+                            except Exception as e:
+                                print(f"   ⚠️  Fehler beim Erstellen der Aktivität für Aufgabe {task_id}: {e}")
+            
+            # 4. Partners (Contacts)
+            partners = client.search_read(
+                'res.partner',
+                [["is_company", "=", False]],  # Only individual contacts, not companies
+                fields=["id", "name"],
+                limit=50  # Limit to avoid too many activities
+            )
+            if partners:
+                print(f"-> Erstelle Aktivitäten für {len(partners)} Kontakte")
+                summaries = activity_summaries.get('res.partner', ['Follow-up'])
+                for partner in partners:
+                    partner_id = partner.get("id")
+                    if partner_id is None or partner_id == 0:
+                        continue
+                    # Handle tuple/list format
+                    if isinstance(partner_id, (list, tuple)) and len(partner_id) > 0:
+                        partner_id = partner_id[0]
+                    if not isinstance(partner_id, int) or partner_id <= 0:
+                        continue
+                    
+                    # Create 1-3 activities per record with different activity types
+                    num_activities = random.randint(1, 3)
+                    used_activity_types = set()
+                    
+                    for _ in range(num_activities):
+                        days_offset = random.choice([
+                            random.randint(-5, -1),
+                            0,
+                            random.randint(1, 10)
+                        ])
+                        deadline = today + timedelta(days=days_offset)
+                        
+                        # Select a different activity type if we have multiple
+                        available_types = [at for at in activity_types if at.get("id") not in used_activity_types]
+                        if not available_types:
+                            available_types = activity_types
+                            used_activity_types.clear()
+                        
+                        activity_type = random.choice(available_types)
+                        activity_type_id = activity_type.get("id")
+                        if not activity_type_id:
+                            continue
+                        # Handle tuple/list format
+                        if isinstance(activity_type_id, (list, tuple)) and len(activity_type_id) > 0:
+                            activity_type_id = activity_type_id[0]
+                        if not isinstance(activity_type_id, int) or activity_type_id <= 0:
+                            continue
+                        
+                        used_activity_types.add(activity_type_id)
+                        summary = random.choice(summaries)
+                        
+                        try:
+                            odoo_actions.create_activity(
+                                client, 'res.partner', partner_id,
+                                activity_type_id, summary,
+                                deadline.strftime("%Y-%m-%d"), user_id=current_user_id
+                            )
+                        except Exception as e:
+                            print(f"   ⚠️  Fehler beim Erstellen der Aktivität für Kontakt {partner_id}: {e}")
+            
+            print("✅ Aktivitäten-Erstellung abgeschlossen")
+
     # Create vendor invoices (bills)
     if "account" in installed and num_invoices > 0:
         print("\n--- ACCOUNTING: Erstelle Eingangsrechnungen ---")
@@ -1033,6 +1318,7 @@ if __name__ == "__main__":
         # Fetch Gemini-based name suggestions (with fallback below)
         name_suggestions = gemini_client.fetch_name_suggestions(
             criteria,
+            
             connections['gemini_model_name'],
             language_name
         ) or {}

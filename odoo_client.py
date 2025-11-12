@@ -118,6 +118,12 @@ class OdooJson2Client:
         return self.model_method(model, "search_read", payload)
 
     def create(self, model: str, values: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> int:
+        # Debug: Print the values being sent
+        print(f"   [DEBUG] OdooClient.create called for model={model}")
+        print(f"   [DEBUG] Values keys: {list(values.keys())}")
+        for key, val in values.items():
+            print(f"   [DEBUG]   {key} = {val} (type: {type(val).__name__})")
+        
         # Try documented JSON-2 example format first: vals_list
         vals_list_payload: Dict[str, Any] = {"vals_list": [values]}
         if context is not None:

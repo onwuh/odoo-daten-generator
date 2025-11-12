@@ -746,3 +746,119 @@ def create_applicant(client, job_id, name, email, phone, skill_ids=None, stage_i
     applicant_id = client.create('hr.applicant', values)
     print(f"   Created applicant ID: {applicant_id}")
     return applicant_id
+
+# ==============================================================================
+# ACTIVITIES FUNCTIONS
+# ==============================================================================
+
+def get_activity_types(client):
+    """Get all available activity types."""
+    activity_types = client.search_read(
+        'mail.activity.type',
+        [],
+        fields=["id", "name", "category"],
+        limit=0
+    )
+    return activity_types
+
+def create_activity(client, res_model, res_id, activity_type_id, summary, date_deadline, user_id=None):
+    """Create a mail activity on a record using activity_schedule method.
+    
+    Args:
+        res_model: Model name (e.g., 'crm.lead', 'hr.applicant', 'project.task', 'res.partner')
+        res_id: Record ID (must be an integer, not None)
+        activity_type_id: Activity type ID
+        summary: Activity summary/description
+        date_deadline: Deadline date (YYYY-MM-DD format)
+        user_id: User ID (optional, defaults to current user)
+    """
+    # Ensure res_id is a valid integer
+    if res_id is None:
+        raise ValueError(f"res_id cannot be None for model {res_model}")
+    
+    # Handle tuple/list format from Odoo (id, name)
+    if isinstance(res_id, (list, tuple)) and len(res_id) > 0:
+        res_id = res_id[0]
+    
+    if not isinstance(res_id, int):
+        try:
+            res_id = int(res_id)
+        except (ValueError, TypeError):
+            raise ValueError(f"res_id must be an integer, got {type(res_id)}: {res_id}")
+    
+    # Ensure res_id is not 0 (invalid in Odoo)
+    if res_id == 0:
+        raise ValueError(f"res_id cannot be 0 for model {res_model}")
+    
+    # Ensure activity_type_id is valid
+    if activity_type_id is None:
+        raise ValueError("activity_type_id cannot be None")
+    
+    if isinstance(activity_type_id, (list, tuple)) and len(activity_type_id) > 0:
+        activity_type_id = activity_type_id[0]
+    
+    if not isinstance(activity_type_id, int):
+        try:
+            activity_type_id = int(activity_type_id)
+        except (ValueError, TypeError):
+            raise ValueError(f"activity_type_id must be an integer, got {type(activity_type_id)}: {activity_type_id}")
+    
+    if activity_type_id == 0:
+        raise ValueError("activity_type_id cannot be 0")
+    
+    # Use activity_schedule method on the model instead of direct create
+    # This is the recommended way to create activities in Odoo
+    # activity_schedule signature: activity_schedule(activity_type_id, summary=None, date_deadline=None, user_id=None)
+    print(f"   [DEBUG] Creating activity via activity_schedule: res_model={res_model}, res_id={res_id}, activity_type_id={activity_type_id}, summary={summary}")
+    
+    # Prepare args and kwargs for activity_schedule
+    # activity_type_id is the first positional argument
+    args = [activity_type_id]
+    kwargs = {}
+    if summary:
+        kwargs["summary"] = summary
+    if date_deadline:
+        kwargs["date_deadline"] = date_deadline
+    if user_id:
+        if isinstance(user_id, (list, tuple)) and len(user_id) > 0:
+            user_id = user_id[0]
+        kwargs["user_id"] = user_id
+    
+    print(f"   [DEBUG] Calling activity_schedule with args={args}, kwargs={kwargs}")
+    
+    # Call activity_schedule on the record
+    try:
+        result = client.call_method(res_model, "activity_schedule", [res_id], args, kwargs)
+        print(f"   [DEBUG] Activity created successfully via activity_schedule")
+        return result
+    except Exception as e:
+        print(f"   [DEBUG] activity_schedule failed, trying direct create as fallback: {e}")
+        # Fallback to direct create if activity_schedule doesn't work
+        values = {
+            "res_model": res_model,
+            "res_id": res_id,
+            "activity_type_id": activity_type_id,
+            "summary": summary,
+            "date_deadline": date_deadline,
+        }
+        if user_id:
+            values["user_id"] = user_id
+        activity_id = client.create('mail.activity', values)
+        print(f"   [DEBUG] Activity created successfully with ID: {activity_id}")
+        return activity_id
+
+def get_current_user_id(client):
+    """Get the current API user ID."""
+    try:
+        # Try to get user from context or search for admin user
+        users = client.search_read(
+            'res.users',
+            [["active", "=", True]],
+            fields=["id"],
+            limit=1
+        )
+        if users:
+            return users[0].get("id")
+    except Exception:
+        pass
+    return None
