@@ -105,11 +105,99 @@ def build_names_prompt(criteria: Dict[str, Any], language: str = "German") -> st
       "company_names": [min 25 company names],
       "project_names": [min 25 project titles],
       "task_names": [min 50 concise task names],
-      "opportunity_titles": [min 25 sales opportunity titles]
+      "opportunity_titles": [min 25 sales opportunity titles],
+      "supplier_names": [min 15 supplier/vendor company names with legal form suffix like GmbH, AG, KG, Ltd.]
     }}
     - No code blocks, no backticks, no comments, only valid compact JSON.
     - Names must fit the given industry.
+    - Supplier names should be realistic vendor/supplier company names for the industry.
     """
+
+def build_recruiting_prompt(industry: str, num_jobs: int, num_candidates: int, num_skill_types: int, skills_per_type: int, language: str = "German") -> str:
+    """Build prompt for generating recruiting data (jobs, candidates, skills)."""
+    return f"""
+    Based on the industry "{industry}", generate ONLY a JSON object with realistic {language} recruiting data:
+    {{
+      "job_titles": [exactly {num_jobs} job titles/positions],
+      "candidate_names": [exactly {num_candidates} full person names],
+      "candidate_emails": [exactly {num_candidates} email addresses using @example.com domain],
+      "candidate_phones": [exactly {num_candidates} phone numbers in German format],
+      "skill_types": [
+        {{
+          "name": "skill type name",
+          "skills": [exactly {skills_per_type} skill names],
+          "levels": [at least 3 level names that logically fit the skill type]
+        }}
+      ] (exactly {num_skill_types} skill types)
+    }}
+    
+    Examples for skill types:
+    - "Sprachen": skills: ["Englisch", "Französisch", "Deutsch"], levels: ["A1", "A2", "B1", "B2", "C1", "C2"]
+    - "Programmiersprachen": skills: ["Python", "Java", "JavaScript"], levels: ["Anfänger", "Fortgeschritten", "Experte"]
+    - "Soft Skills": skills: ["Kommunikation", "Teamarbeit", "Führung"], levels: ["Grundlagen", "Fortgeschritten", "Experte"]
+    
+    - No code blocks, no backticks, no comments, only valid compact JSON.
+    - All data must be realistic and fit the industry "{industry}".
+    - Skill types, skills, and levels must logically fit together.
+    - Use {language} language.
+    """
+
+def fetch_recruiting_data(industry: str, num_jobs: int, num_candidates: int, num_skill_types: int, skills_per_type: int, gemini_model_name: str, language: str = "German") -> Dict[str, Any] | None:
+    """Fetch recruiting data from Gemini."""
+    prompt = build_recruiting_prompt(industry, num_jobs, num_candidates, num_skill_types, skills_per_type, language)
+    print(f"Frage Gemini ({gemini_model_name}) nach Recruiting-Daten für {industry}...")
+    model = genai.GenerativeModel(gemini_model_name)
+    signal.signal(signal.SIGALRM, timeout_handler)
+    try:
+        signal.alarm(120)
+        response = model.generate_content(prompt)
+        signal.alarm(0)
+        json_text = response.text.strip().replace("```json", "").replace("```", "")
+        data = json.loads(json_text)
+        print("✅ Recruiting-Daten von Gemini empfangen.")
+        return data
+    except TimeoutException as e:
+        print(f"❌ Zeitüberschreitung bei der Gemini-Recruiting-Anfrage: {e}")
+        return None
+    except json.JSONDecodeError:
+        print("❌ Fehler: Gemini hat ungültiges JSON zurückgegeben.")
+        return None
+    except Exception as e:
+        print(f"❌ Fehler bei Recruiting-Daten: {e}")
+        return None
+    finally:
+        try:
+            signal.alarm(0)
+        except Exception:
+            pass
+
+def build_job_summary_prompt(job_title: str, industry: str, language: str = "German") -> str:
+    """Build prompt for generating job summary/description."""
+    return f"""
+    Generate a brief job summary (2-3 sentences) in {language} for the position "{job_title}" in the "{industry}" industry.
+    Return ONLY the summary text, no JSON, no quotes, no code blocks.
+    """
+
+def fetch_job_summary(job_title: str, industry: str, gemini_model_name: str, language: str = "German") -> str | None:
+    """Fetch job summary from Gemini."""
+    prompt = build_job_summary_prompt(job_title, industry, language)
+    model = genai.GenerativeModel(gemini_model_name)
+    signal.signal(signal.SIGALRM, timeout_handler)
+    try:
+        signal.alarm(30)
+        response = model.generate_content(prompt)
+        signal.alarm(0)
+        summary = response.text.strip().strip('"').strip("'")
+        return summary
+    except TimeoutException:
+        return None
+    except Exception:
+        return None
+    finally:
+        try:
+            signal.alarm(0)
+        except Exception:
+            pass
 
 def fetch_name_suggestions(criteria: Dict[str, Any], gemini_model_name: str, language: str = "German") -> Dict[str, List[str]] | None:
     prompt = build_names_prompt(criteria, language)
