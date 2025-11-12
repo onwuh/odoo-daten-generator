@@ -10,13 +10,11 @@ import random
 import gemini_client
 from odoo_client import OdooJson2Client
 ## Updated Interactive Wizard
-def run_interactive_wizard():
+def run_interactive_wizard(default_industry=None):
     """Führt den Benutzer durch eine Reihe von detaillierten Fragen."""
-    print("🚀 Willkommen beim Odoo Demo-Daten Assistenten!")
-    
     criteria = {}
     
-    # Mode and Industry questions remain the same
+    # Mode question
     criteria['mode'] = questionary.select(
         "Was möchtest du tun?",
         choices=[
@@ -24,9 +22,12 @@ def run_interactive_wizard():
             "Stammdaten anlegen UND Bewegungsdaten (Angebote) erstellen"
         ]
     ).ask()
+    
+    # Industry question with suggested default
+    industry_default = default_industry or "IT-Dienstleistung"
     criteria['industry'] = questionary.text(
         "Für welche Branche sollen die Daten sein? (z.B. 'IT-Dienstleistung')",
-        default="IT-Dienstleistung"
+        default=industry_default
     ).ask()
 
     print("\n--- KUNDEN-DEFINITION ---")
@@ -112,13 +113,13 @@ def setup_connections():
         if not gemini_api_key and env_gemini_key:
             gemini_api_key = env_gemini_key
     gemini_client.genai.configure(api_key=gemini_api_key)
-
+    
     print("-" * 30)
-
+    
     print("Verbinde mit Odoo (JSON 2 API)...")
     client = OdooJson2Client(url, db, api_key)
     print("✅ Odoo JSON 2 Client initialisiert.\n")
-
+    
     return {
         "client": client,
         "gemini_model_name": gemini_model_name
@@ -139,10 +140,13 @@ def populate_odoo_with_data(creative_data, criteria, client):
         'consumables': {'type': 'consu', 'is_storable': False},
         'storables': {'type': 'consu', 'is_storable': True}
     }
+    # Invalid fields to filter out from Gemini-generated data
+    invalid_product_fields = {'uom', 'vat', 'vat_id', 'detailed_type'}
     for product_type, template in product_map.items():
         for creative_product in creative_data.get('products', {}).get(product_type, []):
             final_product_data = template.copy()
-            valid_creative_data = {k: v for k, v in creative_product.items() if v is not None}
+            valid_creative_data = {k: v for k, v in creative_product.items() 
+                                 if v is not None and k not in invalid_product_fields}
             final_product_data.update(valid_creative_data)
             
             # Ensure realistic price fields
@@ -215,7 +219,9 @@ def ask_module_selections(installed_modules):
         "account": "Accounting",
         "hr": "Employees",
         "project": "Project",
-        "hr_timesheet": "Timesheet"
+        "hr_timesheet": "Timesheet",
+        "mrp": "Manufacturing",
+        "hr_recruitment": "Recruiting"
     }
     
     selections = {}
@@ -224,7 +230,7 @@ def ask_module_selections(installed_modules):
     print("Bitte geben Sie für jedes Modul an, ob Daten erstellt werden sollen und wie viele.\n")
     
     # Ask all questions in sequence - this happens in one function call
-    module_order = ["crm", "sale", "account", "hr", "project", "hr_timesheet"]
+    module_order = ["crm", "sale", "account", "hr", "project", "hr_timesheet", "mrp", "hr_recruitment"]
     
     for module_code in module_order:
         if module_code in installed_modules:
@@ -259,6 +265,12 @@ def ask_module_selections(installed_modules):
                         validate=lambda t: t.isdigit() and int(t) > 0
                     ).ask())
                     selections[module_code] = count
+                    # Ask if bank transactions should be created
+                    create_bank_transactions = questionary.confirm(
+                        "Sollen auch Banktransaktionen für die Eingangsrechnungen erstellt werden?",
+                        default=True
+                    ).ask()
+                    selections["create_bank_transactions"] = create_bank_transactions
                 elif module_code == "hr":
                     count = int(questionary.text(
                         f"Wie viele Mitarbeiter für {module_name}? (empfohlen: 10)",
@@ -286,11 +298,71 @@ def ask_module_selections(installed_modules):
                         validate=lambda t: t.isdigit() and int(t) > 0
                     ).ask())
                     selections[module_code] = count
+                elif module_code == "mrp":
+                    num_products = int(questionary.text(
+                        f"Wie viele Fertigungsprodukte für {module_name}? (empfohlen: 3)",
+                        default="3",
+                        validate=lambda t: t.isdigit() and int(t) > 0
+                    ).ask())
+                    components_per_bom = int(questionary.text(
+                        "Wie viele Komponenten sollen pro Stückliste angelegt werden? (inkl. möglicher Sub-Stücklisten, empfohlen: 4)",
+                        default="4",
+                        validate=lambda t: t.isdigit() and int(t) > 0
+                    ).ask())
+                    while True:
+                        sub_boms = int(questionary.text(
+                            "Wie viele Komponenten pro Produkt sollen eigene Sub-Stücklisten erhalten?",
+                            default=str(min(2, components_per_bom)),
+                            validate=lambda t: t.isdigit()
+                        ).ask())
+                        if sub_boms <= components_per_bom:
+                            break
+                        print("⚠️  Hinweis: Die Anzahl der Sub-Stücklisten darf die Gesamtanzahl der Komponenten nicht überschreiten.")
+                    selections[module_code] = {
+                        "num_products": num_products,
+                        "components_per_bom": components_per_bom,
+                        "sub_boms_per_product": sub_boms
+                    }
+                elif module_code == "hr_recruitment":
+                    num_jobs = int(questionary.text(
+                        f"Wie viele Stellen für {module_name}? (empfohlen: 5)",
+                        default="5",
+                        validate=lambda t: t.isdigit() and int(t) > 0
+                    ).ask())
+                    num_candidates = int(questionary.text(
+                        f"Wie viele Kandidaten für {module_name}? (empfohlen: 15)",
+                        default="15",
+                        validate=lambda t: t.isdigit() and int(t) > 0
+                    ).ask())
+                    create_skills = questionary.confirm(
+                        "Sollen Kompetenzen erstellt werden?",
+                        default=True
+                    ).ask()
+                    num_skill_types = 0
+                    skills_per_type = 0
+                    if create_skills:
+                        num_skill_types = int(questionary.text(
+                            "Wie viele Kompetenzarten sollen erstellt werden? (empfohlen: 3)",
+                            default="3",
+                            validate=lambda t: t.isdigit() and int(t) > 0
+                        ).ask())
+                        skills_per_type = int(questionary.text(
+                            "Wie viele Kompetenzen pro Kompetenzart? (empfohlen: 4)",
+                            default="4",
+                            validate=lambda t: t.isdigit() and int(t) > 0
+                        ).ask())
+                    selections[module_code] = {
+                        "num_jobs": num_jobs,
+                        "num_candidates": num_candidates,
+                        "create_skills": create_skills,
+                        "num_skill_types": num_skill_types,
+                        "skills_per_type": skills_per_type
+                    }
     
     return selections
 
 def create_module_demo_data(client, created_ids, gemini_model_name=None, language_name="German", module_selections=None):
-    desired_modules = ["crm", "sale", "account", "hr", "project", "hr_timesheet"]
+    desired_modules = ["crm", "sale", "account", "hr", "project", "hr_timesheet", "mrp", "hr_recruitment"]
     installed = odoo_actions.get_installed_modules(client, desired_modules)
     company_ids = created_ids.get("company_ids", [])
     product_ids = created_ids.get("product_ids", [])
@@ -298,8 +370,24 @@ def create_module_demo_data(client, created_ids, gemini_model_name=None, languag
     created_order_ids = []
     confirmed_order_ids = []  # Track confirmed orders for invoice creation
     
-    # Ensure at least one partner and two products exist for downstream demos
-    if not company_ids:
+    # Only create fallback data if modules actually need it (check module_selections)
+    # Check if any module that needs partners/products is selected
+    needs_partners = (
+        module_selections and (
+            module_selections.get("sale", 0) > 0 or
+            module_selections.get("crm", 0) > 0 or
+            module_selections.get("account", 0) > 0
+        )
+    )
+    needs_products = (
+        module_selections and (
+            module_selections.get("sale", 0) > 0 or
+            module_selections.get("account", 0) > 0
+        )
+    )
+    
+    # Ensure at least one partner exists only if needed
+    if needs_partners and not company_ids:
         print("-> Creating fallback demo partner")
         env_companies = os.environ.get('NAMES_COMPANY', '')
         fallback_companies = [
@@ -308,18 +396,21 @@ def create_module_demo_data(client, created_ids, gemini_model_name=None, languag
         ]
         company_bank = [c for c in env_companies.split('||') if c] or fallback_companies
         company_ids.append(odoo_actions.create_customer(client, {"name": random.choice(company_bank)}))
-    while len(product_ids) < 2:
-        idx = len(product_ids) + 1
-        print(f"-> Creating fallback demo product")
-        industry = os.environ.get('INDUSTRY', 'IT')
-        env_products = os.environ.get('NAMES_PRODUCT', '')
-        product_fallback_bank = {
-            'IT': ['Cloud Service Paket', 'Supportvertrag Premium', 'SaaS Lizenz', 'Firewall Appliance', 'Backup Lösung'],
-            'Fertigung': ['Schraubensatz M6', 'Hydraulikpumpe', 'Förderband Motor', 'Sensorik Kit', 'Wartungspaket'],
-            'Handel': ['Kassensystem', 'Barcode Scanner', 'Regalmodul', 'Etikettendrucker', 'Verpackungseinheit']
-        }
-        names = [p for p in env_products.split('||') if p] or product_fallback_bank.get(industry, product_fallback_bank['IT'])
-        product_ids.append(odoo_actions.create_product(client, {"name": random.choice(names), "type": "consu", "list_price": round(random.uniform(15, 500), 2)}))
+    
+    # Ensure at least two products exist only if needed
+    if needs_products:
+        while len(product_ids) < 2:
+            idx = len(product_ids) + 1
+            print(f"-> Creating fallback demo product")
+            industry = os.environ.get('INDUSTRY', 'IT')
+            env_products = os.environ.get('NAMES_PRODUCT', '')
+            product_fallback_bank = {
+                'IT': ['Cloud Service Paket', 'Supportvertrag Premium', 'SaaS Lizenz', 'Firewall Appliance', 'Backup Lösung'],
+                'Fertigung': ['Schraubensatz M6', 'Hydraulikpumpe', 'Förderband Motor', 'Sensorik Kit', 'Wartungspaket'],
+                'Handel': ['Kassensystem', 'Barcode Scanner', 'Regalmodul', 'Etikettendrucker', 'Verpackungseinheit']
+            }
+            names = [p for p in env_products.split('||') if p] or product_fallback_bank.get(industry, product_fallback_bank['IT'])
+            product_ids.append(odoo_actions.create_product(client, {"name": random.choice(names), "type": "consu", "list_price": round(random.uniform(15, 500), 2)}))
 
     # Use module_selections if provided, otherwise use environment defaults
     if module_selections is None:
@@ -332,6 +423,122 @@ def create_module_demo_data(client, created_ids, gemini_model_name=None, languag
     num_invoices = module_selections.get("account", 0)
     num_employees = module_selections.get("hr", 0)
     num_timesheets = module_selections.get("hr_timesheet", 0)
+    mrp_config = module_selections.get("mrp", {})
+    num_mrp_products = 0
+    components_per_bom = 0
+    sub_boms_per_product = 0
+    if isinstance(mrp_config, dict):
+        num_mrp_products = max(0, int(mrp_config.get("num_products", 0)))
+        components_per_bom = max(1, int(mrp_config.get("components_per_bom", 1)))
+        sub_boms_per_product = max(0, int(mrp_config.get("sub_boms_per_product", 0)))
+        if sub_boms_per_product > components_per_bom:
+            sub_boms_per_product = components_per_bom
+
+    # ==============================================================================
+    # CREATE MANUFACTURING DATA FIRST (before sales orders)
+    # ==============================================================================
+    if "mrp" in installed and num_mrp_products > 0:
+        print("\n--- MANUFACTURING: Erstelle Fertigungsprodukte und Stücklisten ---")
+        env_products = os.environ.get('NAMES_PRODUCT', '')
+        product_name_bank = [p for p in env_products.split('||') if p]
+        industry = os.environ.get('INDUSTRY', 'Fertigung')
+        language = os.environ.get('LANGUAGE_NAME', language_name)
+        created_bom_ids = []
+
+        for idx in range(num_mrp_products):
+            base_name = None
+            if product_name_bank:
+                base_name = product_name_bank.pop(random.randrange(len(product_name_bank)))
+            if not base_name:
+                base_name = f"{industry} Baugruppe"
+            main_product_name = f"{base_name} #{idx+1}" if base_name == base_name.strip() else base_name
+            list_price = round(random.uniform(250, 1200), 2)
+            standard_price = round(list_price * random.uniform(0.35, 0.65), 2)
+            main_product_vals = {
+                "name": main_product_name,
+                "sale_ok": True,
+                "purchase_ok": True,
+                "list_price": list_price,
+                "standard_price": standard_price,
+                "tracking": "none",
+            }
+            main_product_id = odoo_actions.create_product(client, main_product_vals)
+            product_ids.append(main_product_id)
+
+            tmpl_id = odoo_actions.get_product_template_id(client, main_product_id)
+            if not tmpl_id:
+                print(f"⚠️  Konnte Template für Produkt {main_product_id} nicht ermitteln – überspringe Fertigungseintrag.")
+                continue
+
+            bom_code = f"BOM-{main_product_id}"
+            bom_id = odoo_actions.create_bom(client, tmpl_id, product_id=main_product_id, quantity=1.0, code=bom_code)
+            created_bom_ids.append(bom_id)
+
+            component_count = max(components_per_bom, sub_boms_per_product or 0, 1)
+            component_names: list[str] = []
+            if gemini_model_name:
+                gemini_components = gemini_client.fetch_bom_component_names(
+                    main_product_name,
+                    component_count,
+                    gemini_model_name,
+                    language,
+                    industry
+                )
+                if gemini_components:
+                    component_names.extend(gemini_components[:component_count])
+            while len(component_names) < component_count:
+                component_names.append(f"{main_product_name} Modul {len(component_names)+1}")
+
+            for comp_idx, component_name in enumerate(component_names):
+                comp_list_price = round(random.uniform(80, list_price * 0.6), 2)
+                comp_standard_price = round(comp_list_price * random.uniform(0.4, 0.7), 2)
+                component_vals = {
+                    "name": component_name,
+                    "sale_ok": False,
+                    "purchase_ok": True,
+                    "list_price": comp_list_price,
+                    "standard_price": comp_standard_price,
+                    "tracking": "none",
+                }
+                component_product_id = odoo_actions.create_product(client, component_vals)
+                product_ids.append(component_product_id)
+                component_qty = max(1, random.randint(1, 4))
+                odoo_actions.create_bom_line(client, bom_id, component_product_id, quantity=component_qty)
+
+                if comp_idx < sub_boms_per_product:
+                    component_template_id = odoo_actions.get_product_template_id(client, component_product_id)
+                    if not component_template_id:
+                        print(f"⚠️  Konnte Template für Komponente {component_product_id} nicht laden – Sub-Stückliste übersprungen.")
+                        continue
+                    sub_bom_code = f"SUB-{bom_id}-{comp_idx+1}"
+                    sub_bom_id = odoo_actions.create_bom(
+                        client,
+                        component_template_id,
+                        product_id=component_product_id,
+                        quantity=1.0,
+                        code=sub_bom_code
+                    )
+                    created_bom_ids.append(sub_bom_id)
+                    raw_count = max(2, min(4, components_per_bom // 2 + 1))
+                    for raw_idx in range(raw_count):
+                        raw_name = f"{component_name} Rohteil {raw_idx+1}"
+                        raw_list_price = round(max(15, comp_standard_price * random.uniform(0.4, 0.9)), 2)
+                        raw_standard_price = round(raw_list_price * random.uniform(0.5, 0.85), 2)
+                        raw_vals = {
+                            "name": raw_name,
+                            "sale_ok": False,
+                            "purchase_ok": True,
+                            "list_price": raw_list_price,
+                            "standard_price": raw_standard_price,
+                            "tracking": "none",
+                        }
+                        raw_product_id = odoo_actions.create_product(client, raw_vals)
+                        product_ids.append(raw_product_id)
+                        raw_qty = round(random.uniform(1.0, 3.0), 2)
+                        odoo_actions.create_bom_line(client, sub_bom_id, raw_product_id, quantity=raw_qty)
+
+        print(f"✅ {len(created_bom_ids)} Stücklisten für {num_mrp_products} Fertigungsprodukte erstellt.")
+        print(f"✅ Insgesamt {len([p for p in product_ids if p])} Produkte verfügbar (inkl. Manufacturing)")
 
     if "crm" in installed and num_opps > 0:
         print("\n--- CRM: Erstelle Opportunities ---")
@@ -357,10 +564,29 @@ def create_module_demo_data(client, created_ids, gemini_model_name=None, languag
 
     if "sale" in installed and num_orders > 0:
         print("\n--- SALES: Erstelle Verkaufsaufträge ---")
+        # Get all available products (including manufacturing products created above)
+        # Filter to only include products that are sellable (sale_ok = True)
+        all_available_products = client.search_read(
+            'product.product',
+            [["id", "in", product_ids], ["sale_ok", "=", True]],
+            fields=["id"],
+            limit=0
+        )
+        sellable_product_ids = [p.get("id") for p in all_available_products]
+        
+        # If no sellable products found, use all products (fallback)
+        if not sellable_product_ids:
+            sellable_product_ids = product_ids
+            print("⚠️  Keine verkaufbaren Produkte gefunden, verwende alle Produkte")
+        
+        print(f"-> Verfügbare verkaufbare Produkte: {len(sellable_product_ids)}")
+        
         for i in range(num_orders):
             cid = company_ids[i % len(company_ids)]
             lines = []
-            chosen_products = random.sample(product_ids, k=min(len(product_ids), random.randint(1, min(3, len(product_ids)))))
+            # Choose from all sellable products (including manufacturing)
+            num_products_in_order = random.randint(1, min(5, len(sellable_product_ids)))
+            chosen_products = random.sample(sellable_product_ids, k=num_products_in_order)
             for pid in chosen_products:
                 qty = random.randint(1, 5)
                 lines.append((0, 0, {"product_id": pid, "product_uom_qty": qty}))
@@ -441,6 +667,194 @@ def create_module_demo_data(client, created_ids, gemini_model_name=None, languag
                 inv_id = odoo_actions.create_customer_invoice(client, cid, chosen)
                 invoice_ids.append(inv_id)
             odoo_actions.post_invoices(client, invoice_ids)
+    
+    # Create bank transactions for all invoices (if user requested it)
+    # This runs AFTER all invoices have been created and posted
+    if "account" in installed and module_selections.get("create_bank_transactions", False):
+        odoo_actions.create_bank_transactions_for_all_invoices(client)
+    
+    # Create recruiting data
+    if "hr_recruitment" in installed and module_selections.get("hr_recruitment"):
+        print("\n--- RECRUITING: Erstelle Recruiting-Daten ---")
+        rec_config = module_selections.get("hr_recruitment", {})
+        num_jobs = rec_config.get("num_jobs", 0)
+        num_candidates = rec_config.get("num_candidates", 0)
+        create_skills = rec_config.get("create_skills", False)
+        num_skill_types = rec_config.get("num_skill_types", 0)
+        skills_per_type = rec_config.get("skills_per_type", 0)
+        
+        if num_jobs > 0 or num_candidates > 0:
+            industry = os.environ.get('INDUSTRY', 'IT')
+            language_name = os.environ.get('LANGUAGE_NAME', 'German')
+            
+            # Fetch recruiting data from Gemini
+            recruiting_data = gemini_client.fetch_recruiting_data(
+                industry, num_jobs, num_candidates, num_skill_types, skills_per_type,
+                gemini_model_name, language_name
+            ) or {}
+            
+            all_skill_ids = []  # Store all created skill IDs
+            
+            # Create skills if requested
+            if create_skills and num_skill_types > 0:
+                print("\n--- RECRUITING: Erstelle Kompetenzen ---")
+                existing_skill_types = odoo_actions.get_existing_skill_types(client)
+                skill_types_data = recruiting_data.get("skill_types", [])
+                
+                for skill_type_data in skill_types_data[:num_skill_types]:
+                    skill_type_name = skill_type_data.get("name", "")
+                    if not skill_type_name:
+                        continue
+                    
+                    # Check if skill type already exists
+                    if skill_type_name.lower() in existing_skill_types:
+                        print(f"-> Skill type '{skill_type_name}' already exists, skipping")
+                        skill_type_id = existing_skill_types[skill_type_name.lower()]
+                    else:
+                        skill_type_id = odoo_actions.create_skill_type(client, skill_type_name)
+                        existing_skill_types[skill_type_name.lower()] = skill_type_id
+                    
+                    # Create skills for this type
+                    skills = skill_type_data.get("skills", [])[:skills_per_type]
+                    for skill_name in skills:
+                        skill_id = odoo_actions.create_skill(client, skill_type_id, skill_name)
+                        all_skill_ids.append(skill_id)
+                    
+                    # Create levels for this type
+                    levels = skill_type_data.get("levels", [])
+                    if len(levels) < 3:
+                        # Fallback levels if not enough provided
+                        levels = ["Grundlagen", "Fortgeschritten", "Experte"]
+                    
+                    for idx, level_name in enumerate(levels[:max(3, len(levels))]):
+                        level_progress = int((idx + 1) * 100 / max(3, len(levels)))
+                        odoo_actions.create_skill_level(client, skill_type_id, level_name, level_progress)
+            
+            # Get all available skills (including existing ones)
+            all_available_skills = client.search_read(
+                'hr.skill',
+                [],
+                fields=["id"],
+                limit=0
+            )
+            all_skill_ids = [s.get("id") for s in all_available_skills]
+            
+            # Get departments
+            departments = odoo_actions.get_departments(client)
+            if not departments:
+                print("⚠️  Keine Abteilungen gefunden. Erstelle Fallback-Abteilung...")
+                dept_id = odoo_actions.create_department(client, "Allgemein")
+                departments = [{"id": dept_id, "name": "Allgemein"}]
+            
+            # Create jobs
+            job_ids = []
+            job_titles = recruiting_data.get("job_titles", [])[:num_jobs]
+            if not job_titles:
+                job_titles = [f"Stelle {i+1}" for i in range(num_jobs)]
+            
+            # Get existing job names per department to avoid duplicates
+            existing_dept_job_names = odoo_actions.get_existing_job_names_per_department(client)
+            
+            # Track job names per department to ensure uniqueness (including new ones we create)
+            dept_job_names = {}  # {dept_id: set of job names (lowercase)}
+            
+            # Initialize with existing job names
+            for dept_id, existing_names in existing_dept_job_names.items():
+                dept_job_names[dept_id] = existing_names.copy()
+            
+            for idx, job_title in enumerate(job_titles):
+                # Distribute jobs across departments, ensuring unique names per department
+                dept = departments[idx % len(departments)]
+                dept_id = dept.get("id")
+                
+                # Initialize department tracking if needed
+                if dept_id not in dept_job_names:
+                    dept_job_names[dept_id] = set()
+                
+                # Make job name unique per department by adding suffix if needed
+                # Compare lowercase to handle case-insensitive uniqueness
+                unique_job_title = job_title
+                suffix = 1
+                while unique_job_title.lower() in dept_job_names[dept_id]:
+                    unique_job_title = f"{job_title} ({suffix})"
+                    suffix += 1
+                dept_job_names[dept_id].add(unique_job_title.lower())
+                
+                # Get job summary from Gemini (use original title for context)
+                job_summary = gemini_client.fetch_job_summary(job_title, industry, gemini_model_name, language_name)
+                
+                # Select random skills for this job (2-4 skills)
+                job_skills = []
+                if all_skill_ids:
+                    num_job_skills = random.randint(2, min(4, len(all_skill_ids)))
+                    job_skills = random.sample(all_skill_ids, num_job_skills)
+                
+                # Random target between 1 and 5
+                target = random.randint(1, 5)
+                
+                job_id = odoo_actions.create_job(
+                    client, unique_job_title, dept_id, target=target,
+                    description=job_summary, job_skill_ids=job_skills
+                )
+                job_ids.append(job_id)
+            
+            # Create candidates and assign to jobs
+            if num_candidates > 0 and job_ids:
+                print("\n--- RECRUITING: Erstelle Bewerber ---")
+                candidate_names = recruiting_data.get("candidate_names", [])[:num_candidates]
+                candidate_emails = recruiting_data.get("candidate_emails", [])[:num_candidates]
+                candidate_phones = recruiting_data.get("candidate_phones", [])[:num_candidates]
+                
+                # Fill missing data with fallbacks
+                while len(candidate_names) < num_candidates:
+                    candidate_names.append(f"Bewerber {len(candidate_names) + 1}")
+                while len(candidate_emails) < num_candidates:
+                    candidate_emails.append(f"bewerber{len(candidate_emails) + 1}@example.com")
+                while len(candidate_phones) < num_candidates:
+                    candidate_phones.append(f"+49 {random.randint(100, 999)} {random.randint(1000000, 9999999)}")
+                
+                # Get stages for each job
+                job_stages_map = {}
+                for job_id in job_ids:
+                    stages = odoo_actions.get_job_stages(client, job_id)
+                    job_stages_map[job_id] = stages if stages else []
+                
+                # Distribute candidates across jobs
+                candidates_per_job = num_candidates // len(job_ids)
+                remaining_candidates = num_candidates % len(job_ids)
+                
+                candidate_idx = 0
+                for job_idx, job_id in enumerate(job_ids):
+                    num_for_job = candidates_per_job + (1 if job_idx < remaining_candidates else 0)
+                    stages = job_stages_map.get(job_id, [])
+                    
+                    for _ in range(num_for_job):
+                        if candidate_idx >= num_candidates:
+                            break
+                        
+                        name = candidate_names[candidate_idx]
+                        email = candidate_emails[candidate_idx]
+                        phone = candidate_phones[candidate_idx]
+                        
+                        # Select random skills for candidate (1-3 skills)
+                        candidate_skills = []
+                        if all_skill_ids:
+                            num_candidate_skills = random.randint(1, min(3, len(all_skill_ids)))
+                            candidate_skills = random.sample(all_skill_ids, num_candidate_skills)
+                        
+                        # Assign to random stage if available
+                        stage_id = None
+                        if stages:
+                            stage = random.choice(stages)
+                            stage_id = stage.get("id")
+                        
+                        odoo_actions.create_applicant(
+                            client, job_id, name, email, phone,
+                            skill_ids=candidate_skills, stage_id=stage_id
+                        )
+                        candidate_idx += 1
+                
+                print(f"✅ {num_candidates} Bewerber erstellt und auf {len(job_ids)} Stellen verteilt")
 
     if "hr" in installed and num_employees > 0:
         print("\n--- EMPLOYEES: Erstelle Mitarbeiter ---")
@@ -539,11 +953,15 @@ def create_module_demo_data(client, created_ids, gemini_model_name=None, languag
             if proj:
                 odoo_actions.create_timesheet(client, emp, proj, hours=float(random.randint(1, 8)), description=f"Arbeitstag {i+1}", date_str="2025-01-01")
 
+    # Manufacturing data is already created above (before sales orders)
+    # This section is intentionally removed to avoid duplication
+
     # Create vendor invoices (bills)
     if "account" in installed and num_invoices > 0:
         print("\n--- ACCOUNTING: Erstelle Eingangsrechnungen ---")
-        # Ensure a supplier
-        supplier_names = [
+        # Get supplier names from environment (generated by Gemini) or use fallback
+        env_suppliers = os.environ.get('NAMES_SUPPLIER', '')
+        supplier_names = [s for s in env_suppliers.split('||') if s] if env_suppliers else [
             'Alpha Supplies GmbH', 'Global Parts AG', 'Logistik & Co. KG',
             'TechImport Ltd.', 'Bürobedarf Müller', 'Industriebedarf König'
         ]
@@ -558,10 +976,31 @@ def create_module_demo_data(client, created_ids, gemini_model_name=None, languag
 if __name__ == "__main__":
     connections = None  # Initialize to ensure it's in scope for exception handler
     try:
-        criteria = run_interactive_wizard()
+        # Setup connections first (needed to get company name)
+        print("🚀 Willkommen beim Odoo Demo-Daten Assistenten!")
         connections = setup_connections()
         
-        os.environ["INDUSTRY"] = criteria.get('industry', 'IT')
+        # Get main company name and determine industry
+        print("\n--- Branche erkennen ---")
+        company_name = odoo_actions.get_main_company_name(connections['client'])
+        suggested_industry = None
+        if company_name:
+            print(f"✅ Gefundener Firmenname: {company_name}")
+            suggested_industry = gemini_client.determine_industry_from_company_name(
+                company_name, 
+                connections['gemini_model_name']
+            )
+            if suggested_industry:
+                print(f"✅ Vorgeschlagene Branche: {suggested_industry}")
+            else:
+                print("⚠️  Konnte Branche nicht automatisch bestimmen.")
+        else:
+            print("⚠️  Konnte Firmenname nicht ermitteln.")
+        
+        # Run wizard with suggested industry as default
+        criteria = run_interactive_wizard(default_industry=suggested_industry)
+        
+        os.environ["INDUSTRY"] = criteria.get('industry', suggested_industry or 'IT')
 
         # Detect language from main company or API user
         print("\n--- Sprache erkennen ---")
@@ -573,7 +1012,7 @@ if __name__ == "__main__":
 
         # Detect installed modules and ask user for selections
         print("\n--- Installierte Module erkennen ---")
-        desired_modules = ["crm", "sale", "account", "hr", "project", "hr_timesheet"]
+        desired_modules = ["crm", "sale", "account", "hr", "project", "hr_timesheet", "mrp", "hr_recruitment"]
         installed_modules = odoo_actions.get_installed_modules(connections['client'], desired_modules)
         if installed_modules:
             print(f"✅ Gefundene installierte Module: {', '.join([m.upper() for m in installed_modules])}")
@@ -586,7 +1025,7 @@ if __name__ == "__main__":
         if not module_selections:
             print("⚠️  Keine Module für Demo-Daten ausgewählt. Programm wird beendet.")
             sys.exit(0)
-
+        
         creative_data = gemini_client.fetch_creative_data(
             criteria, 
             connections['gemini_model_name']
@@ -609,6 +1048,7 @@ if __name__ == "__main__":
         _to_env_list('NAMES_PROJECT', name_suggestions.get('project_names', []))
         _to_env_list('NAMES_TASK', name_suggestions.get('task_names', []))
         _to_env_list('NAMES_OPPORTUNITY', name_suggestions.get('opportunity_titles', []))
+        _to_env_list('NAMES_SUPPLIER', name_suggestions.get('supplier_names', []))
         
         created_ids = populate_odoo_with_data(
             creative_data, 
