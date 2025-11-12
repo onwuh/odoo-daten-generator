@@ -43,6 +43,42 @@ def get_installed_modules(client, wanted_modules):
     )
     return set(r["name"] for r in records)
 
+def get_main_company_name(client):
+    """Get the name of the main company from the API user's company."""
+    try:
+        # Try to get company with id=1 first (main company)
+        companies = client.search_read('res.company', [["id", "=", 1]], fields=["name", "partner_id"], limit=1)
+        if companies:
+            company_name = companies[0].get("name")
+            if company_name:
+                return company_name
+            # If no name, try to get from partner
+            partner_id = companies[0].get("partner_id")
+            if partner_id and isinstance(partner_id, (list, tuple)):
+                partner_id = partner_id[0]
+            if partner_id:
+                partners = client.search_read('res.partner', [["id", "=", partner_id]], fields=["name"], limit=1)
+                if partners and partners[0].get("name"):
+                    return partners[0]["name"]
+        
+        # Fallback: get first company's name
+        companies = client.search_read('res.company', [], fields=["name", "partner_id"], limit=1)
+        if companies:
+            company_name = companies[0].get("name")
+            if company_name:
+                return company_name
+            # Try partner
+            partner_id = companies[0].get("partner_id")
+            if partner_id and isinstance(partner_id, (list, tuple)):
+                partner_id = partner_id[0]
+            if partner_id:
+                partners = client.search_read('res.partner', [["id", "=", partner_id]], fields=["name"], limit=1)
+                if partners and partners[0].get("name"):
+                    return partners[0]["name"]
+    except Exception as e:
+        print(f"-> Warning: Could not determine company name: {e}")
+    return None
+
 def get_main_company_language(client):
     """Get the language of the main company (usually company_id=1), or API user's language as fallback."""
     try:

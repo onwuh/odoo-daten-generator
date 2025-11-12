@@ -10,13 +10,11 @@ import random
 import gemini_client
 from odoo_client import OdooJson2Client
 ## Updated Interactive Wizard
-def run_interactive_wizard():
+def run_interactive_wizard(default_industry=None):
     """Führt den Benutzer durch eine Reihe von detaillierten Fragen."""
-    print("🚀 Willkommen beim Odoo Demo-Daten Assistenten!")
-    
     criteria = {}
     
-    # Mode and Industry questions remain the same
+    # Mode question
     criteria['mode'] = questionary.select(
         "Was möchtest du tun?",
         choices=[
@@ -24,9 +22,12 @@ def run_interactive_wizard():
             "Stammdaten anlegen UND Bewegungsdaten (Angebote) erstellen"
         ]
     ).ask()
+    
+    # Industry question with suggested default
+    industry_default = default_industry or "IT-Dienstleistung"
     criteria['industry'] = questionary.text(
         "Für welche Branche sollen die Daten sein? (z.B. 'IT-Dienstleistung')",
-        default="IT-Dienstleistung"
+        default=industry_default
     ).ask()
 
     print("\n--- KUNDEN-DEFINITION ---")
@@ -112,13 +113,13 @@ def setup_connections():
         if not gemini_api_key and env_gemini_key:
             gemini_api_key = env_gemini_key
     gemini_client.genai.configure(api_key=gemini_api_key)
-
+    
     print("-" * 30)
-
+    
     print("Verbinde mit Odoo (JSON 2 API)...")
     client = OdooJson2Client(url, db, api_key)
     print("✅ Odoo JSON 2 Client initialisiert.\n")
-
+    
     return {
         "client": client,
         "gemini_model_name": gemini_model_name
@@ -139,10 +140,13 @@ def populate_odoo_with_data(creative_data, criteria, client):
         'consumables': {'type': 'consu', 'is_storable': False},
         'storables': {'type': 'consu', 'is_storable': True}
     }
+    # Invalid fields to filter out from Gemini-generated data
+    invalid_product_fields = {'uom', 'vat', 'vat_id', 'detailed_type'}
     for product_type, template in product_map.items():
         for creative_product in creative_data.get('products', {}).get(product_type, []):
             final_product_data = template.copy()
-            valid_creative_data = {k: v for k, v in creative_product.items() if v is not None}
+            valid_creative_data = {k: v for k, v in creative_product.items() 
+                                 if v is not None and k not in invalid_product_fields}
             final_product_data.update(valid_creative_data)
             
             # Ensure realistic price fields
@@ -594,8 +598,6 @@ def create_module_demo_data(client, created_ids, gemini_model_name=None, languag
             standard_price = round(list_price * random.uniform(0.35, 0.65), 2)
             main_product_vals = {
                 "name": main_product_name,
-                "type": "product",
-                "detailed_type": "product",
                 "sale_ok": True,
                 "purchase_ok": True,
                 "list_price": list_price,
@@ -634,8 +636,6 @@ def create_module_demo_data(client, created_ids, gemini_model_name=None, languag
                 comp_standard_price = round(comp_list_price * random.uniform(0.4, 0.7), 2)
                 component_vals = {
                     "name": component_name,
-                    "type": "product",
-                    "detailed_type": "product",
                     "sale_ok": False,
                     "purchase_ok": True,
                     "list_price": comp_list_price,
@@ -668,8 +668,6 @@ def create_module_demo_data(client, created_ids, gemini_model_name=None, languag
                         raw_standard_price = round(raw_list_price * random.uniform(0.5, 0.85), 2)
                         raw_vals = {
                             "name": raw_name,
-                            "type": "product",
-                            "detailed_type": "product",
                             "sale_ok": False,
                             "purchase_ok": True,
                             "list_price": raw_list_price,
@@ -702,10 +700,31 @@ def create_module_demo_data(client, created_ids, gemini_model_name=None, languag
 if __name__ == "__main__":
     connections = None  # Initialize to ensure it's in scope for exception handler
     try:
-        criteria = run_interactive_wizard()
+        # Setup connections first (needed to get company name)
+        print("🚀 Willkommen beim Odoo Demo-Daten Assistenten!")
         connections = setup_connections()
         
-        os.environ["INDUSTRY"] = criteria.get('industry', 'IT')
+        # Get main company name and determine industry
+        print("\n--- Branche erkennen ---")
+        company_name = odoo_actions.get_main_company_name(connections['client'])
+        suggested_industry = None
+        if company_name:
+            print(f"✅ Gefundener Firmenname: {company_name}")
+            suggested_industry = gemini_client.determine_industry_from_company_name(
+                company_name, 
+                connections['gemini_model_name']
+            )
+            if suggested_industry:
+                print(f"✅ Vorgeschlagene Branche: {suggested_industry}")
+            else:
+                print("⚠️  Konnte Branche nicht automatisch bestimmen.")
+        else:
+            print("⚠️  Konnte Firmenname nicht ermitteln.")
+        
+        # Run wizard with suggested industry as default
+        criteria = run_interactive_wizard(default_industry=suggested_industry)
+        
+        os.environ["INDUSTRY"] = criteria.get('industry', suggested_industry or 'IT')
 
         # Detect language from main company or API user
         print("\n--- Sprache erkennen ---")
@@ -730,7 +749,7 @@ if __name__ == "__main__":
         if not module_selections:
             print("⚠️  Keine Module für Demo-Daten ausgewählt. Programm wird beendet.")
             sys.exit(0)
-
+        
         creative_data = gemini_client.fetch_creative_data(
             criteria, 
             connections['gemini_model_name']

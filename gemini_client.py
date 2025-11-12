@@ -64,6 +64,11 @@ def build_prompt_from_criteria(criteria: Dict[str, Any]) -> str:
     5.  Alle E-Mail-Adressen MÜSSEN die Domain "@example.com" verwenden.
     6.  WICHTIG: Erstelle KEINE USt-IdNr. (VAT ID / vat / vat_id Felder) - diese werden nicht benötigt.
 
+    Für Produkte, beachte folgende Regeln:
+    - Verwende nur gültige Felder: "name", "description", "list_price", "standard_price", "sale_ok", "purchase_ok"
+    - Erstelle KEINE Felder wie: "uom", "detailed_type", "vat", "vat_id" - diese sind ungültig oder werden automatisch gesetzt.
+    - Produkttypen werden automatisch basierend auf der Kategorie gesetzt.
+
     Erstelle außerdem die von mir angeforderte Anzahl an Produkten.
     """
     return prompt
@@ -220,6 +225,42 @@ def fetch_bom_component_names(main_product_name: str, count: int, gemini_model_n
         return None
     except Exception as e:
         print(f"❌ Fehler bei Komponenten-Namen: {e}")
+        return None
+    finally:
+        try:
+            signal.alarm(0)
+        except Exception:
+            pass
+
+def determine_industry_from_company_name(company_name: str, gemini_model_name: str = "gemini-1.5-flash") -> str | None:
+    """Use Gemini to determine the industry from a company name."""
+    if not company_name:
+        return None
+    
+    prompt = f"""
+    Based on the company name "{company_name}", determine the most likely industry/sector.
+    
+    Return ONLY a single word or short phrase (2-3 words max) describing the industry in German.
+    Examples: "IT", "Fertigung", "Handel", "Dienstleistung", "Medizin", "Bildung", "IT-Dienstleistung"
+    
+    Return ONLY the industry name, no explanation, no JSON, no quotes, just the text.
+    """
+    
+    print(f"Frage Gemini ({gemini_model_name}) nach Branche für '{company_name}'...")
+    model = genai.GenerativeModel(gemini_model_name)
+    signal.signal(signal.SIGALRM, timeout_handler)
+    try:
+        signal.alarm(30)
+        response = model.generate_content(prompt)
+        signal.alarm(0)
+        industry = response.text.strip().strip('"').strip("'").strip()
+        print(f"✅ Erkannte Branche: {industry}")
+        return industry
+    except TimeoutException as e:
+        print(f"❌ Zeitüberschreitung bei der Gemini-Branchenanfrage: {e}")
+        return None
+    except Exception as e:
+        print(f"❌ Fehler bei Branchenbestimmung: {e}")
         return None
     finally:
         try:
