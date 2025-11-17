@@ -847,6 +847,154 @@ def create_activity(client, res_model, res_id, activity_type_id, summary, date_d
         print(f"   [DEBUG] Activity created successfully with ID: {activity_id}")
         return activity_id
 
+# ==============================================================================
+# PRODUCT ENHANCEMENT FUNCTIONS
+# ==============================================================================
+
+def get_existing_uoms(client):
+    """Get all existing UOMs (Units of Measure) from the database."""
+    uoms = client.search_read(
+        'uom.uom',
+        [],
+        fields=["id", "name"],
+        limit=0
+    )
+    return uoms
+
+def get_existing_barcodes(client):
+    """Get all existing barcodes from products to ensure uniqueness."""
+    products = client.search_read(
+        'product.product',
+        [["barcode", "!=", False]],
+        fields=["barcode"],
+        limit=0
+    )
+    return set(p.get("barcode") for p in products if p.get("barcode"))
+
+def get_existing_default_codes(client):
+    """Get all existing default_codes (internal references) from products to ensure uniqueness."""
+    products = client.search_read(
+        'product.product',
+        [["default_code", "!=", False]],
+        fields=["default_code"],
+        limit=0
+    )
+    return set(p.get("default_code") for p in products if p.get("default_code"))
+
+def generate_unique_barcode(client, existing_barcodes=None):
+    """Generate a unique EAN-13 barcode."""
+    if existing_barcodes is None:
+        existing_barcodes = get_existing_barcodes(client)
+    
+    max_attempts = 100
+    for _ in range(max_attempts):
+        # Generate EAN-13 barcode (13 digits)
+        # First 12 digits (random, but valid format)
+        barcode = ''.join([str(random.randint(0, 9)) for _ in range(12)])
+        # Calculate check digit (EAN-13 algorithm)
+        checksum = sum(int(barcode[i]) * (1 if i % 2 == 0 else 3) for i in range(12))
+        check_digit = (10 - (checksum % 10)) % 10
+        barcode = barcode + str(check_digit)
+        
+        if barcode not in existing_barcodes:
+            existing_barcodes.add(barcode)
+            return barcode
+    
+    # Fallback: use timestamp-based barcode if all attempts fail
+    import time
+    timestamp_barcode = str(int(time.time() * 1000))[-13:].zfill(13)
+    if timestamp_barcode not in existing_barcodes:
+        existing_barcodes.add(timestamp_barcode)
+        return timestamp_barcode
+    return None
+
+def extract_prefix_from_name(product_name):
+    """Extract a 3-letter prefix from product name.
+    
+    Rules:
+    - Take first 3 letters (uppercase, alphanumeric only)
+    - If name has less than 3 letters, pad with 'X'
+    - Remove special characters and spaces
+    """
+    import re
+    # Remove special characters, keep only alphanumeric
+    cleaned = re.sub(r'[^a-zA-Z0-9]', '', product_name)
+    # Take first 3 characters, convert to uppercase
+    prefix = cleaned[:3].upper()
+    # Pad with 'X' if less than 3 characters
+    while len(prefix) < 3:
+        prefix += 'X'
+    return prefix[:3]
+
+def generate_unique_default_code(client, product_name, existing_default_codes=None):
+    """Generate a unique internal reference (default_code).
+    
+    Format: XXX-##### (3 letters from product name + 5-digit number)
+    Example: KAB-12345 for "Kabel"
+    """
+    if existing_default_codes is None:
+        existing_default_codes = get_existing_default_codes(client)
+    
+    prefix = extract_prefix_from_name(product_name)
+    
+    max_attempts = 1000
+    for _ in range(max_attempts):
+        # Generate 5-digit number
+        number = str(random.randint(10000, 99999))
+        default_code = f"{prefix}-{number}"
+        
+        if default_code not in existing_default_codes:
+            existing_default_codes.add(default_code)
+            return default_code
+    
+    # Fallback: use timestamp if all attempts fail
+    import time
+    timestamp_suffix = str(int(time.time() * 1000))[-5:].zfill(5)
+    fallback_code = f"{prefix}-{timestamp_suffix}"
+    if fallback_code not in existing_default_codes:
+        existing_default_codes.add(fallback_code)
+        return fallback_code
+    return None
+
+def create_product_categories(client, industry, language_name="German"):
+    """Create at least 5 product categories based on industry."""
+    print(f"-> Creating product categories for industry: {industry}")
+    
+    # Check existing categories
+    existing_categories = client.search_read(
+        'product.category',
+        [],
+        fields=["id", "name"],
+        limit=0
+    )
+    existing_names = {cat.get("name") for cat in existing_categories if cat.get("name")}
+    
+    # Default categories based on industry
+    default_categories = {
+        'IT': ['Software', 'Hardware', 'Netzwerk', 'Dienstleistungen', 'Zubehör'],
+        'Fertigung': ['Rohstoffe', 'Halbfabrikate', 'Fertigprodukte', 'Werkzeuge', 'Ersatzteile'],
+        'Handel': ['Elektronik', 'Möbel', 'Kleidung', 'Lebensmittel', 'Haushaltswaren'],
+    }
+    
+    categories = default_categories.get(industry, default_categories['IT'])
+    category_ids = []
+    
+    for cat_name in categories:
+        if cat_name not in existing_names:
+            print(f"   Creating category: {cat_name}")
+            cat_id = client.create('product.category', {"name": cat_name})
+            category_ids.append(cat_id)
+            existing_names.add(cat_name)
+        else:
+            # Find existing category
+            for cat in existing_categories:
+                if cat.get("name") == cat_name:
+                    category_ids.append(cat.get("id"))
+                    break
+    
+    print(f"✅ {len(category_ids)} product categories ready")
+    return category_ids
+
 def get_current_user_id(client):
     """Get the current API user ID."""
     try:
@@ -862,3 +1010,66 @@ def get_current_user_id(client):
     except Exception:
         pass
     return None
+
+def check_tracking_settings(client):
+    """Check if lot and serial number tracking is enabled in res.config.settings.
+    
+    Since res.config.settings is a transient model, we need to fetch all records
+    and use the last entry.
+    """
+    try:
+        # Try to read the group_stock_production_lot field from res.config.settings
+        lot_enabled = False
+        serial_enabled = False
+        
+        try:
+            # Fetch all settings records (transient model, so we get all current settings)
+            settings = client.search_read(
+                'res.config.settings',
+                [],
+                fields=["group_stock_production_lot", "create_date", "write_date"],
+                limit=0  # Get all records
+            )
+            
+            if settings:
+                # Use the last entry (most recent)
+                # Sort by write_date or create_date if available, otherwise use last in list
+                last_setting = None
+                if len(settings) > 0:
+                    # Try to find the most recent by write_date or create_date
+                    settings_with_dates = [s for s in settings if s.get("write_date") or s.get("create_date")]
+                    if settings_with_dates:
+                        # Sort by write_date (most recent first), fallback to create_date
+                        settings_with_dates.sort(
+                            key=lambda x: x.get("write_date") or x.get("create_date") or "",
+                            reverse=True
+                        )
+                        last_setting = settings_with_dates[0]
+                    else:
+                        # If no dates, just use the last one in the list
+                        last_setting = settings[-1]
+                
+                if last_setting and last_setting.get("group_stock_production_lot"):
+                    # If group_stock_production_lot is enabled, both lot and serial tracking are available
+                    lot_enabled = True
+                    serial_enabled = True
+        except Exception as e:
+            # If field doesn't exist or can't be read, fall back to model check
+            print(f"   ⚠️  Konnte group_stock_production_lot nicht lesen: {e}")
+            # Fallback: Check if stock.lot model exists
+            try:
+                lots = client.search_read('stock.lot', [], fields=["id"], limit=1)
+                if lots is not None:
+                    lot_enabled = True
+                    serial_enabled = True
+            except Exception:
+                pass
+        
+        return {
+            "lot_enabled": bool(lot_enabled),
+            "serial_enabled": bool(serial_enabled)
+        }
+    except Exception as e:
+        print(f"   ⚠️  Fehler beim Prüfen der Tracking-Einstellungen: {e}")
+        # Return True as fallback (assume enabled) so user can still use tracking
+        return {"lot_enabled": True, "serial_enabled": True}

@@ -3,6 +3,82 @@ import json
 import signal
 from typing import Dict, Any, List, Optional
 
+def build_uom_assignment_prompt(product_name: str, product_type: str, industry: str, available_uoms: List[Dict[str, Any]], language: str = "German") -> str:
+    """Build prompt for assigning logical UOMs to a product."""
+    uom_list = []
+    for uom in available_uoms:
+        uom_name = uom.get("name", "")
+        uom_id = uom.get("id")
+        # Handle tuple/list format for ID
+        if isinstance(uom_id, (list, tuple)) and len(uom_id) > 0:
+            uom_id = uom_id[0]
+        uom_list.append(f"- {uom_name} (ID: {uom_id})")
+    
+    uom_list_str = "\n".join(uom_list)
+    
+    return f"""
+    Basierend auf der Branche "{industry}" und dem Produkttyp "{product_type}":
+    
+    Produktname: "{product_name}"
+    
+    Verfügbare Maßeinheiten (UOMs):
+    {uom_list_str}
+    
+    Wähle die LOGISCHSTE Maßeinheit für dieses Produkt aus.
+    
+    Beispiele:
+    - Kabel, Seile, Stoffe -> Meter (m) oder Kilometer (km)
+    - Kleine Einzelteile -> Units (Stk) oder 6er Pack, 12er Pack
+    - Flüssigkeiten -> Liter (L) oder Milliliter (mL)
+    - Gewichte -> Kilogramm (kg) oder Gramm (g)
+    - Software/Dienstleistungen -> Units (Stk)
+    
+    Gib NUR die UOM-ID zurück (nur die Zahl), die am besten passt.
+    Falls keine passende UOM vorhanden ist, gib "0" zurück.
+    Keine Erklärungen, nur die Zahl.
+    """
+
+def fetch_uom_assignment(product_name: str, product_type: str, industry: str, available_uoms: List[Dict[str, Any]], gemini_model_name: str, language: str = "German") -> Optional[int]:
+    """Use Gemini to assign a logical UOM to a product."""
+    if not gemini_model_name or not available_uoms:
+        return None
+    
+    try:
+        prompt = build_uom_assignment_prompt(product_name, product_type, industry, available_uoms, language)
+        model = genai.GenerativeModel(gemini_model_name)
+        
+        # Set timeout
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(10)  # 10 second timeout
+        
+        try:
+            response = model.generate_content(prompt)
+            signal.alarm(0)  # Cancel timeout
+            
+            text = response.text.strip()
+            # Try to extract just the number
+            import re
+            numbers = re.findall(r'\d+', text)
+            if numbers:
+                uom_id = int(numbers[0])
+                # Verify it's a valid UOM ID (handle tuple/list format)
+                for uom in available_uoms:
+                    uom_id_from_db = uom.get("id")
+                    if isinstance(uom_id_from_db, (list, tuple)) and len(uom_id_from_db) > 0:
+                        uom_id_from_db = uom_id_from_db[0]
+                    if uom_id_from_db == uom_id:
+                        return uom_id
+        except TimeoutException:
+            signal.alarm(0)
+            print(f"   ⚠️  Gemini timeout for UOM assignment")
+        except Exception as e:
+            signal.alarm(0)
+            print(f"   ⚠️  Gemini error for UOM assignment: {e}")
+    except Exception as e:
+        print(f"   ⚠️  Error in UOM assignment: {e}")
+    
+    return None
+
 def get_language_name(lang_code: str) -> str:
     """Convert Odoo language code to language name for prompts."""
     lang_map = {
