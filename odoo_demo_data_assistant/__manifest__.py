@@ -12,7 +12,10 @@
     "external_dependencies": {
         "python": ["google-generativeai", "questionary", "requests"],
     },
-    "data": [],
+    "data": [
+        "security/ir.model.access.csv",
+        "views/demo_data_assistant_views.xml",
+    ],
     "installable": True,
     "application": False,
     "assets": {},

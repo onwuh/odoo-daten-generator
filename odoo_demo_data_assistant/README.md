@@ -39,23 +39,27 @@ odoo_demo_data_assistant/
 
 ## Verwendung
 
-### Als Odoo-Modul
+### In Odoo
 
-Das Modul kann über Server-Aktionen oder eine zukünftige UI-Oberfläche verwendet werden.
+1. Öffnen Sie das Menü **Anpassungen → Demo Data Assistant** (oder suchen Sie nach "Demo Data Assistant").
+2. Tragen Sie den Gemini API Key ein und konfigurieren Sie die gewünschten Parameter.
+3. Klicken Sie auf **Demo-Daten erzeugen**. Nach erfolgreichem Lauf erhalten Sie eine Benachrichtigung mit einer Kurzzusammenfassung.
 
-### Als CLI-Tool
+Der Wizard speichert den API Key optional verschlüsselt in den Systemparametern, damit Folgeausführungen schneller möglich sind.
 
-Für die Verwendung als CLI-Tool verwenden Sie weiterhin `connect.py` oder die zukünftige `cli.py`.
+### Über CLI
 
-## Entwicklung
+Parallel kann weiterhin `cli.py` oder `connect.py` genutzt werden, wenn eine Ausführung außerhalb von Odoo gewünscht ist.
 
-Die Modulstruktur ist bereit für die UI-Integration. Die Hauptlogik befindet sich in:
-- `services/wizard.py` - Hauptlogik für Daten-Generierung
-- `services/odoo_actions.py` - Odoo CRUD-Operationen
-- `services/gemini_client.py` - Gemini AI Integration
+## Architektur
 
-## Nächste Schritte
+- `services/wizard.py` – Enthält die Kernlogik zur Daten-Erzeugung.
+- `services/odoo_actions.py` – Sammlung von CRUD-Helfern für das Odoo-Datenmodell.
+- `services/env_client.py` – Adapter, der die Service-Layer-Funktionen direkt gegen das Odoo-ORM ausführbar macht.
+- `services/gemini_client.py` – Anbindung an Google Gemini (Prompt-Aufrufe).
 
-1. UI-Integration: Erstellen von Views und Wizards für die Odoo-Oberfläche
-2. Server-Aktionen: Bereitstellung von Server-Aktionen für die Daten-Generierung
-3. Konfiguration: Hinzufügen von Konfigurationsmöglichkeiten im Odoo-Settings
+## Zukunft
+
+- Erweiterung des Wizards um weitere Module/Optionen (z.B. Recruiting, MRP, Aktivitäten).
+- Eigene Einstellungen im Backend (z.B. Menüpunkt in den technischen Einstellungen).
+- Dedizierte Tests (Unit- & Integrationstests) für die wichtigsten Codepfade.

@@ -6,7 +6,6 @@ import os
 import random
 from typing import Dict, Any, List, Optional
 
-from . import odoo_client
 from . import odoo_actions
 from . import gemini_client
 
