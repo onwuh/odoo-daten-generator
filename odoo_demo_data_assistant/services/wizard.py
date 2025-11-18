@@ -219,15 +219,17 @@ def populate_odoo_with_data(creative_data, criteria, client, gemini_model_name=N
 
     # --- 2. KUNDEN & KONTAKTE ERSTELLEN ---
     print("\n--- Erstelle Kunden und Kontakte ---")
+    # Liste ungültiger Felder, die von Gemini generiert werden könnten, aber nicht in res.partner existieren
+    invalid_partner_fields = {'vat', 'vat_id', 'country_name', 'state_name', 'city_name'}
+    
     for company_scenario in creative_data.get('companies', []):
         company_data = company_scenario.get('company_data', {})
         if not company_data.get('name'): continue
         
         # Process main company address
-        valid_company_data = {k: v for k, v in company_data.items() if v is not None}
-        # Remove VAT ID to avoid validation errors
-        valid_company_data.pop('vat', None)
-        valid_company_data.pop('vat_id', None)
+        valid_company_data = {k: v for k, v in company_data.items() 
+                             if v is not None and k not in invalid_partner_fields}
+        # Remove country_code (wird zu country_id konvertiert)
         country_code = valid_company_data.pop('country_code', 'DE')
         country_id = odoo_actions.get_country_id(client, country_code)
         if country_id:
@@ -239,10 +241,8 @@ def populate_odoo_with_data(creative_data, criteria, client, gemini_model_name=N
         
         # Process sub-contacts
         for contact_data in company_scenario.get('contacts', []):
-            valid_contact_data = {k: v for k, v in contact_data.items() if v is not None}
-            # Remove VAT ID to avoid validation errors
-            valid_contact_data.pop('vat', None)
-            valid_contact_data.pop('vat_id', None)
+            valid_contact_data = {k: v for k, v in contact_data.items() 
+                                if v is not None and k not in invalid_partner_fields}
             valid_contact_data['parent_id'] = company_id
             
             # NEU: Verarbeite die individuelle Adresse des Sub-Kontakts, falls vorhanden

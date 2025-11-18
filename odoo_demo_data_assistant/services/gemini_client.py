@@ -144,6 +144,8 @@ def build_prompt_from_criteria(criteria: Dict[str, Any]) -> str:
         - Der 'name' dieser Kontakte soll ein voller Personenname sein (z.B. "Sabine Schmidt").
     5.  Alle E-Mail-Adressen MÜSSEN die Domain "@example.com" verwenden.
     6.  WICHTIG: Erstelle KEINE USt-IdNr. (VAT ID / vat / vat_id Felder) - diese werden nicht benötigt.
+    7.  WICHTIG: Verwende NUR "country_code" (z.B. "DE", "FR", "US") für Länder, NICHT "country_name" oder "country_id".
+        - Verwende auch KEINE Felder wie "state_name" oder "city_name" - nur "state_id" und "city" sind gültig.
 
     Für Produkte, beachte folgende Regeln:
     - Verwende nur gültige Felder: "name", "description", "list_price", "standard_price", "sale_ok", "purchase_ok"
