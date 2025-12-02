@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_demo_data_assistant_wizard" model="ir.ui.view">
+        <field name="name">demo.data.assistant.wizard.form</field>
+        <field name="model">demo.data.assistant.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Demo-Daten-Assistent">
+                <group>
+                    <group string="Gemini">
+                        <field name="gemini_api_key" password="True"/>
+                        <field name="store_gemini_api_key"/>
+                        <field name="gemini_model_name"/>
+                    </group>
+                    <group string="Allgemein">
+                        <field name="mode"/>
+                        <field name="industry"/>
+                    </group>
+                </group>
+                <notebook>
+                    <page string="Kunden & Kontakte">
+                        <group>
+                            <field name="num_companies"/>
+                            <field name="num_delivery_contacts"/>
+                            <field name="num_invoice_contacts"/>
+                            <field name="num_other_contacts"/>
+                        </group>
+                    </page>
+                    <page string="Produkte">
+                        <group>
+                            <field name="num_services"/>
+                            <field name="num_consumables"/>
+                            <field name="num_storables"/>
+                        </group>
+                    </page>
+                    <page string="Tracking">
+                        <group>
+                            <field name="use_tracking"/>
+                            <field name="tracking_lot_enabled" attrs="{'invisible': [('use_tracking','=',False)]}"/>
+                            <field name="tracking_serial_enabled" attrs="{'invisible': [('use_tracking','=',False)]}"/>
+                        </group>
+                    </page>
+                </notebook>
+                <footer>
+                    <button string="Abbrechen" class="btn-secondary" special="cancel"/>
+                    <button name="action_generate_demo_data"
+                            type="object"
+                            string="Demo-Daten erzeugen"
+                            class="btn-primary"
+                            attrs="{'invisible': [('gemini_api_key','=',False)]}"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_demo_data_assistant_wizard" model="ir.actions.act_window">
+        <field name="name">Demo Data Assistant</field>
+        <field name="res_model">demo.data.assistant.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="view_id" ref="view_demo_data_assistant_wizard"/>
+        <field name="target">new</field>
+    </record>
+
+    <menuitem id="menu_demo_data_assistant_root"
+              name="Demo Data Assistant"
+              parent="base.menu_custom"
+              action="action_demo_data_assistant_wizard"
+              sequence="99"/>
+</odoo>
