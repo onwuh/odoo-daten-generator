@@ -1,0 +1,7 @@
+tests/test_config.ini
+config.ini
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+seeds/cache/

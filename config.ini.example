@@ -1,0 +1,15 @@
+[odoo]
+url = https://your-instance.odoo.com
+db = your-database-name
+username = admin@example.com
+api_key = YOUR_ODOO_API_KEY_HERE
+
+[llm]
+# Groq API key (primary LLM — get one at console.groq.com)
+api_key = gsk_YOUR_GROQ_API_KEY_HERE
+model = llama-3.3-70b-versatile
+
+[gemini]
+# Google Gemini API key (fallback LLM — only needed if Groq is unavailable)
+api_key = YOUR_GEMINI_API_KEY_HERE
+model = gemini-1.5-flash

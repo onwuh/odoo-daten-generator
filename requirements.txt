@@ -1,3 +1,4 @@
-google-generativeai
-questionary
+openai
+google-genai
 requests
+customtkinter

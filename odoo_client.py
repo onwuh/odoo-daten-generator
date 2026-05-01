@@ -46,23 +46,26 @@ class OdooJson2Client:
             if response is not None and response.status_code == 401:
                 # Retry without X-Odoo-Database (SaaS often infers DB from subdomain)
                 orig_db = self.session.headers.pop("X-Odoo-Database", None)
-                resp2 = self.session.post(url, json=payload, timeout=60)
-                if resp2.status_code == 401 and orig_db:
-                    # Retry with db query parameter
-                    self.session.headers["X-Odoo-Database"] = orig_db  # restore for next try
-                    resp3 = self.session.post(f"{url}?db={self.database}", json=payload, timeout=60)
-                    resp3.raise_for_status()
-                    # Remove error from list since retry succeeded
+                try:
+                    resp2 = self.session.post(url, json=payload, timeout=60)
+                    if resp2.status_code == 401 and orig_db:
+                        # Retry with db query parameter
+                        self.session.headers["X-Odoo-Database"] = orig_db
+                        resp3 = self.session.post(f"{url}?db={self.database}", json=payload, timeout=60)
+                        resp3.raise_for_status()
+                        if self.errors and self.errors[-1]["url"] == url:
+                            self.errors.pop()
+                        print(f"[HTTP] Success after db query param: {resp3.status_code}")
+                        return resp3.json()
+                    resp2.raise_for_status()
                     if self.errors and self.errors[-1]["url"] == url:
                         self.errors.pop()
-                    print(f"[HTTP] Success after db query param: {resp3.status_code}")
-                    return resp3.json()
-                resp2.raise_for_status()
-                # Remove error from list since retry succeeded
-                if self.errors and self.errors[-1]["url"] == url:
-                    self.errors.pop()
-                print(f"[HTTP] Success after removing X-Odoo-Database: {resp2.status_code}")
-                return resp2.json()
+                    print(f"[HTTP] Success after removing X-Odoo-Database: {resp2.status_code}")
+                    return resp2.json()
+                finally:
+                    # Always restore header so subsequent calls are not affected
+                    if orig_db and "X-Odoo-Database" not in self.session.headers:
+                        self.session.headers["X-Odoo-Database"] = orig_db
             raise
         # Some endpoints return JSON results directly, others wrap; assume JSON body is the result
         print(f"[HTTP] {response.status_code} OK")
@@ -111,7 +114,11 @@ class OdooJson2Client:
         payload: Dict[str, Any] = {"domain": domain}
         if fields is not None:
             payload["fields"] = fields
-        if limit is not None:
+        # NOTE: In the JSON 2 API, limit=0 means "return 0 records" (unlike the Odoo ORM
+        # where limit=0 means "no limit"). We treat 0 as "omit the parameter" so the server
+        # applies its own default (all records). Callers using limit=0 to mean "no limit"
+        # therefore get the expected behaviour without any call-site changes.
+        if limit is not None and limit != 0:
             payload["limit"] = limit
         if context is not None:
             payload["context"] = context
@@ -157,6 +164,29 @@ class OdooJson2Client:
                         return int(result3)
                     raise
             raise
+
+    def create_batch(self, model: str, values_list: List[Dict[str, Any]], context: Optional[Dict[str, Any]] = None) -> List[int]:
+        """Create multiple records in one API call using vals_list.
+
+        Falls back to sequential individual creates if the server rejects batch mode.
+        """
+        if not values_list:
+            return []
+        payload: Dict[str, Any] = {"vals_list": values_list}
+        if context is not None:
+            payload["context"] = context
+        try:
+            result = self._post_with_variants([f"/{model}/create"], payload)
+            if isinstance(result, list):
+                return [int(r) for r in result]
+            return [int(result)]
+        except requests.HTTPError:
+            # Fallback: create each record individually
+            print(f"[HTTP] Batch create failed for {model}, falling back to sequential creates")
+            ids = []
+            for values in values_list:
+                ids.append(self.create(model, values, context=context))
+            return ids
 
     def write(self, model: str, ids: List[int], values: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> bool:
         # Direct JSON-2 expects 'vals' key
