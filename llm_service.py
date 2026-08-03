@@ -165,6 +165,20 @@ class LLMService:
         with (_CACHE_DIR / f"{key}.json").open("w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
+    def _cached_llm_call(self, cache_key: str, build_fn) -> Any:
+        """Check cache, else call build_fn() and save on a truthy result.
+
+        Never caches a falsy response (None/{}/[]) — a failed LLM call must
+        not permanently mask a future successful one.
+        """
+        if (cached := self._cache_load(cache_key)) is not None:
+            print(f"✅ Aus Cache geladen ({cache_key}.json).")
+            return cached
+        data = build_fn()
+        if data:
+            self._cache_save(cache_key, data)
+        return data
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -198,11 +212,9 @@ Return ONLY the industry name, no explanation, no JSON, no quotes, just the text
             industry, language, str(criteria['num_services']), str(criteria['num_consumables']),
             str(criteria['num_storables']), "creative_atoms", _PROMPT_VERSION,
         )
-        if (cached := self._cache_load(cache_key)) is not None:
-            print(f"✅ Kreative Daten aus Cache geladen ({cache_key}.json).")
-            return cached
 
-        prompt = f"""
+        def _build():
+            prompt = f"""
 Erstelle fiktive, realistische Produktdaten für Odoo basierend auf diesen Kriterien:
 - Branche: {industry}
 - {criteria['num_services']} Dienstleistungs-Produkte (unter "services")
@@ -220,12 +232,13 @@ Gib NUR ein sauberes JSON-Objekt zurück, Sprache: {language}:
 }}
 Keine Preise, keine Adressen, keine anderen Felder — nur Namen und Beschreibungen.
 """
-        print(f"Frage LLM ({self.provider}/{self.model_name}) nach kreativen Daten...")
-        data = self._call_json(prompt, timeout=90)
-        if data:
-            print("✅ Kreative Daten vom LLM empfangen.")
-            self._cache_save(cache_key, data)
-        return data
+            print(f"Frage LLM ({self.provider}/{self.model_name}) nach kreativen Daten...")
+            data = self._call_json(prompt, timeout=90)
+            if data:
+                print("✅ Kreative Daten vom LLM empfangen.")
+            return data
+
+        return self._cached_llm_call(cache_key, _build)
 
     def fetch_name_suggestions(
         self, criteria: Dict[str, Any], language: str = "German"
@@ -233,11 +246,9 @@ Keine Preise, keine Adressen, keine anderen Felder — nur Namen und Beschreibun
         """Generate name banks (products, employees, companies, etc.) for the given industry."""
         industry = criteria.get('industry', 'IT')
         cache_key = self._slug(industry, language, "name_suggestions", _PROMPT_VERSION)
-        if (cached := self._cache_load(cache_key)) is not None:
-            print(f"✅ Namensvorschläge aus Cache geladen ({cache_key}.json).")
-            return cached
 
-        prompt = f"""
+        def _build():
+            prompt = f"""
 Based on the industry "{industry}", generate ONLY a JSON object with arrays of realistic {language} names:
 {{
   "product_names": [min 25 strings],
@@ -252,12 +263,13 @@ Based on the industry "{industry}", generate ONLY a JSON object with arrays of r
 - Names must fit the given industry.
 - Supplier names should be realistic vendor/supplier company names for the industry.
 """
-        print(f"Frage LLM ({self.provider}/{self.model_name}) nach Namensvorschlägen...")
-        data = self._call_json(prompt, timeout=90)
-        if data:
-            print("✅ Namensvorschläge vom LLM empfangen.")
-            self._cache_save(cache_key, data)
-        return data
+            print(f"Frage LLM ({self.provider}/{self.model_name}) nach Namensvorschlägen...")
+            data = self._call_json(prompt, timeout=90)
+            if data:
+                print("✅ Namensvorschläge vom LLM empfangen.")
+            return data
+
+        return self._cached_llm_call(cache_key, _build)
 
     def fetch_recruiting_data(
         self,
@@ -304,13 +316,11 @@ Examples for skill types:
         """Fetch 2-3 sentence job descriptions for all job titles in a single LLM call."""
         if not job_titles:
             return {}
-        cache_key = self._slug(industry, language, self._hash(job_titles), "job_summaries")
-        if (cached := self._cache_load(cache_key)) is not None:
-            print(f"✅ Job-Beschreibungen aus Cache geladen ({cache_key}.json).")
-            return cached
+        cache_key = self._slug(industry, language, self._hash(job_titles), "job_summaries", _PROMPT_VERSION)
 
-        titles_json = json.dumps(job_titles, ensure_ascii=False)
-        prompt = f"""
+        def _build():
+            titles_json = json.dumps(job_titles, ensure_ascii=False)
+            prompt = f"""
 Given industry "{industry}", generate a JSON object where each key is a job title
 and each value is a 2-3 sentence {language} job description/summary.
 Job titles: {titles_json}
@@ -320,13 +330,14 @@ Return ONLY valid JSON, no markdown, no code blocks:
   "Job Title 2": "summary text..."
 }}
 """
-        print(f"Frage LLM ({self.provider}/{self.model_name}) nach Job-Beschreibungen ({len(job_titles)} Stellen)...")
-        data = self._call_json(prompt, timeout=120)
-        if isinstance(data, dict):
-            print(f"✅ Job-Beschreibungen vom LLM empfangen: {len(data)} Stellen")
-            self._cache_save(cache_key, data)
-            return data
-        return {}
+            print(f"Frage LLM ({self.provider}/{self.model_name}) nach Job-Beschreibungen ({len(job_titles)} Stellen)...")
+            data = self._call_json(prompt, timeout=120)
+            if isinstance(data, dict):
+                print(f"✅ Job-Beschreibungen vom LLM empfangen: {len(data)} Stellen")
+                return data
+            return {}
+
+        return self._cached_llm_call(cache_key, _build)
 
     def fetch_all_project_stages(
         self, project_names: List[str], industry: str, language: str = "German"
@@ -338,8 +349,17 @@ Return ONLY valid JSON, no markdown, no code blocks:
         if not project_names:
             return {}
         num_projects = len(project_names)
+        # Cache key is count-based, not a hash of project_names: the prompt
+        # below never sends the actual names to the LLM, only the count — the
+        # name->stageset remap happens client-side, after cache load/miss,
+        # on every call (see below). Hashing project_names would almost never
+        # cache-hit (names are drawn randomly from name banks each run) and,
+        # worse, caching the post-remap dict would silently return stage-sets
+        # keyed to the wrong names on a hit against different actual names.
+        cache_key = self._slug(industry, language, str(num_projects), "project_stages", _PROMPT_VERSION)
 
-        prompt = f"""You are a project manager in the "{industry}" industry.
+        def _build():
+            prompt = f"""You are a project manager in the "{industry}" industry.
 Generate {num_projects} sets of 6-8 realistic {language} project stage names
 representing logical workflow progressions typical for this industry.
 Return ONLY valid JSON, no markdown, no code blocks:
@@ -347,19 +367,27 @@ Return ONLY valid JSON, no markdown, no code blocks:
   "set_1": ["Stage 1", "Stage 2", ...],
   "set_2": ["Phase 1", "Phase 2", ...]
 }}"""
-        print(f"Frage LLM ({self.provider}/{self.model_name}) nach Projektphasen ({num_projects} Projekte)...")
-        data = self._call_json(prompt, timeout=120)
-        if isinstance(data, dict) and data:
-            print(f"✅ Projektphasen vom LLM empfangen: {len(data)} Sets")
-            sets = list(data.values())
-            return {name: sets[i % len(sets)] for i, name in enumerate(project_names)}
-        return {}
+            print(f"Frage LLM ({self.provider}/{self.model_name}) nach Projektphasen ({num_projects} Projekte)...")
+            data = self._call_json(prompt, timeout=120)
+            if isinstance(data, dict) and data:
+                print(f"✅ Projektphasen vom LLM empfangen: {len(data)} Sets")
+                return data
+            return {}
+
+        data = self._cached_llm_call(cache_key, _build)
+        if not data:
+            return {}
+        sets = list(data.values())
+        return {name: sets[i % len(sets)] for i, name in enumerate(project_names)}
 
     def fetch_workcenter_data(
         self, industry: str, language: str, num_workcenters: int
     ) -> Dict[str, Dict]:
         """Returns {station_name: {description: str, operations: [str, str, str]}}"""
-        prompt = f"""You are generating realistic manufacturing demo data for a {industry} company.
+        cache_key = self._slug(industry, language, str(num_workcenters), "workcenter_data", _PROMPT_VERSION)
+
+        def _build():
+            prompt = f"""You are generating realistic manufacturing demo data for a {industry} company.
 Return a JSON object with exactly {num_workcenters} work centers.
 Each key is a machine/station name (NOT a job title — e.g. "Schweissanlage", "CNC-Fraese", "Montagelinie 1").
 Each value has:
@@ -367,11 +395,15 @@ Each value has:
   "operations": list of exactly 3 process step names performed at this station
 Language: {language}. Return clean JSON only, no markdown fences."""
 
-        data = self._call_json(prompt, timeout=60)
-        if isinstance(data, dict) and len(data) >= 1:
-            return data
-        return {}
+            data = self._call_json(prompt, timeout=60)
+            if isinstance(data, dict) and len(data) >= 1:
+                return data
+            return {}
 
+        return self._cached_llm_call(cache_key, _build)
+
+    # Deliberately NOT cached: variance across runs is wanted (see CLAUDE.md
+    # LLM Layer section) — each run's chatter should read differently.
     def fetch_crm_chatter_messages(
         self,
         opportunities: List[Dict[str, str]],
@@ -479,8 +511,16 @@ Return ONLY valid JSON, no markdown, no code blocks, keyed by "title":
             return {}
         num_products = len(products)
         components_per_bom = next(iter(products.values())) if products else 0
+        # Count-based key, same reasoning as fetch_all_project_stages: product
+        # names are never sent to the LLM, only counts — remap happens after
+        # cache load/miss, on every call, never baked into the cached value.
+        cache_key = self._slug(
+            industry, language, str(num_products), str(components_per_bom),
+            "bom_components", _PROMPT_VERSION,
+        )
 
-        prompt = f"""You are a senior manufacturing engineer in the "{industry}" industry.
+        def _build():
+            prompt = f"""You are a senior manufacturing engineer in the "{industry}" industry.
 Generate {num_products} sets of {components_per_bom} realistic {language} component names
 for typical manufactured products in this industry.
 Return ONLY valid JSON, no markdown, no code blocks:
@@ -492,10 +532,15 @@ Rules:
 - Names must be realistic manufacturing sub-assemblies or parts.
 - Keep names concise (max 6 words).
 - Provide exactly {components_per_bom} components per set."""
-        print(f"Frage LLM ({self.provider}/{self.model_name}) nach BOM-Komponenten ({num_products} Produkte)...")
-        data = self._call_json(prompt, timeout=120)
-        if isinstance(data, dict) and data:
-            print(f"✅ BOM-Komponenten vom LLM empfangen: {len(data)} Sets")
-            sets = list(data.values())
-            return {name: sets[i % len(sets)] for i, name in enumerate(products.keys())}
-        return {}
+            print(f"Frage LLM ({self.provider}/{self.model_name}) nach BOM-Komponenten ({num_products} Produkte)...")
+            data = self._call_json(prompt, timeout=120)
+            if isinstance(data, dict) and data:
+                print(f"✅ BOM-Komponenten vom LLM empfangen: {len(data)} Sets")
+                return data
+            return {}
+
+        data = self._cached_llm_call(cache_key, _build)
+        if not data:
+            return {}
+        sets = list(data.values())
+        return {name: sets[i % len(sets)] for i, name in enumerate(products.keys())}

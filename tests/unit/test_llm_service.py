@@ -283,5 +283,151 @@ def run():
     except Exception as e:
         results.append(("B9: fetch_crm_chatter_messages: empty opportunities → {} no crash", False, str(e)))
 
+    # ------------------------------------------------------------------
+    # A3 — cache consistency: Pattern 2 guards for newly-cached functions
+    # ------------------------------------------------------------------
+
+    try:
+        svc = _make_svc()
+        with patch.object(svc, "_call_json", return_value=None):
+            result = svc.fetch_recruiting_data("IT", 3, 5, 2, 3)
+        assert result is None, f"Expected None, got {result!r}"
+        results.append(("A3 Pattern 2: fetch_recruiting_data: LLM None → no crash", True, ""))
+    except Exception as e:
+        results.append(("A3 Pattern 2: fetch_recruiting_data: LLM None → no crash", False, str(e)))
+
+    try:
+        svc = _make_svc()
+        with patch.object(svc, "_call_json", return_value=None):
+            result = svc.fetch_workcenter_data("IT", "German", 3)
+        assert result == {}, f"Expected {{}}, got {result!r}"
+        results.append(("A3 Pattern 2: fetch_workcenter_data: LLM None → {}, no crash", True, ""))
+    except Exception as e:
+        results.append(("A3 Pattern 2: fetch_workcenter_data: LLM None → {}, no crash", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # A3 — cache-hit call-count (2nd call must not re-invoke _call_json)
+    # ------------------------------------------------------------------
+
+    import llm_service as _llm_mod
+    from pathlib import Path as _Path
+
+    def _cache_hit_test(label, call_fn, mocked_return):
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                with patch.object(_llm_mod, "_CACHE_DIR", _Path(tmpdir)):
+                    svc = _make_svc()
+                    with patch.object(svc, "_call_json", return_value=mocked_return) as mock_call_json:
+                        r1 = call_fn(svc)
+                        r2 = call_fn(svc)
+                    assert mock_call_json.call_count == 1, (
+                        f"expected 1 LLM call (2nd hits cache), got {mock_call_json.call_count}"
+                    )
+                    assert r1 == r2
+            results.append((label, True, ""))
+        except Exception as e:
+            results.append((label, False, str(e)))
+
+    _cache_hit_test(
+        "A3: fetch_name_suggestions cache-hit avoids 2nd LLM call",
+        lambda svc: svc.fetch_name_suggestions({"industry": "IT"}, "German"),
+        {"company_names": ["ACME"]},
+    )
+    _cache_hit_test(
+        "A3: fetch_job_summaries_batch cache-hit avoids 2nd LLM call",
+        lambda svc: svc.fetch_job_summaries_batch(["Job A"], "IT"),
+        {"Job A": "desc"},
+    )
+    _cache_hit_test(
+        "A3: fetch_workcenter_data cache-hit avoids 2nd LLM call",
+        lambda svc: svc.fetch_workcenter_data("IT", "German", 3),
+        {"Station A": {"description": "x", "operations": ["a", "b", "c"]}},
+    )
+    _cache_hit_test(
+        "A3: fetch_creative_atoms cache-hit avoids 2nd LLM call",
+        lambda svc: svc.fetch_creative_atoms(
+            {"industry": "IT", "num_services": 1, "num_consumables": 1, "num_storables": 1}, "German"
+        ),
+        {"product_names": {"services": ["X"], "consumables": [], "storables": []}},
+    )
+
+    # ------------------------------------------------------------------
+    # A3 — remap must run AFTER cache load/miss, never baked into the
+    # cached value (project_names/products are never sent to the LLM,
+    # only their count — a cache hit must still remap to the CURRENT
+    # actual names passed in, not the names from the first call)
+    # ------------------------------------------------------------------
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(_llm_mod, "_CACHE_DIR", _Path(tmpdir)):
+                svc = _make_svc()
+                with patch.object(svc, "_call_json", return_value={"set_1": ["Kickoff", "Abnahme"]}) as mock_call_json:
+                    r1 = svc.fetch_all_project_stages(["A", "B"], "IT")
+                    r2 = svc.fetch_all_project_stages(["C", "D"], "IT")
+                assert mock_call_json.call_count == 1, (
+                    f"expected cache hit on 2nd call (same count), got {mock_call_json.call_count} LLM calls"
+                )
+                assert set(r1.keys()) == {"A", "B"}, f"1st call remap wrong: {r1}"
+                assert set(r2.keys()) == {"C", "D"}, f"remap not applied on cache hit — got {r2}"
+        results.append(("A3: fetch_all_project_stages remap applies after cache hit, not baked in", True, ""))
+    except Exception as e:
+        results.append(("A3: fetch_all_project_stages remap applies after cache hit, not baked in", False, str(e)))
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(_llm_mod, "_CACHE_DIR", _Path(tmpdir)):
+                svc = _make_svc()
+                with patch.object(svc, "_call_json", return_value={"set_1": ["Part A", "Part B"]}) as mock_call_json:
+                    r1 = svc.fetch_all_bom_components({"P1": 2, "P2": 2}, "Maschinenbau")
+                    r2 = svc.fetch_all_bom_components({"P3": 2, "P4": 2}, "Maschinenbau")
+                assert mock_call_json.call_count == 1, (
+                    f"expected cache hit on 2nd call (same count+components), got {mock_call_json.call_count}"
+                )
+                assert set(r1.keys()) == {"P1", "P2"}, f"1st call remap wrong: {r1}"
+                assert set(r2.keys()) == {"P3", "P4"}, f"remap not applied on cache hit — got {r2}"
+        results.append(("A3: fetch_all_bom_components remap applies after cache hit, not baked in", True, ""))
+    except Exception as e:
+        results.append(("A3: fetch_all_bom_components remap applies after cache hit, not baked in", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # A3 — job_summaries: truthy-only caching (empty {} must never be
+    # permanently cached), and cache key includes _PROMPT_VERSION
+    # ------------------------------------------------------------------
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(_llm_mod, "_CACHE_DIR", _Path(tmpdir)):
+                svc = _make_svc()
+                with patch.object(svc, "_call_json", return_value={}) as mock_call_json:
+                    r1 = svc.fetch_job_summaries_batch(["Job A"], "IT")
+                    r2 = svc.fetch_job_summaries_batch(["Job A"], "IT")
+                assert r1 == {} and r2 == {}
+                assert mock_call_json.call_count == 2, (
+                    f"empty {{}} must not be cached — expected 2 LLM calls, got {mock_call_json.call_count}"
+                )
+        results.append(("A3: fetch_job_summaries_batch — empty {} not permanently cached", True, ""))
+    except Exception as e:
+        results.append(("A3: fetch_job_summaries_batch — empty {} not permanently cached", False, str(e)))
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(_llm_mod, "_CACHE_DIR", _Path(tmpdir)):
+                svc = _make_svc()
+                with patch.object(_llm_mod, "_PROMPT_VERSION", "v_test_1"):
+                    with patch.object(svc, "_call_json", return_value={"Job A": "desc v1"}) as mock1:
+                        svc.fetch_job_summaries_batch(["Job A"], "IT")
+                    assert mock1.call_count == 1
+                with patch.object(_llm_mod, "_PROMPT_VERSION", "v_test_2"):
+                    with patch.object(svc, "_call_json", return_value={"Job A": "desc v2"}) as mock2:
+                        svc.fetch_job_summaries_batch(["Job A"], "IT")
+                    assert mock2.call_count == 1, (
+                        "a _PROMPT_VERSION bump should bust the cache (miss expected) — "
+                        "got a hit, meaning the key doesn't include _PROMPT_VERSION"
+                    )
+        results.append(("A3: fetch_job_summaries_batch cache key includes _PROMPT_VERSION", True, ""))
+    except Exception as e:
+        results.append(("A3: fetch_job_summaries_batch cache key includes _PROMPT_VERSION", False, str(e)))
+
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results
