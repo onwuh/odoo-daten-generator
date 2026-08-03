@@ -6,6 +6,24 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 import odoo_actions
+from config import DemoCriteria, ModuleSelections, RunContext
+from modules import master_data
+
+
+def _unwrap(val):
+    return val[0] if isinstance(val, (list, tuple)) else val
+
+
+def _make_rctx(num_companies=1):
+    crit = DemoCriteria(
+        mode="both", industry="IT", num_companies=num_companies,
+        num_delivery_contacts=1, num_invoice_contacts=1, num_other_contacts=1,
+        num_services=1, num_consumables=0, num_storables=0,
+    )
+    return RunContext(
+        criteria=crit, module_selections=ModuleSelections(), industry="IT",
+        language_name="German", language_code="de_DE", gemini_model_name="test",
+    )
 
 
 def run(client, ctx):
@@ -66,6 +84,52 @@ def run(client, ctx):
         results.append(("master_data: create customer + read-back email", True, customer_id))
     except Exception as e:
         results.append(("master_data: create customer + read-back email", False, str(e)))
+
+    # Step 4 — A1: create_master_data end-to-end (data_factory assembly), LLM-independent.
+    # gemini=None proves company/contact structure no longer needs the LLM call to succeed.
+    try:
+        rctx = _make_rctx()
+        rctx.name_banks = {
+            "company_names": ["A1 Testfirma GmbH"],
+            "employee_names": ["Erika A1 Musterfrau"],
+        }
+        atoms = {"product_names": {"services": ["A1 Testservice"]}, "product_descriptions": {}}
+        master_data.create_master_data(client, None, rctx, atoms)
+        assert len(rctx.company_ids) == 1, f"expected 1 company, got {len(rctx.company_ids)}"
+        assert len(rctx.product_ids) == 1, f"expected 1 product, got {len(rctx.product_ids)}"
+
+        company_id = rctx.company_ids[0]
+        rec = client.search_read(
+            'res.partner', [["id", "=", company_id]],
+            fields=["street", "zip", "city", "country_id"], limit=1,
+        )
+        assert rec and rec[0]["street"] and rec[0]["zip"] and rec[0]["city"], "company missing address fields"
+        assert _unwrap(rec[0]["country_id"]), "company missing country_id"
+
+        contacts = client.search_read(
+            'res.partner', [["parent_id", "=", company_id]],
+            fields=["name", "type", "street", "email"], limit=0,
+        )
+        assert len(contacts) == 3, f"expected 3 contacts, got {len(contacts)}"
+        by_type = {c["type"]: c for c in contacts}
+        assert by_type["delivery"]["street"], "delivery contact missing street"
+        assert by_type["invoice"]["name"] == "Rechnungsadresse"
+        assert by_type["contact"]["email"], "person contact missing email"
+
+        results.append(("master_data: create_master_data end-to-end (A1), read-back", True, company_id))
+    except Exception as e:
+        results.append(("master_data: create_master_data end-to-end (A1), read-back", False, str(e)))
+
+    # Step 5 — A1 Pattern 2: empty atoms + empty name_banks -> full fallback chain, no crash
+    try:
+        rctx = _make_rctx()
+        rctx.name_banks = {}
+        master_data.create_master_data(client, None, rctx, {})
+        assert len(rctx.company_ids) == 1, f"expected 1 fallback company, got {len(rctx.company_ids)}"
+        assert len(rctx.product_ids) == 1, f"expected 1 fallback product, got {len(rctx.product_ids)}"
+        results.append(("master_data: Pattern 2 — empty atoms/name_banks -> fallback chain, no crash", True, ""))
+    except Exception as e:
+        results.append(("master_data: Pattern 2 — empty atoms/name_banks -> fallback chain, no crash", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

@@ -1,57 +1,52 @@
-"""Master data module: creates products and res.partner records from Gemini creative data."""
+"""Master data module: creates products and res.partner records.
 
-import random
-from typing import Any, Dict
+Structure (addresses, contacts, prices) is assembled deterministically by
+data_factory.py from name atoms — see IMPLEMENTIERUNGSPLAN.md A1. This module
+no longer parses free-form LLM structure; it only supplies names.
+"""
 
+from typing import Any, Dict, List, Set
+
+import data_factory
+import fallback_data
 from config import RunContext
 from odoo_repository import resolve_country_ids
 
-_INVALID_PRODUCT_FIELDS = {'uom', 'vat', 'vat_id', 'detailed_type'}
+_TARGET_COUNTRIES = ["DE", "AT", "CH"]
 
 
-def create_master_data(client, gemini, ctx: RunContext, creative_data: Dict[str, Any]) -> None:
-    """Batch-creates products and companies/contacts from Gemini creative data.
+def create_master_data(client, gemini, ctx: RunContext, atoms: Dict[str, Any]) -> None:
+    """Creates products (from atoms + fallback) and companies/contacts (from
+    ctx.name_banks + fallback). Writes ctx.product_ids and ctx.company_ids.
 
-    Writes ctx.product_ids and ctx.company_ids.
+    Company/contact creation no longer depends on the LLM atoms call
+    succeeding — only product names/descriptions degrade to static fallbacks
+    if atoms is empty.
     """
-    if not creative_data:
-        print("Keine kreativen Daten vorhanden — Stammdaten werden übersprungen.")
-        return
-    _create_products(client, creative_data, ctx)
-    _create_partners(client, creative_data, ctx)
+    country_map = resolve_country_ids(client, _TARGET_COUNTRIES)
+    _create_products(client, atoms or {}, ctx)
+    _create_partners(client, ctx, country_map)
 
 
 # ------------------------------------------------------------------
 # Products
 # ------------------------------------------------------------------
 
-_PRODUCT_TYPE_MAP = {
-    'services': {'type': 'service'},
-    'consumables': {'type': 'consu', 'is_storable': False},
-    'storables': {'type': 'consu', 'is_storable': True},
-}
-
-
-def _create_products(client, creative_data: Dict[str, Any], ctx: RunContext) -> None:
+def _create_products(client, atoms: Dict[str, Any], ctx: RunContext) -> None:
     print("\n--- Erstelle Produkte ---")
-    all_vals = []
-    for product_type, template in _PRODUCT_TYPE_MAP.items():
-        for creative_product in creative_data.get('products', {}).get(product_type, []):
-            if not creative_product.get('name'):
-                continue
-            vals = template.copy()
-            vals.update({
-                k: v for k, v in creative_product.items()
-                if v is not None and k not in _INVALID_PRODUCT_FIELDS
-            })
-            if 'list_price' not in vals:
-                vals['list_price'] = round(random.uniform(15, 500), 2)
-            if 'standard_price' not in vals:
-                vals['standard_price'] = round(vals['list_price'] * random.uniform(0.4, 0.8), 2)
-            all_vals.append(vals)
+    product_names = atoms.get('product_names', {})
+    if not any(product_names.get(k) for k in ('services', 'consumables', 'storables')):
+        fallback_pool = fallback_data.FALLBACK_PRODUCTS.get(ctx.industry, fallback_data.FALLBACK_PRODUCTS['IT'])
+        counts = {
+            'services': ctx.criteria.num_services,
+            'consumables': ctx.criteria.num_consumables,
+            'storables': ctx.criteria.num_storables,
+        }
+        product_names = _distribute_fallback_names(fallback_pool, counts)
 
+    all_vals = data_factory.build_products(product_names, atoms.get('product_descriptions'))
     if not all_vals:
-        print("-> Keine Produkte in Gemini-Daten gefunden.")
+        print("-> Keine Produkte zu erstellen.")
         return
 
     ids = client.create_batch('product.product', all_vals)
@@ -59,57 +54,69 @@ def _create_products(client, creative_data: Dict[str, Any], ctx: RunContext) -> 
     print(f"✅ {len(ids)} Produkte erstellt.")
 
 
+def _distribute_fallback_names(pool: List[str], counts: Dict[str, int]) -> Dict[str, List[str]]:
+    """Cycles a flat fallback name pool into per-category lists, suffixing on
+    wraparound so names stay distinguishable. Pattern-1 guarded: empty pool
+    still returns the right shape (empty lists), no crash."""
+    result: Dict[str, List[str]] = {}
+    idx = 0
+    for category, count in counts.items():
+        names = []
+        for i in range(count):
+            if not pool:
+                names.append(f"{category.capitalize()} {i + 1}")
+                continue
+            name = pool[idx % len(pool)]
+            if idx >= len(pool):
+                name = f"{name} ({idx // len(pool) + 1})"
+            names.append(name)
+            idx += 1
+        result[category] = names
+    return result
+
+
 # ------------------------------------------------------------------
 # Partners (companies + contacts)
 # ------------------------------------------------------------------
 
-def _collect_country_codes(creative_data: Dict[str, Any]):
-    codes = []
-    for scenario in creative_data.get('companies', []):
-        cd = scenario.get('company_data', {})
-        if cd.get('country_code'):
-            codes.append(cd['country_code'])
-        for contact in scenario.get('contacts', []):
-            if contact.get('country_code'):
-                codes.append(contact['country_code'])
-    return codes
+def _unique_name(pool: List[str], idx: int, used: Set[str]) -> str:
+    """Pattern-1 guarded: empty pool -> synthetic name, no crash.
+    Cycles pool by idx; on repeat (pool shorter than requested count),
+    appends a numeric suffix so `used` never gets a duplicate."""
+    if not pool:
+        return f"Firma {idx + 1}"
+    name = pool[idx % len(pool)]
+    if name in used:
+        name = f"{name} ({idx // len(pool) + 1})"
+    used.add(name)
+    return name
 
 
-def _create_partners(client, creative_data: Dict[str, Any], ctx: RunContext) -> None:
+def _create_partners(client, ctx: RunContext, country_map: Dict[str, int]) -> None:
     print("\n--- Erstelle Kunden und Kontakte ---")
-    country_codes = _collect_country_codes(creative_data)
-    country_map = resolve_country_ids(client, country_codes)
+    company_pool = ctx.name_banks.get('company_names') or fallback_data.FALLBACK_COMPANIES
+    person_pool = ctx.name_banks.get('employee_names') or fallback_data.FALLBACK_EMPLOYEES
+    used_names: Set[str] = set()
 
-    for scenario in creative_data.get('companies', []):
-        company_data = scenario.get('company_data', {})
-        if not company_data.get('name'):
-            continue
-
-        vals = {k: v for k, v in company_data.items() if v is not None}
-        vals.pop('vat', None)
-        vals.pop('vat_id', None)
-        vals.pop('country', None)
-        vals.pop('company_id', None)
-        country_code = vals.pop('country_code', 'DE')
-        if country_code.upper() in country_map:
-            vals['country_id'] = country_map[country_code.upper()]
-        vals['is_company'] = True
+    for idx in range(ctx.criteria.num_companies):
+        name = _unique_name(company_pool, idx, used_names)
+        vals = data_factory.build_company(name, target_countries=_TARGET_COUNTRIES)
+        country_code = vals.pop('country_code')
+        if country_code in country_map:
+            vals['country_id'] = country_map[country_code]
         company_id = client.create('res.partner', vals)
         ctx.company_ids.append(company_id)
-        print(f"   Partner erstellt: {company_data.get('name')} (ID: {company_id})")
+        print(f"   Partner erstellt: {name} (ID: {company_id})")
 
-        for contact_data in scenario.get('contacts', []):
-            cvals = {k: v for k, v in contact_data.items() if v is not None}
-            cvals.pop('vat', None)
-            cvals.pop('vat_id', None)
-            cvals.pop('country', None)
-            cvals.pop('company_id', None)
+        contacts = data_factory.build_contacts(
+            ctx.criteria.num_delivery_contacts,
+            ctx.criteria.num_invoice_contacts,
+            ctx.criteria.num_other_contacts,
+            person_names=person_pool,
+        )
+        for cvals in contacts:
             cvals['parent_id'] = company_id
-            # Defensive: LLM sometimes returns type='other' for person contacts.
-            # Named contacts are people → type must be 'contact', not 'other'.
-            if cvals.get('name') and cvals.get('type') == 'other':
-                cvals['type'] = 'contact'
             contact_cc = cvals.pop('country_code', None)
-            if contact_cc and contact_cc.upper() in country_map:
-                cvals['country_id'] = country_map[contact_cc.upper()]
+            if contact_cc and contact_cc in country_map:
+                cvals['country_id'] = country_map[contact_cc]
             client.create('res.partner', cvals)

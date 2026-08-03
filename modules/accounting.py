@@ -3,8 +3,10 @@
 import datetime
 import random
 
+import data_factory
 from config import RunContext
 from fallback_data import FALLBACK_SUPPLIERS
+from odoo_repository import resolve_country_ids
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +289,22 @@ def create_bank_transactions_for_all_invoices(client, invoice_ids, bill_ids):
     return created_line_ids
 
 
+def _create_suppliers(client, names):
+    """Creates supplier res.partner records with a full address (via
+    data_factory.build_company), not just a bare name."""
+    country_map = resolve_country_ids(client, ["DE", "AT", "CH"])
+    supplier_ids = []
+    for sname in names:
+        vals = data_factory.build_company(sname)
+        country_code = vals.pop('country_code')
+        if country_code in country_map:
+            vals['country_id'] = country_map[country_code]
+        vals['supplier_rank'] = 1
+        sid = client.create('res.partner', vals)
+        supplier_ids.append(sid)
+    return supplier_ids
+
+
 # ---------------------------------------------------------------------------
 # Module entry point
 # ---------------------------------------------------------------------------
@@ -328,10 +346,7 @@ def create_accounting_data(client, gemini, ctx: RunContext) -> None:
         supplier_names = ctx.name_banks.get('supplier_names', []) or FALLBACK_SUPPLIERS
         num_suppliers = min(3, len(supplier_names))
         chosen_supplier_names = random.sample(supplier_names, k=num_suppliers)
-        supplier_ids = []
-        for sname in chosen_supplier_names:
-            sid = client.create('res.partner', {"name": sname, "supplier_rank": 1})
-            supplier_ids.append(sid)
+        supplier_ids = _create_suppliers(client, chosen_supplier_names)
         num_bills = max(10, num_invoices // 2)
         for i in range(num_bills):
             supplier_id = supplier_ids[i % len(supplier_ids)]

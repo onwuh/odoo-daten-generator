@@ -12,6 +12,7 @@ Module execution order is important:
 9. hr_recruitment — recruiting
 """
 
+import data_factory
 from config import RunContext
 from llm_service import LLMService
 from odoo_client import OdooJson2Client
@@ -22,9 +23,9 @@ def run(client: OdooJson2Client, gemini: LLMService, ctx: RunContext) -> None:
     # --- Upfront Gemini calls (data needed before any Odoo writes) ---
     if not ctx.skip_master_data:
         print("\n--- Generiere kreative Stammdaten ---")
-        creative_data = gemini.fetch_creative_data(vars(ctx.criteria)) or {}
+        creative_atoms = gemini.fetch_creative_atoms(vars(ctx.criteria), ctx.language_name) or {}
     else:
-        creative_data = {}
+        creative_atoms = {}
         print("\n-> Stammdaten-Erstellung übersprungen (vorhandene Daten werden verwendet)")
 
     print("\n--- Generiere Namensvorschläge ---")
@@ -33,7 +34,7 @@ def run(client: OdooJson2Client, gemini: LLMService, ctx: RunContext) -> None:
     # --- Master data (no dependencies) ---
     if not ctx.skip_master_data:
         _run_module("Stammdaten", master_data.create_master_data, client, gemini, ctx,
-                    extra_args=(creative_data,))
+                    extra_args=(creative_atoms,))
 
     # Ensure fallback partners/products if master data failed or returned nothing
     _ensure_fallback_partners(client, ctx)
@@ -109,9 +110,10 @@ def _ensure_fallback_products(client, ctx: RunContext) -> None:
     pool = names or fallback
     while len(ctx.product_ids) < 2:
         name = random.choice(pool)
+        list_price, standard_price = data_factory.price_for_product()
         pid = client.create('product.product', {
             "name": name, "type": "consu",
-            "list_price": round(random.uniform(15, 500), 2),
+            "list_price": list_price, "standard_price": standard_price,
         })
         ctx.product_ids.append(pid)
         print(f"-> Fallback-Produkt erstellt: {name} (ID: {pid})")

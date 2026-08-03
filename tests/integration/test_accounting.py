@@ -9,7 +9,7 @@ if _ROOT not in sys.path:
 from modules.accounting import (
     create_customer_invoice, post_invoices, _introduce_typo,
     create_vendor_bill, create_bank_transactions_for_all_invoices,
-    get_or_create_bank_journal,
+    get_or_create_bank_journal, _create_suppliers,
 )
 
 
@@ -157,6 +157,26 @@ def run(client, ctx):
         ))
     except Exception as e:
         results.append(("accounting: B4 — bank txns scoped to run, balance additive not overwritten", False, str(e)))
+
+    # Step 6 — A1: suppliers get a full address (street/country_id), not a bare name
+    try:
+        supplier_ids = _create_suppliers(client, ["Integration Test Lieferant GmbH"])
+        assert len(supplier_ids) == 1 and isinstance(supplier_ids[0], int) and supplier_ids[0] > 0
+        rec = client.search_read(
+            'res.partner', [["id", "=", supplier_ids[0]]],
+            fields=["street", "country_id", "supplier_rank"], limit=1,
+        )
+        assert rec and rec[0]["street"], "supplier has no street"
+        country_val = rec[0]["country_id"]
+        country_id = country_val[0] if isinstance(country_val, (list, tuple)) else country_val
+        assert country_id, "supplier has no country_id"
+        assert rec[0]["supplier_rank"] == 1
+        results.append((
+            "accounting: A1 — supplier gets full address via data_factory", True,
+            f"street={rec[0]['street']!r}",
+        ))
+    except Exception as e:
+        results.append(("accounting: A1 — supplier gets full address via data_factory", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

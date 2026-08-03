@@ -184,61 +184,47 @@ Return ONLY the industry name, no explanation, no JSON, no quotes, just the text
         print(f"✅ Erkannte Branche: {industry}")
         return industry
 
-    def fetch_creative_data(self, criteria: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Generate companies + products JSON for master data creation."""
+    def fetch_creative_atoms(self, criteria: Dict[str, Any], language: str = "German") -> Optional[Dict[str, Any]]:
+        """Generate ONLY atomic product-name/description tokens for master data.
+
+        Structure (addresses, contacts, prices) is assembled deterministically
+        by data_factory.py — the LLM never sees or returns it (LLM-minimalism,
+        IMPLEMENTIERUNGSPLAN.md A1). Company names come from
+        ctx.name_banks['company_names'] (fetch_name_suggestions), not from
+        here, to avoid a second LLM call for the same creative concept.
+        """
+        industry = criteria['industry']
+        cache_key = self._slug(
+            industry, language, str(criteria['num_services']), str(criteria['num_consumables']),
+            str(criteria['num_storables']), "creative_atoms", _PROMPT_VERSION,
+        )
+        if (cached := self._cache_load(cache_key)) is not None:
+            print(f"✅ Kreative Daten aus Cache geladen ({cache_key}.json).")
+            return cached
+
         prompt = f"""
-Erstelle fiktive, realistische Demodaten für Odoo basierend auf diesen Kriterien:
-- Branche: {criteria['industry']}
-- Anzahl der Firmen: {criteria['num_companies']}
-
-Gib NUR ein sauberes JSON-Objekt zurück.
-Das JSON muss die Struktur {{"companies": [...], "products":{{...}} }} haben.
-
-Für jede Firma, beachte folgende Regeln:
-1.  Die Firma selbst ("company_data") muss eine vollständige Adresse haben.
-2.  Erstelle exakt {criteria['num_delivery_contacts']} Kontakte vom Typ 'delivery'.
-    - Der 'name' dieser Kontakte soll ein Ort sein (z.B. "Lagerhalle West", "Hauptsitz Berlin").
-    - Diese Kontakte MÜSSEN eine eigene, vollständige Adresse haben ("street", "city", "zip", "country_code").
-3.  Erstelle exakt {criteria['num_invoice_contacts']} Kontakte vom Typ 'invoice'.
-    - Diese Kontakte sollen KEINEN 'name' haben, nur den Typ.
-4.  Erstelle exakt {criteria['num_other_contacts']} Kontakte vom Typ 'contact'.
-    - Der 'name' dieser Kontakte soll ein voller Personenname sein (z.B. "Sabine Schmidt").
-5.  Alle E-Mail-Adressen MÜSSEN die Domain "@example.com" verwenden.
-6.  WICHTIG: Erstelle KEINE USt-IdNr. (VAT ID / vat / vat_id Felder) - diese werden nicht benötigt.
-
-Für Produkte, beachte folgende Regeln:
-- Verwende nur gültige Felder: "name", "description", "list_price", "standard_price", "sale_ok", "purchase_ok"
-- Erstelle KEINE Felder wie: "uom", "detailed_type", "vat", "vat_id" - diese sind ungültig.
-- Produkttypen werden automatisch basierend auf der Kategorie gesetzt.
+Erstelle fiktive, realistische Produktdaten für Odoo basierend auf diesen Kriterien:
+- Branche: {industry}
 - {criteria['num_services']} Dienstleistungs-Produkte (unter "services")
 - {criteria['num_consumables']} Verbrauchs-Produkte (unter "consumables")
 - {criteria['num_storables']} lagerfähige Produkte (unter "storables")
 
-Erstelle exakt {criteria['num_companies']} Einträge im "companies"-Array.
-
-Beispiel-Struktur (exakt so einhalten):
+Gib NUR ein sauberes JSON-Objekt zurück, Sprache: {language}:
 {{
-  "companies": [
-    {{
-      "company_data": {{"name": "...", "street": "...", "city": "...", "zip": "...", "country_code": "DE", "email": "...", "phone": "...", "website": "..."}},
-      "contacts": [
-        {{"name": "Lager Nord", "type": "delivery", "street": "...", "city": "...", "zip": "...", "country_code": "DE"}},
-        {{"type": "invoice", "street": "...", "city": "...", "zip": "...", "country_code": "DE"}},
-        {{"name": "Max Mustermann", "type": "contact", "email": "max@example.com"}}
-      ]
-    }}
-  ],
-  "products": {{
-    "services": [{{"name": "...", "list_price": 0.0}}],
-    "consumables": [{{"name": "...", "list_price": 0.0}}],
-    "storables": [{{"name": "...", "list_price": 0.0}}]
-  }}
+  "product_names": {{
+    "services": [exactly {criteria['num_services']} product names],
+    "consumables": [exactly {criteria['num_consumables']} product names],
+    "storables": [exactly {criteria['num_storables']} product names]
+  }},
+  "product_descriptions": {{"Produktname": "1 Satz Beschreibung", ...}}
 }}
+Keine Preise, keine Adressen, keine anderen Felder — nur Namen und Beschreibungen.
 """
         print(f"Frage LLM ({self.provider}/{self.model_name}) nach kreativen Daten...")
-        data = self._call_json(prompt, timeout=120)
+        data = self._call_json(prompt, timeout=90)
         if data:
             print("✅ Kreative Daten vom LLM empfangen.")
+            self._cache_save(cache_key, data)
         return data
 
     def fetch_name_suggestions(
