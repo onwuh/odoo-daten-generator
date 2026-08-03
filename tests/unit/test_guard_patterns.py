@@ -17,6 +17,7 @@ from modules.crm import (
     _fetch_sales_users,
     _normalize_message,
     _create_activities,
+    _unique_titles,
 )
 from config import DemoCriteria, ModuleSelections, RunContext
 
@@ -294,6 +295,43 @@ def run():
         results.append(("_create_activities: model_id=None → no create call", True, ""))
     except Exception as e:
         results.append(("_create_activities: model_id=None → no create call", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # B9 — _unique_titles: no duplicate titles within a batch
+    # ------------------------------------------------------------------
+
+    bank = ["Cloud-Migration Q3", "Wartungsvertrag Verlängerung", "System-Ablösung Legacy"]
+
+    try:
+        random.seed(1)
+        titles = _unique_titles(bank, 3)
+        assert len(titles) == 3 and len(set(titles)) == 3
+        results.append(("_unique_titles: n == bank size → all unique, no suffix", True, str(titles)))
+    except Exception as e:
+        results.append(("_unique_titles: n == bank size → all unique, no suffix", False, str(e)))
+
+    try:
+        random.seed(2)
+        titles = _unique_titles(bank, 10)  # overflow: 10 requested, bank has 3
+        assert len(titles) == 10
+        assert len(set(titles)) == 10, f"duplicates found: {titles}"
+        results.append(("_unique_titles: overflow (n > bank) → still all unique", True, str(titles)))
+    except Exception as e:
+        results.append(("_unique_titles: overflow (n > bank) → still all unique", False, str(e)))
+
+    try:
+        titles = _unique_titles([], 3)
+        assert len(titles) == 3 and len(set(titles)) == 3
+        results.append(("_unique_titles: empty bank → falls back, still unique", True, str(titles)))
+    except Exception as e:
+        results.append(("_unique_titles: empty bank → falls back, still unique", False, str(e)))
+
+    try:
+        titles = _unique_titles(bank, 0)
+        assert titles == []
+        results.append(("_unique_titles: n=0 → []", True, ""))
+    except Exception as e:
+        results.append(("_unique_titles: n=0 → []", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

@@ -14,6 +14,7 @@ from modules.recruiting import (
     create_skill_type,
     create_skill,
     _create_applicants,
+    _create_skills,
 )
 
 
@@ -152,6 +153,57 @@ def run(client, ctx):
         results.append(("recruiting: _create_applicants empty job_ids → [] no crash", True, ""))
     except Exception as e:
         results.append(("recruiting: _create_applicants empty job_ids → [] no crash", False, str(e)))
+
+    # Step 6 — B13: re-running _create_skills for an existing type must not duplicate levels or skills
+    try:
+        rec_data = {
+            "skill_types": [{
+                "name": "Integration Test Kompetenz B13",
+                "skills": ["Skill A", "Skill B"],
+                "levels": ["Grundlagen", "Fortgeschritten", "Experte"],
+            }],
+        }
+        _create_skills(client, rec_data, num_skill_types=1, skills_per_type=2)
+        skill_type_id = None
+        st = client.search_read(
+            'hr.skill.type', [["name", "=", "Integration Test Kompetenz B13"]],
+            fields=["id"], limit=1,
+        )
+        assert st, "skill type not created on first run"
+        skill_type_id = st[0]["id"]
+        levels_after_first = client.search_read(
+            'hr.skill.level', [["skill_type_id", "=", skill_type_id]], fields=["id"], limit=0,
+        )
+        count_first = len(levels_after_first)
+        assert count_first > 0, "no levels created on first run"
+        skills_after_first = client.search_read(
+            'hr.skill', [["skill_type_id", "=", skill_type_id]], fields=["id"], limit=0,
+        )
+        skill_count_first = len(skills_after_first)
+        assert skill_count_first > 0, "no skills present after first run"
+
+        # Simulate a second generator run against the same DB state
+        _create_skills(client, rec_data, num_skill_types=1, skills_per_type=2)
+        levels_after_second = client.search_read(
+            'hr.skill.level', [["skill_type_id", "=", skill_type_id]], fields=["id"], limit=0,
+        )
+        count_second = len(levels_after_second)
+        assert count_second == count_first, (
+            f"level count grew on re-run: {count_first} -> {count_second} (duplicates)"
+        )
+        skills_after_second = client.search_read(
+            'hr.skill', [["skill_type_id", "=", skill_type_id]], fields=["id"], limit=0,
+        )
+        skill_count_second = len(skills_after_second)
+        assert skill_count_second == skill_count_first, (
+            f"skill count grew on re-run: {skill_count_first} -> {skill_count_second} (duplicates)"
+        )
+        results.append((
+            "recruiting: repeat run does not duplicate skills/levels (B13)", True,
+            f"skills={skill_count_second}, levels={count_second} (constant across 2 runs)",
+        ))
+    except Exception as e:
+        results.append(("recruiting: repeat run does not duplicate skills/levels (B13)", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

@@ -36,16 +36,18 @@ def get_or_create_annual_leave_type(client):
     })
 
 
-def create_leave_allocation(client, employee_id, work_entry_type_id, days, year):
-    print(f"-> Creating leave allocation: {days} days for emp {employee_id}")
+def create_leave_allocation(client, employee_id, work_entry_type_id, days, date_from, date_to):
+    """date_from/date_to (date objects) must cover the full window leave requests
+    will be scattered across — a fixed calendar year misses requests that land
+    in a following year when timescale_days pushes far enough into the future (B5)."""
+    print(f"-> Creating leave allocation: {days} days for emp {employee_id} ({date_from} – {date_to})")
     alloc_id = client.create('hr.leave.allocation', {
-        'name': f'Jahresurlaub {year}',
+        'name': f'Urlaub {date_from.year}-{date_to.year}' if date_from.year != date_to.year else f'Urlaub {date_from.year}',
         'employee_id': employee_id,
         'work_entry_type_id': work_entry_type_id,
         'number_of_days': days,
-        'allocation_type': 'regular',
-        'date_from': f'{year}-01-01',
-        'date_to': f'{year}-12-31',
+        'date_from': date_from.isoformat(),
+        'date_to': date_to.isoformat(),
     })
     try:
         client.call_method('hr.leave.allocation', 'action_approve', ids=[alloc_id])
@@ -164,14 +166,18 @@ def create_leave_data(client, ctx: RunContext) -> list:
 
     print("\n--- TIMEOFF: Erstelle Urlaubsdaten ---")
     leave_type_id = get_or_create_annual_leave_type(client)
-    year = datetime.date.today().year
+    today = datetime.date.today()
+
+    # Allocation window must cover the full scatter window (past AND future),
+    # not a fixed calendar year — timescale_days can push future leaves into
+    # the following year(s), and a Jan1-Dec31 allocation would miss those (B5).
+    alloc_date_from = today - datetime.timedelta(days=timescale_days)
+    alloc_date_to = today + datetime.timedelta(days=timescale_days + 14)
 
     # Allocate enough days to cover all planned leave
     alloc_days = max(entries_per_employee * avg_length_days * 2, 30)
     for emp_id in ctx.employee_ids:
-        create_leave_allocation(client, emp_id, leave_type_id, alloc_days, year)
-
-    today = datetime.date.today()
+        create_leave_allocation(client, emp_id, leave_type_id, alloc_days, alloc_date_from, alloc_date_to)
     all_leave_ids = []
     scheduled: dict = {}  # emp_id -> [(start, end), ...]
 

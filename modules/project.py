@@ -41,6 +41,15 @@ def create_project_stage(client, name, sequence=10, existing_names: set = None):
     return stage_id
 
 
+def _select_ordered_stages(stages: list, num_stages: int) -> list:
+    """Pick a subset of stages, preserving the source order (the LLM's workflow
+    progression), instead of random.sample's shuffled order."""
+    if len(stages) >= num_stages:
+        idx = sorted(random.sample(range(len(stages)), k=num_stages))
+        return [stages[i] for i in idx]
+    return stages[:num_stages]
+
+
 def update_task_stage(client, task_id, stage_id):
     return client.write('project.task', [task_id], {"stage_id": stage_id})
 
@@ -115,11 +124,7 @@ def create_project_data(client, gemini, ctx: RunContext) -> None:
             stages = fallback_stages
 
         num_stages = random.randint(4, 6)
-        selected = (
-            random.sample(stages, k=num_stages)
-            if len(stages) >= num_stages
-            else stages[:num_stages]
-        )
+        selected = _select_ordered_stages(stages, num_stages)
         if len(selected) < num_stages:
             default = FALLBACK_PROJECT_STAGES['default']
             selected.extend(default[:num_stages - len(selected)])

@@ -44,6 +44,8 @@ def get_language_name(lang_code: str) -> str:
     return _LANG_MAP.get(lang_code, _BASE_LANG_MAP.get(base, 'German'))
 
 
+# Timeouts are intentionally excluded: a timeout means the provider is slow →
+# return None immediately so the caller falls through to the Gemini fallback.
 _RETRYABLE_HINTS = ("503", "unavailable", "high demand", "try again", "rate_limit", "rate limit")
 
 
@@ -101,20 +103,22 @@ class LLMService:
         self.total_calls += 1
         msg = ""
         for attempt in range(1, 4):
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(self._raw_call, prompt)
-                try:
-                    text, in_tok, out_tok = future.result(timeout=timeout)
-                except concurrent.futures.TimeoutError:
-                    msg = f"timed out after {timeout}s"
-                except Exception as e:
-                    msg = str(e)
-                else:
-                    self.total_tokens += in_tok + out_tok
-                    print(f"[{self.provider.upper()}] {in_tok} in + {out_tok} out = "
-                          f"{in_tok + out_tok} tokens (Gesamtlauf: {self.total_tokens}, "
-                          f"Anfragen: {self.total_calls})")
-                    return text
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(self._raw_call, prompt)
+            try:
+                text, in_tok, out_tok = future.result(timeout=timeout)
+            except concurrent.futures.TimeoutError:
+                msg = f"timed out after {timeout}s"
+            except Exception as e:
+                msg = str(e)
+            else:
+                self.total_tokens += in_tok + out_tok
+                print(f"[{self.provider.upper()}] {in_tok} in + {out_tok} out = "
+                      f"{in_tok + out_tok} tokens (Gesamtlauf: {self.total_tokens}, "
+                      f"Anfragen: {self.total_calls})")
+                return text
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
 
             retryable = any(hint in msg.lower() for hint in _RETRYABLE_HINTS)
             if retryable and attempt < 3:
@@ -361,7 +365,7 @@ Return ONLY valid JSON, no markdown, no code blocks:
 }}"""
         print(f"Frage LLM ({self.provider}/{self.model_name}) nach Projektphasen ({num_projects} Projekte)...")
         data = self._call_json(prompt, timeout=120)
-        if isinstance(data, dict):
+        if isinstance(data, dict) and data:
             print(f"✅ Projektphasen vom LLM empfangen: {len(data)} Sets")
             sets = list(data.values())
             return {name: sets[i % len(sets)] for i, name in enumerate(project_names)}
@@ -386,32 +390,40 @@ Language: {language}. Return clean JSON only, no markdown fences."""
 
     def fetch_crm_chatter_messages(
         self,
-        opportunity_titles: List[str],
+        opportunities: List[Dict[str, str]],
         industry: str,
         language: str = "German",
         style: str = "mixed",
         messages_per_opp: int = 4,
-        participants: Optional[Dict[str, str]] = None,
     ) -> Dict[str, List[Dict]]:
         """Fetch realistic chatter messages per opportunity in one batch call.
 
         Args:
-            opportunity_titles: list of opportunity names
+            opportunities: list of {"title": ..., "customer": ..., "salesperson": ...}
+                           — one entry per opportunity, so each gets its own
+                           customer/salesperson names in the generated messages
+                           instead of one name reused across the whole batch (B9)
             industry: industry name for context
             language: language for generated text
             style: "notes_only" | "mixed" | "full_email"
             messages_per_opp: how many messages to generate per opportunity (2-8)
-            participants: optional {"customer_name": "...", "salesperson_name": "..."}
-                          used as example names in the prompt
 
         Returns dict {opportunity_title: [{"type": "email"|"note", "speaker": "customer"|"salesperson", "body": str}, ...]}.
         Legacy string-list format (from old cache) is handled by the caller.
         """
-        if not opportunity_titles:
+        if not opportunities:
             return {}
 
         messages_per_opp = max(2, min(8, messages_per_opp))
-        titles_json = json.dumps(opportunity_titles, ensure_ascii=False)
+        opportunity_titles = [o["title"] for o in opportunities]
+        opps_json = json.dumps([
+            {
+                "title": o["title"],
+                "customer": o.get("customer") or "the customer",
+                "salesperson": o.get("salesperson") or "the sales rep",
+            }
+            for o in opportunities
+        ], ensure_ascii=False)
 
         if style == "notes_only":
             type_instruction = (
@@ -442,26 +454,20 @@ Language: {language}. Return clean JSON only, no markdown fences."""
             "initial contact → qualification → demo/proposal → negotiation → next step/close."
         )
 
-        participant_hint = ""
-        if participants:
-            cname = participants.get("customer_name", "the customer")
-            sname = participants.get("salesperson_name", "the sales rep")
-            participant_hint = (
-                f'Use "{cname}" as the customer name and "{sname}" as the salesperson name '
-                f'in greetings and sign-offs.'
-            )
-
         prompt = f"""You are generating realistic CRM chatter data for a demo in the "{industry}" industry.
-Language: {language}. {participant_hint}
+Language: {language}.
 
 For each opportunity below, generate exactly {messages_per_opp} messages.
+Each opportunity has its own "customer" and "salesperson" name — use exactly that
+opportunity's names in greetings and sign-offs for its messages (do not mix names
+across opportunities).
 {type_instruction}
 {arc}
-Be specific to the opportunity title. Use realistic names, details, and amounts.
+Be specific to the opportunity title. Use realistic details and amounts.
 
-Opportunity titles: {titles_json}
+Opportunities: {opps_json}
 
-Return ONLY valid JSON, no markdown, no code blocks:
+Return ONLY valid JSON, no markdown, no code blocks, keyed by "title":
 {{
   "Opportunity Title 1": [
     {{{example_types}, "body": "..."}},
@@ -504,7 +510,7 @@ Rules:
 - Provide exactly {components_per_bom} components per set."""
         print(f"Frage LLM ({self.provider}/{self.model_name}) nach BOM-Komponenten ({num_products} Produkte)...")
         data = self._call_json(prompt, timeout=120)
-        if isinstance(data, dict):
+        if isinstance(data, dict) and data:
             print(f"✅ BOM-Komponenten vom LLM empfangen: {len(data)} Sets")
             sets = list(data.values())
             return {name: sets[i % len(sets)] for i, name in enumerate(products.keys())}

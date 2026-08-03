@@ -357,7 +357,7 @@ class App(ctk.CTk):
                     mod_str = ", ".join(MODULE_LABELS.get(m, m) for m in sorted(mods)) or "–"
                     self.after(0, lambda d=mod_str: _set("modules", True, d))
                     try:
-                        self.feature_flags = odoo_actions.get_enabled_features(self.client)
+                        self.feature_flags = odoo_actions.get_enabled_features(self.client, mods)
                     except Exception:
                         self.feature_flags = {}
                 except Exception as exc:

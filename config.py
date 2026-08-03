@@ -69,3 +69,8 @@ class RunContext:
     # and sale orders draw from the correct pool.
     component_ids: List[int] = field(default_factory=list)
     feature_flags: Dict[str, bool] = field(default_factory=dict)
+    # Customer invoices / vendor bills created THIS run — bank transaction
+    # generation scopes to these instead of scanning all posted moves in the
+    # DB, so re-running the generator doesn't duplicate transactions (B4).
+    invoice_ids: List[int] = field(default_factory=list)
+    bill_ids: List[int] = field(default_factory=list)

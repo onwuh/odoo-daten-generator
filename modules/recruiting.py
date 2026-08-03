@@ -21,6 +21,23 @@ def get_existing_skill_types(client):
     return {st.get("name", "").lower(): st.get("id") for st in skill_types}
 
 
+def get_existing_skills(client):
+    """Get all existing skills to avoid duplicates on re-run (B13).
+
+    Returns {(skill_type_id, name_lower): skill_id}.
+    """
+    skills = client.search_read('hr.skill', [], fields=["id", "name", "skill_type_id"], limit=0)
+    result = {}
+    for s in skills:
+        st_id = s.get("skill_type_id")
+        if isinstance(st_id, (list, tuple)) and st_id:
+            st_id = st_id[0]
+        name = (s.get("name") or "").lower()
+        if st_id and name:
+            result[(st_id, name)] = s.get("id")
+    return result
+
+
 def create_skill_type(client, name):
     print(f"-> Creating skill type: {name}")
     skill_type_id = client.create('hr.skill.type', {"name": name})
@@ -233,6 +250,7 @@ def _create_skills(client, recruiting_data: dict, num_skill_types: int, skills_p
     print("\n--- RECRUITING: Erstelle Kompetenzen ---")
     all_skill_ids = []
     existing_skill_types = get_existing_skill_types(client)
+    existing_skills = get_existing_skills(client)
 
     for skill_type_data in recruiting_data.get("skill_types", [])[:num_skill_types]:
         skill_type_name = skill_type_data.get("name", "")
@@ -246,16 +264,24 @@ def _create_skills(client, recruiting_data: dict, num_skill_types: int, skills_p
             skill_type_id = create_skill_type(client, skill_type_name)
             existing_skill_types[skill_type_name.lower()] = skill_type_id
 
-        for skill_name in skill_type_data.get("skills", [])[:skills_per_type]:
-            sid = create_skill(client, skill_type_id, skill_name)
-            all_skill_ids.append(sid)
+            # Levels only for newly-created types — an existing type already has
+            # levels; re-creating them here would duplicate on every run (B13).
+            levels = skill_type_data.get("levels", [])
+            if len(levels) < 3:
+                levels = ["Grundlagen", "Fortgeschritten", "Experte"]
+            for i, level_name in enumerate(levels):
+                progress = int((i + 1) * 100 / len(levels))
+                create_skill_level(client, skill_type_id, level_name, progress)
 
-        levels = skill_type_data.get("levels", [])
-        if len(levels) < 3:
-            levels = ["Grundlagen", "Fortgeschritten", "Experte"]
-        for i, level_name in enumerate(levels[:max(3, len(levels))]):
-            progress = int((i + 1) * 100 / max(3, len(levels)))
-            create_skill_level(client, skill_type_id, level_name, progress)
+        for skill_name in skill_type_data.get("skills", [])[:skills_per_type]:
+            skill_key = (skill_type_id, skill_name.lower())
+            if skill_key in existing_skills:
+                print(f"->   Kompetenz '{skill_name}' existiert bereits, überspringe")
+                sid = existing_skills[skill_key]
+            else:
+                sid = create_skill(client, skill_type_id, skill_name)
+                existing_skills[skill_key] = sid
+            all_skill_ids.append(sid)
 
     return all_skill_ids
 

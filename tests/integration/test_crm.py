@@ -173,5 +173,37 @@ def run(client, ctx):
     except Exception as e:
         results.append(("crm: chatter disabled (empty dict) → no message_post", False, str(e)))
 
+    # Step 8 — B12: salesperson assignment must not depend on crm_chatter flag
+    try:
+        from config import ModuleSelections, RunContext, DemoCriteria
+        from modules.crm import create_crm_data
+
+        criteria = DemoCriteria(
+            mode="both", industry="Test", num_companies=1,
+            num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
+            num_services=0, num_consumables=0, num_storables=0,
+        )
+        sel = ModuleSelections(crm=1, leads=0, crm_chatter={})  # chatter disabled
+        b12_ctx = RunContext(
+            criteria=criteria, module_selections=sel,
+            industry="Test", language_name="German", language_code="de_DE",
+            gemini_model_name="test",
+        )
+        b12_ctx.company_ids = [partner_id]
+        b12_ctx.name_banks = {"opportunity_titles": ["B12 Test Opportunity"]}
+
+        create_crm_data(client, None, b12_ctx)
+        assert b12_ctx.opportunity_ids, "no opportunity created"
+        rec = client.search_read(
+            'crm.lead', [["id", "=", b12_ctx.opportunity_ids[0]]],
+            fields=["user_id"], limit=1,
+        )
+        uid = rec[0]["user_id"] if rec else None
+        uid = uid[0] if isinstance(uid, (list, tuple)) else uid
+        assert uid, f"user_id not set on opportunity created with crm_chatter disabled: {rec}"
+        results.append(("crm: user_id set with chatter disabled (B12)", True, f"user_id={uid}"))
+    except Exception as e:
+        results.append(("crm: user_id set with chatter disabled (B12)", False, str(e)))
+
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

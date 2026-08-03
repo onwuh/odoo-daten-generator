@@ -43,18 +43,39 @@ def _early_stages(stages):
     """Return stage IDs whose names suggest early pipeline position."""
     early = [s["id"] for s in stages
              if any(kw in s.get("name", "").lower() for kw in _EARLY_STAGE_KEYWORDS)]
-    return early or [stages[0]["id"]] if stages else []
+    return (early or [stages[0]["id"]]) if stages else []
 
 
 def _build_partner_pool(company_ids, num_records):
     """Return a list of partner_ids of length num_records with at most 2 per company."""
-    pool = (company_ids * 2)[:len(company_ids) * 2]
+    pool = company_ids * 2
     random.shuffle(pool)
     if num_records <= len(pool):
         return pool[:num_records]
     # Need more than 2x companies — allow repeats for the overflow
     extras = random.choices(company_ids, k=num_records - len(pool))
     return pool + extras
+
+
+def _unique_titles(bank, n):
+    """Return n opportunity/lead titles, unique within the batch.
+
+    messages_by_title (chatter) is keyed by title, so duplicates silently
+    collide (B9). random.sample already guarantees uniqueness when n fits the
+    bank; on overflow, disambiguate with a counter suffix — guaranteed unique,
+    unlike appending the partner name (a partner can appear twice in the pool).
+    """
+    if not bank:
+        bank = ["Opportunity"]
+    if n <= len(bank):
+        return random.sample(bank, n)
+    base = [random.choice(bank) for _ in range(n)]
+    counts = {}
+    result = []
+    for t in base:
+        counts[t] = counts.get(t, 0) + 1
+        result.append(t if counts[t] == 1 else f"{t} #{counts[t]}")
+    return result
 
 
 def _extra_vals():
@@ -112,8 +133,8 @@ def create_crm_data(client, gemini, ctx: RunContext) -> None:
     all_stages = get_crm_stages(client, exclude_won=True)
     stage_ids = [s["id"] for s in all_stages]
 
-    # --- Salespeople pool ---
-    sales_users = _fetch_sales_users(client) if ctx.module_selections.crm_chatter else []
+    # --- Salespeople pool (always fetched — user_id assignment is independent of chatter) ---
+    sales_users = _fetch_sales_users(client)
     if sales_users:
         print(f"   -> {len(sales_users)} interne Benutzer als Verkäufer verfügbar.")
 
@@ -121,9 +142,9 @@ def create_crm_data(client, gemini, ctx: RunContext) -> None:
     if num_opps > 0:
         print(f"\n--- CRM: Erstelle {num_opps} Opportunities ---")
         partner_pool = _build_partner_pool(ctx.company_ids, num_opps)
+        opp_titles = _unique_titles(opp_titles_bank, num_opps)
         opp_data = []
-        for partner_id in partner_pool:
-            name = random.choice(opp_titles_bank)
+        for partner_id, name in zip(partner_pool, opp_titles):
             extra = _extra_vals()
             salesperson = random.choice(sales_users) if sales_users else None
             if salesperson:
@@ -167,8 +188,8 @@ def create_crm_data(client, gemini, ctx: RunContext) -> None:
         print(f"\n--- CRM: Erstelle {num_leads} Leads ---")
         early_ids = _early_stages(all_stages)
         partner_pool = _build_partner_pool(ctx.company_ids, num_leads)
-        for partner_id in partner_pool:
-            name = random.choice(opp_titles_bank)
+        lead_titles = _unique_titles(opp_titles_bank, num_leads)
+        for partner_id, name in zip(partner_pool, lead_titles):
             lead_id = create_lead(client, partner_id, name, _extra_vals())
             ctx.lead_ids.append(lead_id)
 
@@ -266,22 +287,21 @@ def _post_chatter_messages(client, gemini, ctx: RunContext, opp_data):
     style = chatter_cfg.get('style', 'mixed')
     messages_per_opp = chatter_cfg.get('messages_per_opp', 4)
 
-    titles = [o['name'] for o in opp_data]
-
-    # Build participant hint from first opp (representative sample)
-    sample = opp_data[0]
-    participants = None
-    if sample.get('partner_name') or (sample.get('salesperson') or {}).get('name'):
-        participants = {
-            'customer_name': sample.get('partner_name', 'Kunde'),
-            'salesperson_name': (sample.get('salesperson') or {}).get('name', 'Verkäufer'),
+    # One participant pair per opportunity — not a single sample reused for the
+    # whole batch (B9), so each opp's messages address its actual customer/rep.
+    opportunities = [
+        {
+            'title': o['name'],
+            'customer': o.get('partner_name') or 'Kunde',
+            'salesperson': (o.get('salesperson') or {}).get('name') or 'Verkäufer',
         }
+        for o in opp_data
+    ]
 
     try:
         messages_by_title = gemini.fetch_crm_chatter_messages(
-            titles, ctx.industry, ctx.language_name,
+            opportunities, ctx.industry, ctx.language_name,
             style=style, messages_per_opp=messages_per_opp,
-            participants=participants,
         )
     except Exception as e:
         print(f"⚠️  Chatter-Generierung fehlgeschlagen: {e}")

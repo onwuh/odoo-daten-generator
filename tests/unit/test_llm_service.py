@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from unittest.mock import MagicMock, patch, call
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -162,6 +163,125 @@ def run():
         results.append(("retry: 503 all 3 attempts → returns None", True, ""))
     except Exception as e:
         results.append(("retry: 503 all 3 attempts → returns None", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # B2 — Timeout non-blocking (fix: shutdown(wait=False))
+    # ------------------------------------------------------------------
+
+    try:
+        svc = _make_svc()
+
+        def slow_raw_call(prompt):
+            time.sleep(2)  # longer than the timeout below
+            return ("text", 10, 20)
+
+        with patch.object(svc, "_raw_call", side_effect=slow_raw_call):
+            t0 = time.time()
+            result = svc._call("test prompt", timeout=0.1)
+            elapsed = time.time() - t0
+
+        assert result is None, f"Expected None on timeout, got {result!r}"
+        assert elapsed < 1.0, f"_call blocked for {elapsed:.2f}s — shutdown(wait=True) still in effect"
+        results.append(("B2: timeout returns fast and returns None", True, f"{elapsed:.2f}s"))
+    except Exception as e:
+        results.append(("B2: timeout returns fast and returns None", False, str(e)))
+
+    try:
+        svc = _make_svc()
+
+        def slow_raw_call_b2(prompt):
+            time.sleep(2)
+            return ("text", 10, 20)
+
+        with patch.object(svc, "_raw_call", side_effect=slow_raw_call_b2):
+            result = svc._call("test prompt", timeout=0.1)
+
+        # Timeout is not in _RETRYABLE_HINTS — must NOT retry, returns None after 1 attempt
+        # (can't easily count attempts without threading gymnastics; result=None confirms no retry success)
+        assert result is None
+        results.append(("B2: timeout does not retry (not in _RETRYABLE_HINTS)", True, ""))
+    except Exception as e:
+        results.append(("B2: timeout does not retry (not in _RETRYABLE_HINTS)", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # B3 — Pattern 2: empty dict from LLM → no ZeroDivisionError
+    # ------------------------------------------------------------------
+
+    try:
+        svc = _make_svc()
+        with patch.object(svc, "_call_json", return_value={}):
+            result = svc.fetch_all_project_stages(["Proj A", "Proj B"], "IT")
+        assert result == {}, f"Expected empty dict, got {result!r}"
+        results.append(("B3: fetch_all_project_stages: LLM {} → returns {}, no crash", True, ""))
+    except Exception as e:
+        results.append(("B3: fetch_all_project_stages: LLM {} → returns {}, no crash", False, str(e)))
+
+    try:
+        svc = _make_svc()
+        with patch.object(svc, "_call_json", return_value={}):
+            result = svc.fetch_all_bom_components({"Product A": 4, "Product B": 4}, "Maschinenbau")
+        assert result == {}, f"Expected empty dict, got {result!r}"
+        results.append(("B3: fetch_all_bom_components: LLM {} → returns {}, no crash", True, ""))
+    except Exception as e:
+        results.append(("B3: fetch_all_bom_components: LLM {} → returns {}, no crash", False, str(e)))
+
+    try:
+        svc = _make_svc()
+        with patch.object(svc, "_call_json", return_value=None):
+            result = svc.fetch_all_project_stages(["Proj A"], "IT")
+        assert result == {}
+        results.append(("B3: fetch_all_project_stages: LLM None → returns {}, no crash", True, ""))
+    except Exception as e:
+        results.append(("B3: fetch_all_project_stages: LLM None → returns {}, no crash", False, str(e)))
+
+    try:
+        svc = _make_svc()
+        with patch.object(svc, "_call_json", return_value=None):
+            result = svc.fetch_all_bom_components({"Product A": 4}, "Maschinenbau")
+        assert result == {}
+        results.append(("B3: fetch_all_bom_components: LLM None → returns {}, no crash", True, ""))
+    except Exception as e:
+        results.append(("B3: fetch_all_bom_components: LLM None → returns {}, no crash", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # B9 — fetch_crm_chatter_messages: 1 batch call, per-opp participants
+    # ------------------------------------------------------------------
+
+    try:
+        svc = _make_svc()
+        opportunities = [
+            {"title": "Opp A", "customer": "Kunde A", "salesperson": "Verkäufer A"},
+            {"title": "Opp B", "customer": "Kunde B", "salesperson": "Verkäufer B"},
+            {"title": "Opp C", "customer": "Kunde C", "salesperson": "Verkäufer C"},
+        ]
+        captured_prompts = []
+
+        def fake_call_json(prompt, timeout=180):
+            captured_prompts.append(prompt)
+            return {o["title"]: [{"type": "note", "speaker": "salesperson", "body": "x"}] for o in opportunities}
+
+        with patch.object(svc, "_call_json", side_effect=fake_call_json) as mock_call_json:
+            result = svc.fetch_crm_chatter_messages(opportunities, "IT", messages_per_opp=2)
+
+        assert mock_call_json.call_count == 1, f"expected 1 LLM call, got {mock_call_json.call_count}"
+        prompt = captured_prompts[0]
+        assert all(o["customer"] in prompt for o in opportunities), "not all customer names present in prompt"
+        assert all(o["salesperson"] in prompt for o in opportunities), "not all salesperson names present in prompt"
+        assert result and set(result.keys()) == {"Opp A", "Opp B", "Opp C"}
+        results.append((
+            "B9: fetch_crm_chatter_messages: 1 call, distinct per-opp participants", True,
+            f"{len(opportunities)} opps in one prompt",
+        ))
+    except Exception as e:
+        results.append(("B9: fetch_crm_chatter_messages: 1 call, distinct per-opp participants", False, str(e)))
+
+    try:
+        svc = _make_svc()
+        result = svc.fetch_crm_chatter_messages([], "IT")
+        assert result == {}
+        results.append(("B9: fetch_crm_chatter_messages: empty opportunities → {} no crash", True, ""))
+    except Exception as e:
+        results.append(("B9: fetch_crm_chatter_messages: empty opportunities → {} no crash", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

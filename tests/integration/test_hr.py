@@ -51,8 +51,10 @@ def run(client, ctx):
     # Step 3 — Create leave allocation + validate
     if emp_id and leave_type_id:
         try:
-            year = datetime.date.today().year
-            alloc_id = create_leave_allocation(client, emp_id, leave_type_id, 30, year)
+            today = datetime.date.today()
+            date_from = datetime.date(today.year, 1, 1)
+            date_to = datetime.date(today.year, 12, 31)
+            alloc_id = create_leave_allocation(client, emp_id, leave_type_id, 30, date_from, date_to)
             assert isinstance(alloc_id, int) and alloc_id > 0
             rec = client.search_read(
                 'hr.leave.allocation',
@@ -103,6 +105,42 @@ def run(client, ctx):
             results.append(("hr: validate_leave_request", False, str(e)))
     else:
         results.append(("hr: validate_leave_request", False, "skipped"))
+
+    # Step 6 — B5: leave allocation window must cover requests crossing into next year.
+    # Deterministic reproduction: mirror create_leave_data's alloc-window formula for
+    # timescale_days=400, then request a leave 200 days out (guaranteed past Dec 31
+    # from any point in the year) and confirm it approves cleanly.
+    try:
+        b5_emp_id = odoo_actions.create_employee(client, "Integration Test B5 Mitarbeiter")
+        assert isinstance(b5_emp_id, int) and b5_emp_id > 0
+
+        today = datetime.date.today()
+        timescale_days = 400
+        alloc_date_from = today - datetime.timedelta(days=timescale_days)
+        alloc_date_to = today + datetime.timedelta(days=timescale_days + 14)
+        create_leave_allocation(client, b5_emp_id, leave_type_id, 30, alloc_date_from, alloc_date_to)
+
+        far_point = today + datetime.timedelta(days=200)
+        days_to_monday = (7 - far_point.weekday()) % 7
+        far_monday = far_point + datetime.timedelta(days=days_to_monday)
+        far_friday = far_monday + datetime.timedelta(days=4)
+        assert far_monday.year > today.year, (
+            f"test setup error: {far_monday} did not cross into next year from {today}"
+        )
+
+        leave_id = create_leave_request(
+            client, b5_emp_id, leave_type_id,
+            f"{far_monday} 08:00:00", f"{far_friday} 17:00:00",
+        )
+        assert isinstance(leave_id, int) and leave_id > 0, "leave creation failed (allocation window too narrow?)"
+        ok = validate_leave_request(client, leave_id)
+        assert ok is True, "action_approve failed for leave crossing year boundary"
+        results.append((
+            "hr: B5 — leave beyond current year approved", True,
+            f"leave_id={leave_id} {far_monday}-{far_friday}",
+        ))
+    except Exception as e:
+        results.append(("hr: B5 — leave beyond current year approved", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

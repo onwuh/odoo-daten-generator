@@ -145,25 +145,34 @@ def _introduce_typo(label: str) -> str:
     return "".join(chars)
 
 
-def create_bank_transactions_for_all_invoices(client):
-    """Create bank transactions for all vendor bills and customer invoices.
+def create_bank_transactions_for_all_invoices(client, invoice_ids, bill_ids):
+    """Create bank transactions for this run's vendor bills and customer invoices.
+
+    Scoped to invoice_ids/bill_ids (created this run) rather than scanning every
+    posted move in the DB — otherwise a second generator run re-creates
+    transactions for every prior invoice too (B4). The posted-state filter stays
+    alongside the id filter: vendor bills can still be in draft if posting failed,
+    and those must not be pulled into reconciliation.
 
     Vendor bills: exact match, negative amounts (outgoing payments).
     Customer invoices: 80% exact, 20% with label typo OR amount deviation (±5-20%).
     """
-    print(f"\n--- ACCOUNTING: Erstelle Banktransaktionen für alle Rechnungen ---")
+    print(f"\n--- ACCOUNTING: Erstelle Banktransaktionen für Rechnungen dieses Laufs ---")
+    if not invoice_ids and not bill_ids:
+        print("-> Keine Rechnungen aus diesem Lauf — keine Banktransaktionen")
+        return []
     journal_id = get_or_create_bank_journal(client)
 
     vendor_bills = client.search_read(
         'account.move',
-        [["move_type", "=", "in_invoice"], ["state", "=", "posted"]],
+        [["id", "in", bill_ids], ["move_type", "=", "in_invoice"], ["state", "=", "posted"]],
         fields=["id", "amount_total", "name", "partner_id"], limit=0,
-    )
+    ) if bill_ids else []
     customer_invoices = client.search_read(
         'account.move',
-        [["move_type", "=", "out_invoice"], ["state", "=", "posted"]],
+        [["id", "in", invoice_ids], ["move_type", "=", "out_invoice"], ["state", "=", "posted"]],
         fields=["id", "amount_total", "name", "partner_id"], limit=0,
-    )
+    ) if invoice_ids else []
 
     total_invoices = len(vendor_bills) + len(customer_invoices)
     if total_invoices == 0:
@@ -220,20 +229,26 @@ def create_bank_transactions_for_all_invoices(client):
 
     random.shuffle(transactions_to_create)
 
-    balance_start = 0.0
-    balance_end_real = round(balance_start + sum(t["amount"] for t in transactions_to_create), 2)
+    batch_total = round(sum(t["amount"] for t in transactions_to_create), 2)
 
     statements = client.search_read(
-        'account.bank.statement', [["journal_id", "=", journal_id]], fields=["id"], limit=1,
+        'account.bank.statement', [["journal_id", "=", journal_id]], fields=["id", "balance_start", "balance_end_real"], limit=1,
     )
     if statements:
         statement_id = statements[0].get("id")
+        balance_start = statements[0].get("balance_start", 0.0) or 0.0
+        prior_end = statements[0].get("balance_end_real", 0.0) or 0.0
+        balance_end_real = round(prior_end + batch_total, 2)
+        # balance_start is left untouched — the statement already has lines
+        # from a prior run, and resetting it would desync the running balance (B4).
         client.write('account.bank.statement', [statement_id], {
-            "balance_start": balance_start, "balance_end_real": balance_end_real,
+            "balance_end_real": balance_end_real,
         })
         print(f"-> Verwende vorhandenen Bank Statement: {statement_id}")
     else:
         print("-> Erstelle neuen Bank Statement...")
+        balance_start = 0.0
+        balance_end_real = round(balance_start + batch_total, 2)
         statement_id = client.create('account.bank.statement', {
             "journal_id": journal_id,
             "name": f"Bank Statement {random.randint(1000, 9999)}",
@@ -285,7 +300,7 @@ def create_accounting_data(client, gemini, ctx: RunContext) -> None:
     # Create customer invoices from confirmed sale orders when possible
     if 'sale' in ctx.installed_modules and ctx.confirmed_order_ids:
         print(f"\n--- ACCOUNTING: Erstelle Kundenrechnungen aus {len(ctx.confirmed_order_ids)} bestätigten Aufträgen ---")
-        create_invoices_from_orders(client, ctx.confirmed_order_ids)
+        ctx.invoice_ids.extend(create_invoices_from_orders(client, ctx.confirmed_order_ids))
     else:
         if not ctx.company_ids or not ctx.product_ids:
             print("⚠️  Keine Partner/Produkte — Kundenrechnungen übersprungen.")
@@ -304,6 +319,7 @@ def create_accounting_data(client, gemini, ctx: RunContext) -> None:
                 inv_id = create_customer_invoice(client, cid, chosen)
                 invoice_ids.append(inv_id)
             post_invoices(client, invoice_ids)
+            ctx.invoice_ids.extend(invoice_ids)
 
     # Vendor bills — draw from component_ids (purchased parts) or fall back to product_ids
     purchase_pool = ctx.component_ids or ctx.product_ids
@@ -323,8 +339,9 @@ def create_accounting_data(client, gemini, ctx: RunContext) -> None:
                 purchase_pool,
                 k=min(len(purchase_pool), random.randint(1, min(3, len(purchase_pool))))
             )
-            create_vendor_bill(client, supplier_id, chosen, description_prefix=f"Vendor Bill {i+1}")
+            bill_id = create_vendor_bill(client, supplier_id, chosen, description_prefix=f"Vendor Bill {i+1}")
+            ctx.bill_ids.append(bill_id)
 
     # Bank transactions (if requested)
     if ctx.module_selections.create_bank_transactions:
-        create_bank_transactions_for_all_invoices(client)
+        create_bank_transactions_for_all_invoices(client, ctx.invoice_ids, ctx.bill_ids)
