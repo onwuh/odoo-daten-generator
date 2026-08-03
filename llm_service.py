@@ -273,8 +273,6 @@ Based on the industry "{industry}", generate ONLY a JSON object with realistic {
 {{
   "job_titles": [exactly {num_jobs} job titles/positions],
   "candidate_names": [exactly {num_candidates} full person names],
-  "candidate_emails": [exactly {num_candidates} email addresses using @example.com domain],
-  "candidate_phones": [exactly {num_candidates} phone numbers in German format],
   "skill_types": [
     {{
       "name": "skill type name",

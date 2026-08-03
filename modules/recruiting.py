@@ -7,8 +7,13 @@ Key improvements:
 
 import random
 
+import text_utils
 from config import RunContext
 from odoo_repository import fetch_skill_levels_map
+
+
+def _random_phone_de() -> str:
+    return f"+49 {random.randint(150, 179)} {random.randint(1000000, 9999999)}"
 
 
 # ---------------------------------------------------------------------------
@@ -349,16 +354,15 @@ def _create_applicants(client, ctx, recruiting_data, num_candidates, job_ids, al
         print("⚠️  Keine Jobs vorhanden — Bewerbungen übersprungen.")
         return []
     names = recruiting_data.get("candidate_names", [])[:num_candidates]
-    emails = recruiting_data.get("candidate_emails", [])[:num_candidates]
-    phones = recruiting_data.get("candidate_phones", [])[:num_candidates]
 
-    # Fill missing data with fallbacks
+    # Fill missing names with fallbacks
     while len(names) < num_candidates:
         names.append(f"Bewerber {len(names) + 1}")
-    while len(emails) < num_candidates:
-        emails.append(f"bewerber{len(emails) + 1}@example.com")
-    while len(phones) < num_candidates:
-        phones.append(f"+49 {random.randint(100, 999)} {random.randint(1000000, 9999999)}")
+
+    # Emails/phones are derived deterministically from the name — never
+    # requested from the LLM (IMPLEMENTIERUNGSPLAN.md A2).
+    emails = [text_utils.email_from_name(n) for n in names]
+    phones = [_random_phone_de() for _ in names]
 
     # Pre-fetch stages once
     stages = get_job_stages(client)
