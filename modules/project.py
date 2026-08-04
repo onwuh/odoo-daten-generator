@@ -1,5 +1,6 @@
 """Project module: creates projects, tasks, stages (batch Gemini call), and timesheets."""
 
+import logging
 import datetime
 import random
 
@@ -7,18 +8,20 @@ import odoo_actions  # kept for create_employee (shared with hr module)
 from config import RunContext
 from fallback_data import FALLBACK_PROJECT_STAGES, FALLBACK_TASK_NAMES
 
+logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Low-level project helpers (previously in odoo_actions.py)
 # ---------------------------------------------------------------------------
 
 def create_project(client, name):
-    print(f"-> Creating Project: {name}")
+    logger.info(f"-> Creating Project: {name}")
     return client.create('project.project', {"name": name})
 
 
 def create_task(client, project_id, name, description=None):
-    print(f"-> Creating Task in project {project_id}: {name}")
+    logger.info(f"-> Creating Task in project {project_id}: {name}")
     values = {"name": name, "project_id": project_id}
     if description:
         values["description"] = description
@@ -55,7 +58,7 @@ def update_task_stage(client, task_id, stage_id):
 
 
 def create_timesheet(client, employee_id, project_id, hours, description, date_str):
-    print(f"-> Creating Timesheet: {hours}h by emp {employee_id} on project {project_id}")
+    logger.info(f"-> Creating Timesheet: {hours}h by emp {employee_id} on project {project_id}")
     values = {
         "name": description,
         "employee_id": employee_id,
@@ -73,32 +76,43 @@ def create_project_data(client, gemini, ctx: RunContext) -> None:
     if num_projects <= 0:
         return
 
-    print("\n--- PROJECT: Erstelle Projekte und Aufgaben ---")
+    logger.info("\n--- PROJECT: Erstelle Projekte und Aufgaben ---")
     project_name_bank = list(ctx.name_banks.get('project_names', []))
     task_name_bank = ctx.name_banks.get('task_names', []) or FALLBACK_TASK_NAMES
     project_types = ['Implementierung', 'Rollout', 'Pilot', 'Migration']
     industry = ctx.industry
 
-    # Map project_id → name and project_id → [task_id, ...]
-    project_names_map = {}
-    project_task_map = {}
-
+    # Pass 1: batch-create all projects (D3 — was 1 create() call per project).
+    project_names = []
     for i in range(num_projects):
         pname = (
             project_name_bank.pop(random.randrange(len(project_name_bank)))
             if project_name_bank
             else f"{random.choice(project_types)} {industry} Projekt"
         )
-        pid = create_project(client, pname)
-        ctx.project_ids.append(pid)
-        project_names_map[pid] = pname
-        project_task_map[pid] = []
+        project_names.append(pname)
 
+    project_ids = client.create_batch('project.project', [{"name": n} for n in project_names])
+    ctx.project_ids.extend(project_ids)
+    project_names_map = dict(zip(project_ids, project_names))
+
+    # Pass 2: batch-create all tasks across all projects in one call, then
+    # slice the returned ids back per project (create_batch preserves order).
+    task_vals_list = []
+    task_counts_by_project = []  # [(project_id, count), ...] same order as project_ids
+    for pid in project_ids:
         task_count = max(1, tasks_per_project + random.randint(-2, 3))
+        task_counts_by_project.append((pid, task_count))
         for _ in range(task_count):
             tname = random.choice(task_name_bank)
-            task_id = create_task(client, pid, tname)
-            project_task_map[pid].append(task_id)
+            task_vals_list.append({"name": tname, "project_id": pid})
+
+    all_task_ids = client.create_batch('project.task', task_vals_list)
+    project_task_map = {}
+    idx = 0
+    for pid, count in task_counts_by_project:
+        project_task_map[pid] = all_task_ids[idx:idx + count]
+        idx += count
 
     # Batch Gemini call for all project stages
     all_project_names = list(project_names_map.values())
@@ -116,7 +130,7 @@ def create_project_data(client, gemini, ctx: RunContext) -> None:
     )
     existing_stage_names = {r["name"].lower() for r in existing_stage_records}
 
-    print("--- PROJECT: Erstelle Phasen und verteile Aufgaben ---")
+    logger.info("--- PROJECT: Erstelle Phasen und verteile Aufgaben ---")
     for pid in ctx.project_ids:
         project_name = project_names_map[pid]
         stages = gemini_stages_map.get(project_name, [])
@@ -137,7 +151,7 @@ def create_project_data(client, gemini, ctx: RunContext) -> None:
         for task_id in project_task_map.get(pid, []):
             update_task_stage(client, task_id, random.choice(stage_ids))
 
-    print(f"✅ {len(ctx.project_ids)} Projekte mit Aufgaben und Phasen erstellt.")
+    logger.info(f"✅ {len(ctx.project_ids)} Projekte mit Aufgaben und Phasen erstellt.")
 
 
 def create_timesheet_data(client, gemini, ctx: RunContext) -> None:
@@ -146,7 +160,7 @@ def create_timesheet_data(client, gemini, ctx: RunContext) -> None:
     if num_timesheets <= 0 or not ctx.project_ids:
         return
 
-    print("\n--- TIMESHEET: Erstelle Zeiteinträge ---")
+    logger.info("\n--- TIMESHEET: Erstelle Zeiteinträge ---")
     # Use employees created this run; fall back to querying Odoo only if none
     employee_ids = list(ctx.employee_ids)
     if not employee_ids:
@@ -159,6 +173,7 @@ def create_timesheet_data(client, gemini, ctx: RunContext) -> None:
             employee_ids.append(odoo_actions.create_employee(client, name))
 
     today = datetime.date.today()
+    timesheet_vals_list = []
     for i in range(num_timesheets):
         emp = employee_ids[i % len(employee_ids)]
         proj = ctx.project_ids[i % len(ctx.project_ids)]
@@ -167,11 +182,13 @@ def create_timesheet_data(client, gemini, ctx: RunContext) -> None:
         # Shift to nearest weekday (Mon=0 … Fri=4)
         if entry_date.weekday() >= 5:
             entry_date -= datetime.timedelta(days=entry_date.weekday() - 4)
-        create_timesheet(
-            client, emp, proj,
-            hours=float(random.randint(1, 8)),
-            description=f"Arbeitstag {i + 1}",
-            date_str=entry_date.isoformat(),
-        )
+        timesheet_vals_list.append({
+            "name": f"Arbeitstag {i + 1}",
+            "employee_id": emp,
+            "project_id": proj,
+            "unit_amount": float(random.randint(1, 8)),
+            "date": entry_date.isoformat(),
+        })
 
-    print(f"✅ {num_timesheets} Zeiteinträge erstellt.")
+    client.create_batch('account.analytic.line', timesheet_vals_list)
+    logger.info(f"✅ {num_timesheets} Zeiteinträge erstellt.")

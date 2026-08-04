@@ -18,6 +18,9 @@ if _ROOT not in sys.path:
 
 from odoo_client import OdooJson2Client
 import odoo_actions
+from logging_setup import configure_logging
+
+configure_logging()
 
 from tests.unit.unit_suite import run_unit_tests, _render_summary as _render_unit_summary
 

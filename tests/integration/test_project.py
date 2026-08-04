@@ -7,7 +7,26 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from modules.project import create_project, create_task, create_project_stage
+from config import DemoCriteria, ModuleSelections, RunContext
+from modules.project import (
+    create_project, create_task, create_project_stage,
+    create_project_data, create_timesheet_data,
+)
+
+
+def _make_rctx(num_projects=2, tasks_per_project=3, hr_timesheet=0):
+    crit = DemoCriteria(
+        mode="both", industry="IT", num_companies=0,
+        num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
+        num_services=0, num_consumables=0, num_storables=0,
+    )
+    return RunContext(
+        criteria=crit,
+        module_selections=ModuleSelections(
+            project=num_projects, tasks_per_project=tasks_per_project, hr_timesheet=hr_timesheet,
+        ),
+        industry="IT", language_name="German", language_code="de_DE", gemini_model_name="test",
+    )
 
 
 def run(client, ctx):
@@ -80,6 +99,43 @@ def run(client, ctx):
         results.append(("project: stage deduplication skips create", True, ""))
     except Exception as e:
         results.append(("project: stage deduplication skips create", False, str(e)))
+
+    # Step 5 — D3: create_project_data end-to-end (batch projects + batch tasks),
+    # gemini=None to prove stage assignment falls back without an LLM call.
+    rctx = None
+    try:
+        rctx = _make_rctx(num_projects=2, tasks_per_project=3)
+        create_project_data(client, None, rctx)
+        assert len(rctx.project_ids) == 2, f"expected 2 projects, got {len(rctx.project_ids)}"
+        tasks = client.search_read(
+            'project.task', [["project_id", "in", rctx.project_ids]],
+            fields=["project_id", "stage_id"], limit=0,
+        )
+        assert len(tasks) >= 2, f"expected at least 1 task per project, got {len(tasks)}"
+        assert any(t.get("stage_id") for t in tasks), "no task got a stage_id assigned"
+        results.append((
+            "project: create_project_data end-to-end (D3 batch), read-back",
+            True, f"{len(rctx.project_ids)} projects, {len(tasks)} tasks",
+        ))
+    except Exception as e:
+        results.append(("project: create_project_data end-to-end (D3 batch), read-back", False, str(e)))
+
+    # Step 6 — D3: create_timesheet_data end-to-end (batch timesheet lines)
+    try:
+        assert rctx is not None and rctx.project_ids, "step 5 must have created projects"
+        rctx.module_selections.hr_timesheet = 4
+        create_timesheet_data(client, None, rctx)
+        lines = client.search_read(
+            'account.analytic.line', [["project_id", "in", rctx.project_ids]],
+            fields=["unit_amount", "employee_id"], limit=0,
+        )
+        assert len(lines) >= 4, f"expected >=4 timesheet lines, got {len(lines)}"
+        results.append((
+            "project: create_timesheet_data end-to-end (D3 batch), read-back",
+            True, f"{len(lines)} lines",
+        ))
+    except Exception as e:
+        results.append(("project: create_timesheet_data end-to-end (D3 batch), read-back", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

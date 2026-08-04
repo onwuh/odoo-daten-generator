@@ -1,12 +1,15 @@
 """CRM module: creates opportunities/leads, distributes across stages,
 posts chatter messages, and creates follow-up activities."""
 
+import logging
 import random
 import datetime
 from collections import defaultdict
 
 from config import RunContext
 from fallback_data import FALLBACK_OPPORTUNITY_TITLES
+
+logger = logging.getLogger(__name__)
 
 _EARLY_STAGE_KEYWORDS = ('neu', 'new', 'eingang', 'incoming', 'qualifizier', 'qualify', 'kontakt', 'contact')
 
@@ -16,7 +19,7 @@ _EARLY_STAGE_KEYWORDS = ('neu', 'new', 'eingang', 'incoming', 'qualifizier', 'qu
 # ---------------------------------------------------------------------------
 
 def create_opportunity(client, partner_id, name, extra_vals=None):
-    print(f"-> Creating Opportunity for partner {partner_id}: {name}")
+    logger.info(f"-> Creating Opportunity for partner {partner_id}: {name}")
     values = {"type": "opportunity", "partner_id": partner_id, "name": name}
     if extra_vals:
         values.update(extra_vals)
@@ -24,7 +27,7 @@ def create_opportunity(client, partner_id, name, extra_vals=None):
 
 
 def create_lead(client, partner_id, name, extra_vals=None):
-    print(f"-> Creating Lead for partner {partner_id}: {name}")
+    logger.info(f"-> Creating Lead for partner {partner_id}: {name}")
     values = {"type": "lead", "partner_id": partner_id, "name": name}
     if extra_vals:
         values.update(extra_vals)
@@ -136,21 +139,29 @@ def create_crm_data(client, gemini, ctx: RunContext) -> None:
     # --- Salespeople pool (always fetched — user_id assignment is independent of chatter) ---
     sales_users = _fetch_sales_users(client)
     if sales_users:
-        print(f"   -> {len(sales_users)} interne Benutzer als Verkäufer verfügbar.")
+        logger.info(f"   -> {len(sales_users)} interne Benutzer als Verkäufer verfügbar.")
 
     # --- Opportunities ---
     if num_opps > 0:
-        print(f"\n--- CRM: Erstelle {num_opps} Opportunities ---")
+        logger.info(f"\n--- CRM: Erstelle {num_opps} Opportunities ---")
         partner_pool = _build_partner_pool(ctx.company_ids, num_opps)
         opp_titles = _unique_titles(opp_titles_bank, num_opps)
-        opp_data = []
+        opp_vals_list = []
+        opp_meta = []  # (partner_id, name, salesperson), same order as opp_vals_list
         for partner_id, name in zip(partner_pool, opp_titles):
             extra = _extra_vals()
             salesperson = random.choice(sales_users) if sales_users else None
             if salesperson:
                 extra['user_id'] = salesperson['user_id']
-            opp_id = create_opportunity(client, partner_id, name, extra)
-            ctx.opportunity_ids.append(opp_id)
+            values = {"type": "opportunity", "partner_id": partner_id, "name": name}
+            values.update(extra)
+            opp_vals_list.append(values)
+            opp_meta.append((partner_id, name, salesperson))
+
+        opp_ids = client.create_batch('crm.lead', opp_vals_list)
+        ctx.opportunity_ids.extend(opp_ids)
+        opp_data = []
+        for opp_id, (partner_id, name, salesperson) in zip(opp_ids, opp_meta):
             opp_data.append({
                 'id': opp_id,
                 'name': name,
@@ -160,14 +171,14 @@ def create_crm_data(client, gemini, ctx: RunContext) -> None:
             })
 
         if stage_ids:
-            print("--- CRM: Verteile Opportunities auf Phasen ---")
+            logger.info("--- CRM: Verteile Opportunities auf Phasen ---")
             stage_to_ids = defaultdict(list)
             for opp_id in ctx.opportunity_ids:
                 stage_to_ids[random.choice(stage_ids)].append(opp_id)
             for stage_id, ids in stage_to_ids.items():
                 client.write('crm.lead', ids, {"stage_id": stage_id})
 
-        print(f"✅ {len(ctx.opportunity_ids)} Opportunities erstellt.")
+        logger.info(f"✅ {len(ctx.opportunity_ids)} Opportunities erstellt.")
 
         # --- Chatter messages ---
         if ctx.module_selections.crm_chatter:
@@ -185,18 +196,21 @@ def create_crm_data(client, gemini, ctx: RunContext) -> None:
 
     # --- Leads ---
     if num_leads > 0:
-        print(f"\n--- CRM: Erstelle {num_leads} Leads ---")
+        logger.info(f"\n--- CRM: Erstelle {num_leads} Leads ---")
         early_ids = _early_stages(all_stages)
         partner_pool = _build_partner_pool(ctx.company_ids, num_leads)
         lead_titles = _unique_titles(opp_titles_bank, num_leads)
+        lead_vals_list = []
         for partner_id, name in zip(partner_pool, lead_titles):
-            lead_id = create_lead(client, partner_id, name, _extra_vals())
-            ctx.lead_ids.append(lead_id)
+            values = {"type": "lead", "partner_id": partner_id, "name": name}
+            values.update(_extra_vals())
+            lead_vals_list.append(values)
+        ctx.lead_ids.extend(client.create_batch('crm.lead', lead_vals_list))
 
         if early_ids:
             client.write('crm.lead', ctx.lead_ids, {"stage_id": random.choice(early_ids)})
 
-        print(f"✅ {len(ctx.lead_ids)} Leads erstellt.")
+        logger.info(f"✅ {len(ctx.lead_ids)} Leads erstellt.")
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +244,7 @@ def _fetch_sales_users(client):
             })
         return result
     except Exception as e:
-        print(f"⚠️  Konnte Sales-User nicht laden: {e}")
+        logger.warning(f"⚠️  Konnte Sales-User nicht laden: {e}")
         return []
 
 
@@ -250,7 +264,7 @@ def _fetch_partner_names(client, partner_ids):
         )
         return {r['id']: {'name': r.get('name', ''), 'email': r.get('email', '')} for r in recs}
     except Exception as e:
-        print(f"⚠️  Konnte Partner-Namen nicht laden: {e}")
+        logger.warning(f"⚠️  Konnte Partner-Namen nicht laden: {e}")
         return {}
 
 
@@ -304,13 +318,13 @@ def _post_chatter_messages(client, gemini, ctx: RunContext, opp_data):
             style=style, messages_per_opp=messages_per_opp,
         )
     except Exception as e:
-        print(f"⚠️  Chatter-Generierung fehlgeschlagen: {e}")
+        logger.warning(f"⚠️  Chatter-Generierung fehlgeschlagen: {e}")
         return
 
     if not messages_by_title:
         return
 
-    print("--- CRM: Poste Chatter-Nachrichten ---")
+    logger.info("--- CRM: Poste Chatter-Nachrichten ---")
     for opp in opp_data:
         opp_id = opp['id']
         raw_msgs = messages_by_title.get(opp['name'], [])
@@ -350,7 +364,7 @@ def _post_chatter_messages(client, gemini, ctx: RunContext, opp_data):
             try:
                 client.call_method('crm.lead', 'message_post', ids=[opp_id], kwargs=kwargs)
             except Exception as e:
-                print(f"⚠️  Chatter für Opp {opp_id} fehlgeschlagen: {e}")
+                logger.warning(f"⚠️  Chatter für Opp {opp_id} fehlgeschlagen: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -368,12 +382,12 @@ def _create_activities(client, opp_ids, ctx: RunContext):
 
     model_id = _get_crm_lead_model_id(client)
     if not model_id:
-        print("⚠️  Aktivitäten übersprungen: ir.model ID für crm.lead nicht gefunden.")
+        logger.warning("⚠️  Aktivitäten übersprungen: ir.model ID für crm.lead nicht gefunden.")
         return
 
     activity_types = _get_activity_types(client)
     if not activity_types:
-        print("⚠️  Aktivitäten übersprungen: keine mail.activity.type gefunden.")
+        logger.warning("⚠️  Aktivitäten übersprungen: keine mail.activity.type gefunden.")
         return
 
     # Prefer call/email/meeting types; fall back to all types
@@ -385,7 +399,7 @@ def _create_activities(client, opp_ids, ctx: RunContext):
     past_pct = act_cfg.get("past_pct", 0)
     today_pct = act_cfg.get("today_pct", 0)
 
-    print(f"--- CRM: Erstelle Aktivitäten für {len(opp_ids)} Opportunities ---")
+    logger.info(f"--- CRM: Erstelle Aktivitäten für {len(opp_ids)} Opportunities ---")
     for opp_id in opp_ids:
         try:
             deadline = _activity_deadline(past_pct, today_pct)
@@ -398,6 +412,6 @@ def _create_activities(client, opp_ids, ctx: RunContext):
                 'summary': activity_type.get('name', 'Follow-up'),
             })
         except Exception as e:
-            print(f"⚠️  Aktivität für Opp {opp_id} fehlgeschlagen: {e}")
+            logger.warning(f"⚠️  Aktivität für Opp {opp_id} fehlgeschlagen: {e}")
 
-    print(f"✅ Aktivitäten erstellt.")
+    logger.info(f"✅ Aktivitäten erstellt.")

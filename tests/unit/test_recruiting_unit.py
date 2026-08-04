@@ -56,17 +56,16 @@ def run():
     try:
         mock_client = MagicMock()
         mock_client.search_read.return_value = []  # no stages, no skills
-        mock_client.create.return_value = 1
         recruiting_data = {"candidate_names": ["Hans Müller", "Anna Schmidt"]}  # no emails/phones keys
 
         created_vals = []
 
-        def _fake_create(model, vals):
+        def _fake_create_batch(model, values_list, context=None):
             if model == "hr.applicant":
-                created_vals.append(vals)
-            return 1
+                created_vals.extend(values_list)
+            return list(range(1, len(values_list) + 1))
 
-        mock_client.create.side_effect = _fake_create
+        mock_client.create_batch.side_effect = _fake_create_batch
 
         _create_applicants(
             mock_client, ctx=None, recruiting_data=recruiting_data, num_candidates=2,

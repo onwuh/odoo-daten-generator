@@ -5,12 +5,15 @@ data_factory.py from name atoms — see IMPLEMENTIERUNGSPLAN.md A1. This module
 no longer parses free-form LLM structure; it only supplies names.
 """
 
+import logging
 from typing import Any, Dict, List, Set
 
 import data_factory
 import fallback_data
 from config import RunContext
 from odoo_repository import resolve_country_ids
+
+logger = logging.getLogger(__name__)
 
 _TARGET_COUNTRIES = ["DE", "AT", "CH"]
 
@@ -33,7 +36,7 @@ def create_master_data(client, gemini, ctx: RunContext, atoms: Dict[str, Any]) -
 # ------------------------------------------------------------------
 
 def _create_products(client, atoms: Dict[str, Any], ctx: RunContext) -> None:
-    print("\n--- Erstelle Produkte ---")
+    logger.info("\n--- Erstelle Produkte ---")
     product_names = atoms.get('product_names', {})
     if not any(product_names.get(k) for k in ('services', 'consumables', 'storables')):
         fallback_pool = fallback_data.FALLBACK_PRODUCTS.get(ctx.industry, fallback_data.FALLBACK_PRODUCTS['IT'])
@@ -46,12 +49,12 @@ def _create_products(client, atoms: Dict[str, Any], ctx: RunContext) -> None:
 
     all_vals = data_factory.build_products(product_names, atoms.get('product_descriptions'))
     if not all_vals:
-        print("-> Keine Produkte zu erstellen.")
+        logger.info("-> Keine Produkte zu erstellen.")
         return
 
     ids = client.create_batch('product.product', all_vals)
     ctx.product_ids.extend(ids)
-    print(f"✅ {len(ids)} Produkte erstellt.")
+    logger.info(f"✅ {len(ids)} Produkte erstellt.")
 
 
 def _distribute_fallback_names(pool: List[str], counts: Dict[str, int]) -> Dict[str, List[str]]:
@@ -93,21 +96,32 @@ def _unique_name(pool: List[str], idx: int, used: Set[str]) -> str:
 
 
 def _create_partners(client, ctx: RunContext, country_map: Dict[str, int]) -> None:
-    print("\n--- Erstelle Kunden und Kontakte ---")
+    logger.info("\n--- Erstelle Kunden und Kontakte ---")
     company_pool = ctx.name_banks.get('company_names') or fallback_data.FALLBACK_COMPANIES
     person_pool = ctx.name_banks.get('employee_names') or fallback_data.FALLBACK_EMPLOYEES
     used_names: Set[str] = set()
 
+    # Pass 1: build + batch-create all companies (D3 — was 1 create() call per company).
+    company_names: List[str] = []
+    company_vals_list: List[Dict[str, Any]] = []
     for idx in range(ctx.criteria.num_companies):
         name = _unique_name(company_pool, idx, used_names)
         vals = data_factory.build_company(name, target_countries=_TARGET_COUNTRIES)
         country_code = vals.pop('country_code')
         if country_code in country_map:
             vals['country_id'] = country_map[country_code]
-        company_id = client.create('res.partner', vals)
-        ctx.company_ids.append(company_id)
-        print(f"   Partner erstellt: {name} (ID: {company_id})")
+        company_names.append(name)
+        company_vals_list.append(vals)
 
+    company_ids = client.create_batch('res.partner', company_vals_list)
+    ctx.company_ids.extend(company_ids)
+    for name, company_id in zip(company_names, company_ids):
+        logger.info(f"   Partner erstellt: {name} (ID: {company_id})")
+
+    # Pass 2: build + batch-create all contacts across all companies in one call
+    # (contact IDs are never referenced downstream — safe to not track them individually).
+    all_contact_vals: List[Dict[str, Any]] = []
+    for company_id in company_ids:
         contacts = data_factory.build_contacts(
             ctx.criteria.num_delivery_contacts,
             ctx.criteria.num_invoice_contacts,
@@ -119,4 +133,6 @@ def _create_partners(client, ctx: RunContext, country_map: Dict[str, int]) -> No
             contact_cc = cvals.pop('country_code', None)
             if contact_cc and contact_cc in country_map:
                 cvals['country_id'] = country_map[contact_cc]
-            client.create('res.partner', cvals)
+            all_contact_vals.append(cvals)
+
+    client.create_batch('res.partner', all_contact_vals)

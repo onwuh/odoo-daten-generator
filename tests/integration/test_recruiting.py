@@ -15,7 +15,25 @@ from modules.recruiting import (
     create_skill,
     _create_applicants,
     _create_skills,
+    create_recruiting_data,
 )
+from config import DemoCriteria, ModuleSelections, RunContext
+
+
+def _make_rctx(num_jobs, num_candidates):
+    crit = DemoCriteria(
+        mode="both", industry="IT", num_companies=0,
+        num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
+        num_services=0, num_consumables=0, num_storables=0,
+    )
+    return RunContext(
+        criteria=crit,
+        module_selections=ModuleSelections(hr_recruitment={
+            "num_jobs": num_jobs, "num_candidates": num_candidates,
+            "create_skills": False, "num_skill_types": 0, "skills_per_type": 0,
+        }),
+        industry="IT", language_name="German", language_code="de_DE", gemini_model_name="test",
+    )
 
 
 def run(client, ctx):
@@ -204,6 +222,31 @@ def run(client, ctx):
         ))
     except Exception as e:
         results.append(("recruiting: repeat run does not duplicate skills/levels (B13)", False, str(e)))
+
+    # Step 7 — D3: create_recruiting_data end-to-end (batched jobs + applicants),
+    # gemini=None to prove it needs no LLM call for the batch path.
+    # create_recruiting_data does not persist job_ids on ctx (pre-existing, not
+    # a D3 concern), so new jobs are identified via a before/after id diff.
+    try:
+        before_job_ids = {j["id"] for j in client.search_read('hr.job', [], fields=["id"], limit=0)}
+        rctx = _make_rctx(num_jobs=2, num_candidates=3)
+        create_recruiting_data(client, None, rctx)
+        after_job_ids = {j["id"] for j in client.search_read('hr.job', [], fields=["id"], limit=0)}
+        new_job_ids = list(after_job_ids - before_job_ids)
+        assert len(new_job_ids) == 2, f"expected 2 new jobs, got {len(new_job_ids)}"
+        applicants = client.search_read(
+            'hr.applicant', [["job_id", "in", new_job_ids]],
+            fields=["partner_name", "email_from", "partner_phone"], limit=0,
+        )
+        assert len(applicants) == 3, f"expected 3 applicants, got {len(applicants)}"
+        assert all(a.get("email_from") and a.get("partner_phone") for a in applicants), \
+            "applicant missing derived email/phone"
+        results.append((
+            "recruiting: create_recruiting_data end-to-end (D3 batch), read-back",
+            True, f"{len(new_job_ids)} jobs, {len(applicants)} applicants",
+        ))
+    except Exception as e:
+        results.append(("recruiting: create_recruiting_data end-to-end (D3 batch), read-back", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results
