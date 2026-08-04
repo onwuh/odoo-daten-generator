@@ -241,8 +241,14 @@ class OdooJson2Client:
                 f"/call/{model}/{method}",
                 f"/{model}/{method}",
             ], call_payload)
-        except requests.HTTPError:
-            # 3) Last fallback: direct without args/kwargs
+        except requests.HTTPError as e:
+            # 3) Last fallback: direct without args/kwargs. Only safe when there
+            # was never anything meaningful to send in the first place (B11) —
+            # otherwise this silently drops ids/args/kwargs and fires an empty
+            # call (e.g. message_post() with no message, action_confirm() on
+            # nothing), masking the real error instead of surfacing it.
+            if ids or args or kwargs:
+                raise
             fallback_payload: Dict[str, Any] = {}
             if context is not None:
                 fallback_payload["context"] = context
