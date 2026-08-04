@@ -107,8 +107,17 @@ def get_existing_leaves(client, emp_id: int) -> list:
 
 
 def validate_leave_request(client, leave_id: int) -> bool:
-    """Call action_approve on a single hr.leave record."""
+    """Call action_approve on a single hr.leave record.
+
+    Some hr.work.entry.type configs (leave_validation_type e.g. 'both') auto-validate
+    hr.leave on create for this API user — action_approve on an already-validated
+    record raises UserError("You cannot approve this leave.") (verified live,
+    saas-19.4). Check state first instead of calling unconditionally.
+    """
     try:
+        rec = client.search_read('hr.leave', [['id', '=', leave_id]], fields=['state'], limit=1)
+        if rec and rec[0].get('state') == 'validate':
+            return True
         client.call_method('hr.leave', 'action_approve', ids=[leave_id])
         return True
     except Exception as e:
