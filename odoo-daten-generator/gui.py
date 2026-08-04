@@ -137,6 +137,7 @@ class App(ctk.CTk):
         self.language_code: str = "de_DE"
         self.language_name: str = "German"
         self.suggested_industry: str | None = None
+        self.detected_odoo_version: str | None = None
         self.existing_company_ids: list = []
         self.existing_product_ids: list = []
 
@@ -267,6 +268,7 @@ class App(ctk.CTk):
         _add_row("company", "Firmenname")
         _add_row("language", "Sprache")
         _add_row("modules", "Installierte Module")
+        _add_row("version", "Odoo-Version")
         _add_row("existing", "Vorhandene Stammdaten")
         _add_row("llm", "LLM-Verbindung")
 
@@ -344,6 +346,25 @@ class App(ctk.CTk):
                 except Exception as exc:
                     msg = str(exc)[:100]
                     self.after(0, lambda m=msg: _set("modules", False, m))
+
+            # -- Odoo server version (non-fatal: detection failure/unknown version
+            # degrades gracefully, does not block "Weiter") --
+            self.after(0, lambda: _pending("version"))
+            if all_ok:
+                try:
+                    version = odoo_actions.get_server_version(self.client)
+                    self.detected_odoo_version = version
+                    if version:
+                        warnings = odoo_actions.check_field_compatibility(self.client)
+                        display = version
+                        if warnings:
+                            display += f" · {len(warnings)} Feld-Warnung(en) siehe Log"
+                        self.after(0, lambda d=display: _set("version", True, d))
+                    else:
+                        self.after(0, lambda: _set("version", False, "unbekannt"))
+                except Exception as exc:
+                    msg = str(exc)[:100]
+                    self.after(0, lambda m=msg: _set("version", False, m))
 
             # -- Existing master data --
             self.after(0, lambda: _pending("existing"))

@@ -147,7 +147,33 @@ bereits ihren Kernbug behoben; im direkten Folgesprint (2026-08-04) ergänzt: B7
 entschied gegen den ursprünglich vorgeschlagenen `RunContext.selected_modules`-Umbau — der
 Bug war bereits funktional behoben und kein Modul braucht das Feld; nur dokumentiert, kein
 Code-Change). S3 (A1–A3), S2 (B4/B5/B6/B9/B12/B13) und S1 (B1–B3, B16) waren bereits vorher
-erledigt. Nächster Sprint: S5 — API-Versions-Schicht (R5), siehe §4 Roadmap.
+erledigt.
+
+Sprint S5 aus `IMPLEMENTIERUNGSPLAN.md` (2026-08-04) — **Tier 1 abgeschlossen, Tier 2
+zurückgestellt**, nach Peer-Review eines vorab geschriebenen Plans durch einen fremden
+Opus-Agenten (Kontext nur Plan + Live-Repo, keine Konversationshistorie): `odoo_actions.
+get_server_version()` (Versions-Erkennung, GUI-Statuszeile "Odoo-Version" in Screen 2,
+nicht-blockierend) + `odoo_actions.check_field_compatibility()` (`fields_get`-Warnliste
+gegen ~16 kuratierte Modell/Feld-Paare, log-only). Beide ohne 🔒-Berührung. Tier 2
+(`api_versions/*.json`-Mapping-Dateien + Client-Adapter in `odoo_client.py` 🔒) bewusst
+zurückgestellt: die Review deckte auf, dass die ursprüngliche Kanonische-Version-Annahme
+(19.2) veraltet war (tatsächlich 19.4, siehe unten) **und** dass zwischen den einzigen zwei
+bekannten Versionen (19.2/19.4) kein einziger belegter Feld-/Methoden-Rename existiert, nur
+eine belegte Feld-Entfernung (`hr.leave.allocation.allocation_type`), die keine Mapping-Zeile
+brauchte. Eine Adapter-Infrastruktur ohne einen einzigen realen Delta-Fall wäre nur gegen
+synthetische Testdaten prüfbar — Tier 2 wird gebaut, sobald eine zweite reale Zielversion
+einen konkreten Rename liefert. Details, Korrekturen und die volle Review-Zusammenfassung:
+`IMPLEMENTIERUNGSPLAN.md` §4 R5-Statusblock. Nebenbefund aus dem ersten Live-Lauf der neuen
+Warnliste: neuer Bug B17 (`hr.py:33`, `shortcut_behavior` existiert nicht auf saas-19.4) —
+dokumentiert, nicht im S5-Scope gefixt.
+
+Odoo-Zielversion-Korrektur bestätigt durch diesen Sprint: `ir.module.module`/`base`/
+`latest_version` liefert live `"saas~19.4.1.3"` (nicht `"saas~19.2.1.0.0"` wie ursprünglich
+angenommenes Format — eine Dot-Segment-Anzahl weniger; Parser darf keine feste Segmentzahl
+voraussetzen).
+
+Nächster Sprint: S6 — PDF (R1/P1+P2), siehe §4/§5 Roadmap; S5 Tier 2 bleibt im Backlog bis
+zum oben genannten Auslöser.
 
 **Prozess-Hinweis (2026-08-04):** Dieser Abschnitt lag zeitweise eine ganze Session hinter dem
 tatsächlichen Code-Stand zurück — D1/D2/D3/B11/B14/B15 waren bereits implementiert und getestet,
