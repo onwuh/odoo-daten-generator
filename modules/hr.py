@@ -1,11 +1,14 @@
 """HR module: creates employee records, leave allocations, and vacation entries."""
 
+import logging
 import datetime
 import random
 
 import odoo_actions  # kept for create_employee (shared with project module)
 from config import RunContext
 from fallback_data import FALLBACK_EMPLOYEES
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -20,9 +23,9 @@ def get_or_create_annual_leave_type(client):
         limit=1,
     )
     if results:
-        print(f"-> Using existing leave type: {results[0]['name']} (ID: {results[0]['id']})")
+        logger.info(f"-> Using existing leave type: {results[0]['name']} (ID: {results[0]['id']})")
         return results[0]['id']
-    print("-> Creating annual leave type")
+    logger.info("-> Creating annual leave type")
     return client.create('hr.work.entry.type', {
         'name': 'Jahresurlaub',
         'code': 'JURL',
@@ -40,7 +43,7 @@ def create_leave_allocation(client, employee_id, work_entry_type_id, days, date_
     """date_from/date_to (date objects) must cover the full window leave requests
     will be scattered across — a fixed calendar year misses requests that land
     in a following year when timescale_days pushes far enough into the future (B5)."""
-    print(f"-> Creating leave allocation: {days} days for emp {employee_id} ({date_from} – {date_to})")
+    logger.info(f"-> Creating leave allocation: {days} days for emp {employee_id} ({date_from} – {date_to})")
     alloc_id = client.create('hr.leave.allocation', {
         'name': f'Urlaub {date_from.year}-{date_to.year}' if date_from.year != date_to.year else f'Urlaub {date_from.year}',
         'employee_id': employee_id,
@@ -52,12 +55,12 @@ def create_leave_allocation(client, employee_id, work_entry_type_id, days, date_
     try:
         client.call_method('hr.leave.allocation', 'action_approve', ids=[alloc_id])
     except Exception as e:
-        print(f"[leave_allocation] approve failed for {alloc_id}: {e}")
+        logger.warning(f"[leave_allocation] approve failed for {alloc_id}: {e}")
     return alloc_id
 
 
 def create_leave_request(client, employee_id, work_entry_type_id, date_from_str, date_to_str):
-    print(f"-> Creating leave request for emp {employee_id}: {date_from_str} – {date_to_str}")
+    logger.info(f"-> Creating leave request for emp {employee_id}: {date_from_str} – {date_to_str}")
     # request_date_from/to are the date-only fields Odoo uses for overlap checks.
     # If omitted, Odoo defaults them to today, causing spurious overlap errors.
     request_date_from = date_from_str[:10]
@@ -74,7 +77,7 @@ def create_leave_request(client, employee_id, work_entry_type_id, date_from_str,
         })
         return leave_id
     except Exception as e:
-        print(f"[leave_request] create failed for emp {employee_id}: {e}")
+        logger.warning(f"[leave_request] create failed for emp {employee_id}: {e}")
         return None
 
 
@@ -96,10 +99,10 @@ def get_existing_leaves(client, emp_id: int) -> list:
                     datetime.date.fromisoformat(df),
                     datetime.date.fromisoformat(dt),
                 ))
-        print(f"   [timeoff] emp {emp_id}: {len(result)} existing leaves loaded")
+        logger.info(f"   [timeoff] emp {emp_id}: {len(result)} existing leaves loaded")
         return result
     except Exception as e:
-        print(f"[get_existing_leaves] failed for emp {emp_id}: {e}")
+        logger.warning(f"[get_existing_leaves] failed for emp {emp_id}: {e}")
         return []
 
 
@@ -109,7 +112,7 @@ def validate_leave_request(client, leave_id: int) -> bool:
         client.call_method('hr.leave', 'action_approve', ids=[leave_id])
         return True
     except Exception as e:
-        print(f"[leave_request] approve failed for {leave_id}: {e}")
+        logger.warning(f"[leave_request] approve failed for {leave_id}: {e}")
         return False
 
 
@@ -123,20 +126,21 @@ def create_hr_data(client, gemini, ctx: RunContext) -> None:
     if num_employees <= 0:
         return
 
-    print("\n--- EMPLOYEES: Erstelle Mitarbeiter ---")
+    logger.info("\n--- EMPLOYEES: Erstelle Mitarbeiter ---")
     employee_names = ctx.name_banks.get('employee_names', []) or FALLBACK_EMPLOYEES
 
-    for i in range(num_employees):
-        name = employee_names[i % len(employee_names)]
-        emp_id = odoo_actions.create_employee(client, name)
-        ctx.employee_ids.append(emp_id)
+    employee_vals_list = [
+        {"name": employee_names[i % len(employee_names)]}
+        for i in range(num_employees)
+    ]
+    ctx.employee_ids.extend(client.create_batch('hr.employee', employee_vals_list))
 
-    print(f"✅ {len(ctx.employee_ids)} Mitarbeiter erstellt.")
+    logger.info(f"✅ {len(ctx.employee_ids)} Mitarbeiter erstellt.")
 
     try:
         create_leave_data(client, ctx)
     except Exception as e:
-        print(f"⚠️  Urlaubsdaten fehlgeschlagen: {e} — wird übersprungen.")
+        logger.warning(f"⚠️  Urlaubsdaten fehlgeschlagen: {e} — wird übersprungen.")
 
 
 def create_leave_data(client, ctx: RunContext) -> list:
@@ -164,7 +168,7 @@ def create_leave_data(client, ctx: RunContext) -> list:
     timescale_days = int(to_params.get("timescale_days", 180))
     validate_pct = int(to_params.get("validate_pct", 100))
 
-    print("\n--- TIMEOFF: Erstelle Urlaubsdaten ---")
+    logger.info("\n--- TIMEOFF: Erstelle Urlaubsdaten ---")
     leave_type_id = get_or_create_annual_leave_type(client)
     today = datetime.date.today()
 
@@ -198,7 +202,7 @@ def create_leave_data(client, ctx: RunContext) -> list:
                     start, end = candidate, candidate_end
                     break
             if start is None:
-                print(f"[timeoff] No non-overlapping past slot for emp {emp_id}, skipping")
+                logger.info(f"[timeoff] No non-overlapping past slot for emp {emp_id}, skipping")
                 continue
             try:
                 leave_id = create_leave_request(
@@ -206,7 +210,7 @@ def create_leave_data(client, ctx: RunContext) -> list:
                     f"{start} 08:00:00", f"{end} 17:00:00",
                 )
             except Exception as e:
-                print(f"[timeoff] leave creation error emp {emp_id}: {e}")
+                logger.warning(f"[timeoff] leave creation error emp {emp_id}: {e}")
                 leave_id = None
             scheduled[emp_id].append((start, end))
             if leave_id:
@@ -222,7 +226,7 @@ def create_leave_data(client, ctx: RunContext) -> list:
                     start, end = candidate, candidate_end
                     break
             if start is None:
-                print(f"[timeoff] No non-overlapping future slot for emp {emp_id}, skipping")
+                logger.info(f"[timeoff] No non-overlapping future slot for emp {emp_id}, skipping")
                 continue
             try:
                 leave_id = create_leave_request(
@@ -230,7 +234,7 @@ def create_leave_data(client, ctx: RunContext) -> list:
                     f"{start} 08:00:00", f"{end} 17:00:00",
                 )
             except Exception as e:
-                print(f"[timeoff] leave creation error emp {emp_id}: {e}")
+                logger.warning(f"[timeoff] leave creation error emp {emp_id}: {e}")
                 leave_id = None
             scheduled[emp_id].append((start, end))
             if leave_id:
@@ -246,7 +250,7 @@ def create_leave_data(client, ctx: RunContext) -> list:
         for lid in to_validate:
             validate_leave_request(client, lid)
 
-    print(f"✅ Urlaubsdaten fuer {len(ctx.employee_ids)} Mitarbeiter erstellt ({len(all_leave_ids)} Eintraege).")
+    logger.info(f"✅ Urlaubsdaten fuer {len(ctx.employee_ids)} Mitarbeiter erstellt ({len(all_leave_ids)} Eintraege).")
     return all_leave_ids
 
 

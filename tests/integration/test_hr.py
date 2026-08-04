@@ -7,12 +7,26 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 import odoo_actions  # kept for create_employee (shared utility)
+from config import DemoCriteria, ModuleSelections, RunContext
 from modules.hr import (
     get_or_create_annual_leave_type,
     create_leave_allocation,
     create_leave_request,
     validate_leave_request,
+    create_hr_data,
 )
+
+
+def _make_rctx(num_employees):
+    crit = DemoCriteria(
+        mode="both", industry="IT", num_companies=0,
+        num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
+        num_services=0, num_consumables=0, num_storables=0,
+    )
+    return RunContext(
+        criteria=crit, module_selections=ModuleSelections(hr=num_employees), industry="IT",
+        language_name="German", language_code="de_DE", gemini_model_name="test",
+    )
 
 
 def run(client, ctx):
@@ -141,6 +155,24 @@ def run(client, ctx):
         ))
     except Exception as e:
         results.append(("hr: B5 — leave beyond current year approved", False, str(e)))
+
+    # Step — D3: create_hr_data employee batch, end-to-end, read-back
+    try:
+        rctx = _make_rctx(num_employees=3)
+        rctx.name_banks = {"employee_names": ["D3 Test Eins", "D3 Test Zwei", "D3 Test Drei"]}
+        create_hr_data(client, None, rctx)
+        assert len(rctx.employee_ids) == 3, f"expected 3 employees, got {len(rctx.employee_ids)}"
+        recs = client.search_read(
+            'hr.employee', [["id", "in", rctx.employee_ids]], fields=["name"], limit=0,
+        )
+        names = {r["name"] for r in recs}
+        assert names == {"D3 Test Eins", "D3 Test Zwei", "D3 Test Drei"}, names
+        results.append((
+            "hr: create_hr_data employee batch (D3), read-back",
+            True, f"{len(rctx.employee_ids)} employees",
+        ))
+    except Exception as e:
+        results.append(("hr: create_hr_data employee batch (D3), read-back", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results
