@@ -889,7 +889,7 @@ class App(ctk.CTk):
                 language_name=self.language_name,
                 language_code=self.language_code,
                 gemini_model_name=self.llm.model_name,
-                installed_modules=selected_modules if mode_val == "both" else set(),
+                installed_modules=self.installed_modules,
                 feature_flags=self.feature_flags,
             )
 
@@ -899,7 +899,7 @@ class App(ctk.CTk):
 
             ctx.skip_master_data = skip_master_var.get()
 
-            self._show_screen4(ctx, sel)
+            self._show_screen4(ctx, sel, selected_modules)
 
         ctk.CTkButton(
             bottom_bar, text="Daten generieren →", width=240, command=_on_generate,
@@ -909,7 +909,7 @@ class App(ctk.CTk):
     # Screen 4: Fortschritt
     # -----------------------------------------------------------------------
 
-    def _show_screen4(self, ctx: RunContext, sel: ModuleSelections):
+    def _show_screen4(self, ctx: RunContext, sel: ModuleSelections, selected_modules: set):
         self._clear()
         # Drain old log queue
         while not self._log_queue.empty():
@@ -937,7 +937,9 @@ class App(ctk.CTk):
         module_order_keys = ["mrp", "crm", "sale", "account", "hr",
                              "project", "hr_timesheet", "hr_recruitment"]
         for key in module_order_keys:
-            if key in ctx.installed_modules:
+            # B10: gate on installed AND selected — ctx.installed_modules is now
+            # the true Odoo-probed set (may be a superset of what the user picked).
+            if key in ctx.installed_modules and key in selected_modules:
                 active_keys.append(key)
 
         for key in active_keys:
