@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "file=\"$CLAUDE_TOOL_INPUT_FILE_PATH\"; if [[ \"$file\" == *.py ]]; then python3 -m py_compile \"$file\" && echo \"Syntax OK: $file\"; fi",
+            "description": "Syntax-check Python files after every edit"
+          }
+        ]
+      }
+    ]
+  }
+}

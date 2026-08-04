@@ -1,7 +1,9 @@
-tests/test_config.ini
-config.ini
+.venv/
 __pycache__/
 *.pyc
 .DS_Store
-.venv/
 seeds/cache/
+.claude/settings.local.json
+config.ini
+test_config.ini
+.claude/scheduled_tasks.lock
