@@ -6,14 +6,17 @@ Domain-specific helpers live in their respective modules:
   modules/hr.py, modules/project.py, modules/mrp.py, modules/recruiting.py
 """
 
+import logging
 from typing import Any, Dict, List, Optional, Set
+
+logger = logging.getLogger(__name__)
 
 
 def create_customer(client, customer_data: Dict[str, Any]) -> int:
     """Creates a new customer/partner and returns its ID."""
-    print(f"-> Creating Customer/Contact: {customer_data.get('name')}...")
+    logger.info(f"-> Creating Customer/Contact: {customer_data.get('name')}...")
     customer_id = client.create('res.partner', customer_data)
-    print(f"   ID: {customer_id}")
+    logger.info(f"   ID: {customer_id}")
     return customer_id
 
 
@@ -22,9 +25,9 @@ def create_product(client, product_data: Dict[str, Any]) -> int:
 
     Shared by master_data and mrp modules.
     """
-    print(f"-> Creating Product: {product_data.get('name')}...")
+    logger.info(f"-> Creating Product: {product_data.get('name')}...")
     product_id = client.create('product.product', product_data)
-    print(f"   ID: {product_id}")
+    logger.info(f"   ID: {product_id}")
     return product_id
 
 
@@ -33,7 +36,7 @@ def create_employee(client, name: str) -> int:
 
     Shared by hr and project (fallback) modules.
     """
-    print(f"-> Creating Employee: {name}")
+    logger.info(f"-> Creating Employee: {name}")
     return client.create('hr.employee', {"name": name})
 
 
@@ -125,7 +128,7 @@ def get_main_company_name(client) -> Optional[str]:
                 if partners and partners[0].get("name"):
                     return partners[0]["name"]
     except Exception as e:
-        print(f"-> Warning: Could not determine company name: {e}")
+        logger.warning(f"-> Warning: Could not determine company name: {e}")
     return None
 
 
@@ -163,5 +166,5 @@ def get_main_company_language(client) -> str:
             if users and users[0].get("lang"):
                 return users[0]["lang"]
     except Exception as e:
-        print(f"-> Warning: Could not determine company language: {e}")
+        logger.warning(f"-> Warning: Could not determine company language: {e}")
     return "de_DE"

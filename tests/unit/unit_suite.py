@@ -11,7 +11,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from tests.unit import test_leave_helpers, test_hr_unit, test_guard_patterns, test_llm_service, test_odoo_actions_unit, test_project_unit, test_data_factory, test_recruiting_unit
+from tests.unit import test_leave_helpers, test_hr_unit, test_guard_patterns, test_llm_service, test_odoo_actions_unit, test_project_unit, test_data_factory, test_recruiting_unit, test_logging_setup
 
 _MODULES = [
     ("leave_helpers",      test_leave_helpers.run),
@@ -22,6 +22,7 @@ _MODULES = [
     ("project_unit",       test_project_unit.run),
     ("data_factory",       test_data_factory.run),
     ("recruiting_unit",    test_recruiting_unit.run),
+    ("logging_setup",      test_logging_setup.run),
 ]
 
 

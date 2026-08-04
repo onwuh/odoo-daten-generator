@@ -14,6 +14,7 @@ Key features:
 - Disk caching for seed data (seeds/cache/)
 """
 
+import logging
 import hashlib
 import json
 import re
@@ -21,6 +22,8 @@ import time
 import concurrent.futures
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 _CACHE_DIR = Path(__file__).parent / "seeds" / "cache"
 _PROMPT_VERSION = "v3"  # bump when prompt wording changes to bust stale cache entries
@@ -113,7 +116,7 @@ class LLMService:
                 msg = str(e)
             else:
                 self.total_tokens += in_tok + out_tok
-                print(f"[{self.provider.upper()}] {in_tok} in + {out_tok} out = "
+                logger.info(f"[{self.provider.upper()}] {in_tok} in + {out_tok} out = "
                       f"{in_tok + out_tok} tokens (Gesamtlauf: {self.total_tokens}, "
                       f"Anfragen: {self.total_calls})")
                 return text
@@ -122,10 +125,10 @@ class LLMService:
 
             retryable = any(hint in msg.lower() for hint in _RETRYABLE_HINTS)
             if retryable and attempt < 3:
-                print(f"❌ LLM request failed (attempt {attempt}/3): {msg} — retry in 20s...")
+                logger.warning(f"❌ LLM request failed (attempt {attempt}/3): {msg} — retry in 20s...")
                 time.sleep(20)
             else:
-                print(f"❌ LLM request failed: {msg}")
+                logger.warning(f"❌ LLM request failed: {msg}")
                 return None
         return None
 
@@ -138,7 +141,7 @@ class LLMService:
         try:
             return json.loads(json_text)
         except json.JSONDecodeError as e:
-            print(f"❌ JSON parsing failed: {e}\nRaw (first 300 chars): {json_text[:300]}")
+            logger.warning(f"❌ JSON parsing failed: {e}\nRaw (first 300 chars): {json_text[:300]}")
             return None
 
     # ------------------------------------------------------------------
@@ -172,7 +175,7 @@ class LLMService:
         not permanently mask a future successful one.
         """
         if (cached := self._cache_load(cache_key)) is not None:
-            print(f"✅ Aus Cache geladen ({cache_key}.json).")
+            logger.info(f"✅ Aus Cache geladen ({cache_key}.json).")
             return cached
         data = build_fn()
         if data:
@@ -190,12 +193,12 @@ Return ONLY a single word or short phrase (2-3 words max) describing the industr
 Examples: "IT", "Fertigung", "Handel", "Dienstleistung", "Medizin", "Bildung", "IT-Dienstleistung"
 Return ONLY the industry name, no explanation, no JSON, no quotes, just the text.
 """
-        print(f"Frage LLM ({self.provider}/{self.model_name}) nach Branche für '{company_name}'...")
+        logger.info(f"Frage LLM ({self.provider}/{self.model_name}) nach Branche für '{company_name}'...")
         text = self._call(prompt, timeout=30)
         if not text:
             return None
         industry = text.strip().strip('"').strip("'")
-        print(f"✅ Erkannte Branche: {industry}")
+        logger.info(f"✅ Erkannte Branche: {industry}")
         return industry
 
     def fetch_creative_atoms(self, criteria: Dict[str, Any], language: str = "German") -> Optional[Dict[str, Any]]:
@@ -232,10 +235,10 @@ Gib NUR ein sauberes JSON-Objekt zurück, Sprache: {language}:
 }}
 Keine Preise, keine Adressen, keine anderen Felder — nur Namen und Beschreibungen.
 """
-            print(f"Frage LLM ({self.provider}/{self.model_name}) nach kreativen Daten...")
+            logger.info(f"Frage LLM ({self.provider}/{self.model_name}) nach kreativen Daten...")
             data = self._call_json(prompt, timeout=90)
             if data:
-                print("✅ Kreative Daten vom LLM empfangen.")
+                logger.info("✅ Kreative Daten vom LLM empfangen.")
             return data
 
         return self._cached_llm_call(cache_key, _build)
@@ -263,10 +266,10 @@ Based on the industry "{industry}", generate ONLY a JSON object with arrays of r
 - Names must fit the given industry.
 - Supplier names should be realistic vendor/supplier company names for the industry.
 """
-            print(f"Frage LLM ({self.provider}/{self.model_name}) nach Namensvorschlägen...")
+            logger.info(f"Frage LLM ({self.provider}/{self.model_name}) nach Namensvorschlägen...")
             data = self._call_json(prompt, timeout=90)
             if data:
-                print("✅ Namensvorschläge vom LLM empfangen.")
+                logger.info("✅ Namensvorschläge vom LLM empfangen.")
             return data
 
         return self._cached_llm_call(cache_key, _build)
@@ -304,10 +307,10 @@ Examples for skill types:
 - Skill types, skills, and levels must logically fit together.
 - Use {language} language.
 """
-        print(f"Frage LLM ({self.provider}/{self.model_name}) nach Recruiting-Daten für {industry}...")
+        logger.info(f"Frage LLM ({self.provider}/{self.model_name}) nach Recruiting-Daten für {industry}...")
         data = self._call_json(prompt, timeout=120)
         if data:
-            print("✅ Recruiting-Daten vom LLM empfangen.")
+            logger.info("✅ Recruiting-Daten vom LLM empfangen.")
         return data
 
     def fetch_job_summaries_batch(
@@ -330,10 +333,10 @@ Return ONLY valid JSON, no markdown, no code blocks:
   "Job Title 2": "summary text..."
 }}
 """
-            print(f"Frage LLM ({self.provider}/{self.model_name}) nach Job-Beschreibungen ({len(job_titles)} Stellen)...")
+            logger.info(f"Frage LLM ({self.provider}/{self.model_name}) nach Job-Beschreibungen ({len(job_titles)} Stellen)...")
             data = self._call_json(prompt, timeout=120)
             if isinstance(data, dict):
-                print(f"✅ Job-Beschreibungen vom LLM empfangen: {len(data)} Stellen")
+                logger.info(f"✅ Job-Beschreibungen vom LLM empfangen: {len(data)} Stellen")
                 return data
             return {}
 
@@ -367,10 +370,10 @@ Return ONLY valid JSON, no markdown, no code blocks:
   "set_1": ["Stage 1", "Stage 2", ...],
   "set_2": ["Phase 1", "Phase 2", ...]
 }}"""
-            print(f"Frage LLM ({self.provider}/{self.model_name}) nach Projektphasen ({num_projects} Projekte)...")
+            logger.info(f"Frage LLM ({self.provider}/{self.model_name}) nach Projektphasen ({num_projects} Projekte)...")
             data = self._call_json(prompt, timeout=120)
             if isinstance(data, dict) and data:
-                print(f"✅ Projektphasen vom LLM empfangen: {len(data)} Sets")
+                logger.info(f"✅ Projektphasen vom LLM empfangen: {len(data)} Sets")
                 return data
             return {}
 
@@ -490,10 +493,10 @@ Return ONLY valid JSON, no markdown, no code blocks, keyed by "title":
     {{"type": "note", "speaker": "salesperson", "body": "..."}}
   ]
 }}"""
-        print(f"Frage LLM ({self.provider}/{self.model_name}) nach Chatter-Nachrichten ({len(opportunity_titles)} Opps, style={style})...")
+        logger.info(f"Frage LLM ({self.provider}/{self.model_name}) nach Chatter-Nachrichten ({len(opportunity_titles)} Opps, style={style})...")
         data = self._call_json(prompt, timeout=180)
         if isinstance(data, dict):
-            print(f"✅ Chatter-Nachrichten vom LLM empfangen: {len(data)} Einträge")
+            logger.info(f"✅ Chatter-Nachrichten vom LLM empfangen: {len(data)} Einträge")
             return data
         return {}
 
@@ -532,10 +535,10 @@ Rules:
 - Names must be realistic manufacturing sub-assemblies or parts.
 - Keep names concise (max 6 words).
 - Provide exactly {components_per_bom} components per set."""
-            print(f"Frage LLM ({self.provider}/{self.model_name}) nach BOM-Komponenten ({num_products} Produkte)...")
+            logger.info(f"Frage LLM ({self.provider}/{self.model_name}) nach BOM-Komponenten ({num_products} Produkte)...")
             data = self._call_json(prompt, timeout=120)
             if isinstance(data, dict) and data:
-                print(f"✅ BOM-Komponenten vom LLM empfangen: {len(data)} Sets")
+                logger.info(f"✅ BOM-Komponenten vom LLM empfangen: {len(data)} Sets")
                 return data
             return {}
 
