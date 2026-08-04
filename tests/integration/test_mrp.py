@@ -6,6 +6,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 import odoo_actions  # kept for create_product (shared utility)
+from config import DemoCriteria, ModuleSelections, RunContext
 from modules.mrp import (
     get_product_template_id,
     create_bom,
@@ -14,7 +15,20 @@ from modules.mrp import (
     create_manufacturing_order,
     confirm_manufacturing_order,
     create_workcenter,
+    create_mrp_data,
 )
+
+
+def _make_rctx(mrp_config):
+    crit = DemoCriteria(
+        mode="both", industry="IT", num_companies=0,
+        num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
+        num_services=0, num_consumables=0, num_storables=0,
+    )
+    return RunContext(
+        criteria=crit, module_selections=ModuleSelections(mrp=mrp_config), industry="IT",
+        language_name="German", language_code="de_DE", gemini_model_name="test",
+    )
 
 
 def run(client, ctx):
@@ -139,6 +153,36 @@ def run(client, ctx):
         results.append(("mrp: confirm manufacturing order", True, f"state={state}"))
     except Exception as e:
         results.append(("mrp: confirm manufacturing order", False, str(e)))
+
+    # Step 7 — D3: create_mrp_data end-to-end (batched products/components/BOMs
+    # with bom_line_ids inlined), gemini=None to prove it needs no LLM call.
+    # mrp_routings disabled to keep this test scoped to D3 (products/BOMs),
+    # independent of the still-open B15 workcenter default.
+    try:
+        rctx = _make_rctx({
+            "num_products": 2, "components_per_bom": 2, "sub_boms_per_product": 1,
+            "num_workcenters": 0, "num_manufacturing_orders": 0, "create_quality_points": False,
+        })
+        rctx.feature_flags = {"mrp_routings": False}
+        create_mrp_data(client, None, rctx)
+        assert len(rctx.product_ids) == 2, f"expected 2 main products, got {len(rctx.product_ids)}"
+        # 2 products x 2 components + 2 x 1 sub-bom x raw_count(2) = 4 + 4 = 8
+        assert len(rctx.component_ids) == 8, f"expected 8 components/raw materials, got {len(rctx.component_ids)}"
+
+        boms = client.search_read(
+            'mrp.bom', [["product_id", "in", rctx.product_ids + rctx.component_ids]],
+            fields=["product_id", "bom_line_ids"], limit=0,
+        )
+        # 2 main BOMs + 2 sub-BOMs (one per product's first component) = 4
+        assert len(boms) == 4, f"expected 4 BOMs (main+sub), got {len(boms)}"
+        assert all(b.get("bom_line_ids") for b in boms), "a BOM was created with no inlined bom_line_ids"
+
+        results.append((
+            "mrp: create_mrp_data end-to-end (D3 batch, inlined bom_line_ids), read-back",
+            True, f"{len(rctx.product_ids)} products, {len(boms)} BOMs",
+        ))
+    except Exception as e:
+        results.append(("mrp: create_mrp_data end-to-end (D3 batch, inlined bom_line_ids), read-back", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

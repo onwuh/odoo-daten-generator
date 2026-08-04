@@ -3,11 +3,14 @@
 Uses a single Gemini call for all BOM component names (batch) instead of one per product.
 """
 
+import logging
 import datetime
 import random
 
 import odoo_actions  # kept for create_product (shared with master_data module)
 from config import RunContext
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -34,28 +37,28 @@ def create_bom(client, product_tmpl_id, product_id=None, quantity=1.0, code=None
         values["product_id"] = product_id
     if code:
         values["code"] = code
-    print(f"-> Creating BOM for template {product_tmpl_id} (variant: {product_id})")
+    logger.info(f"-> Creating BOM for template {product_tmpl_id} (variant: {product_id})")
     return client.create('mrp.bom', values)
 
 
 def create_bom_line(client, bom_id, product_id, quantity=1.0):
     """Create a BOM line referencing a component product."""
     values = {"bom_id": bom_id, "product_id": product_id, "product_qty": quantity}
-    print(f"->   Adding BOM line: product {product_id} x{quantity}")
+    logger.info(f"->   Adding BOM line: product {product_id} x{quantity}")
     return client.create('mrp.bom.line', values)
 
 
 def create_workcenter(client, vals: dict) -> int:
     """Creates mrp.workcenter, returns id."""
-    print(f"-> Creating Work Center: {vals.get('name')}")
+    logger.info(f"-> Creating Work Center: {vals.get('name')}")
     wc_id = client.create('mrp.workcenter', vals)
-    print(f"   ID: {wc_id}")
+    logger.info(f"   ID: {wc_id}")
     return wc_id
 
 
 def create_bom_operation(client, vals: dict) -> int:
     """Creates mrp.routing.workcenter (BOM operation), returns id."""
-    print(f"->   Creating BOM Operation: {vals.get('name')}")
+    logger.info(f"->   Creating BOM Operation: {vals.get('name')}")
     return client.create('mrp.routing.workcenter', vals)
 
 
@@ -63,9 +66,9 @@ def create_manufacturing_order(client, vals: dict) -> int:
     """Creates mrp.production, returns id."""
     if "date_start" not in vals:
         vals["date_start"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"-> Creating Manufacturing Order for product {vals.get('product_id')}")
+    logger.info(f"-> Creating Manufacturing Order for product {vals.get('product_id')}")
     mo_id = client.create('mrp.production', vals)
-    print(f"   ID: {mo_id}")
+    logger.info(f"   ID: {mo_id}")
     return mo_id
 
 
@@ -73,18 +76,18 @@ def confirm_manufacturing_order(client, mo_id: int) -> bool:
     """Calls action_confirm on mrp.production, returns True on success."""
     try:
         client.call_method('mrp.production', 'action_confirm', ids=[mo_id])
-        print(f"   MO {mo_id} bestaetigt.")
+        logger.info(f"   MO {mo_id} bestaetigt.")
         return True
     except Exception as e:
-        print(f"   MO {mo_id} konnte nicht bestaetigt werden: {e}")
+        logger.warning(f"   MO {mo_id} konnte nicht bestaetigt werden: {e}")
         return False
 
 
 def create_quality_point(client, vals: dict) -> int:
     """Creates quality.point, returns id."""
-    print(f"-> Creating Quality Point: {vals.get('name')}")
+    logger.info(f"-> Creating Quality Point: {vals.get('name')}")
     qp_id = client.create('quality.point', vals)
-    print(f"   ID: {qp_id}")
+    logger.info(f"   ID: {qp_id}")
     return qp_id
 
 
@@ -106,7 +109,7 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
     num_mrp_products = max(0, int(mrp_config.get("num_products", 0)))
     components_per_bom = max(1, int(mrp_config.get("components_per_bom", 1)))
     sub_boms_per_product = max(0, int(mrp_config.get("sub_boms_per_product", 0)))
-    num_workcenters = max(1, int(mrp_config.get("num_workcenters", 3)))
+    num_workcenters = max(0, int(mrp_config.get("num_workcenters", 3)))
     num_manufacturing_orders = max(0, int(mrp_config.get("num_manufacturing_orders", 0)))
     create_quality_points = bool(mrp_config.get("create_quality_points", False))
     if sub_boms_per_product > components_per_bom:
@@ -114,7 +117,7 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
     if num_mrp_products <= 0:
         return
 
-    print("\n--- MANUFACTURING: Erstelle Fertigungsprodukte und Stücklisten ---")
+    logger.info("\n--- MANUFACTURING: Erstelle Fertigungsprodukte und Stücklisten ---")
     product_name_bank = list(ctx.name_banks.get('product_names', []))
     industry = ctx.industry
     component_count = max(components_per_bom, sub_boms_per_product or 0, 1)
@@ -136,96 +139,136 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
             products_request, industry, ctx.language_name
         )
 
-    created_bom_ids = []
-    bom_product_map = {}  # bom_id -> product_id, for MO creation
+    # D3: components created first (batched), then parent/sub BOMs with
+    # bom_line_ids inlined — see IMPLEMENTIERUNGSPLAN.md D3. Sub-BOMs need their
+    # component's product_tmpl_id, which only exists once the component itself
+    # has been created, so the ordering below is load-bearing, not cosmetic:
+    # main products -> main components -> raw materials (for sub-BOMs) -> all BOMs.
 
-    for idx, main_product_name in enumerate(main_products):
+    # --- Step 1: batch-create all main (finished-good) products ---
+    main_product_vals = []
+    for name in main_products:
         list_price = round(random.uniform(250, 1200), 2)
         standard_price = round(list_price * random.uniform(0.35, 0.65), 2)
-        main_product_id = odoo_actions.create_product(client, {
-            "name": main_product_name,
-            "sale_ok": True,
-            "purchase_ok": False,  # manufactured in-house, not purchased
-            "list_price": list_price,
-            "standard_price": standard_price,
-            "tracking": "none",
+        main_product_vals.append({
+            "name": name, "sale_ok": True, "purchase_ok": False,
+            "list_price": list_price, "standard_price": standard_price, "tracking": "none",
         })
-        ctx.product_ids.append(main_product_id)
+    main_product_ids = client.create_batch('product.product', main_product_vals)
+    ctx.product_ids.extend(main_product_ids)
+    main_list_price = {pid: vals["list_price"] for pid, vals in zip(main_product_ids, main_product_vals)}
 
-        tmpl_id = get_product_template_id(client, main_product_id)
+    # Template ids + component name lists per main product (reads — not batchable creates)
+    main_tmpl_id = {}
+    main_component_names = {}
+    for pid, name in zip(main_product_ids, main_products):
+        tmpl_id = get_product_template_id(client, pid)
         if not tmpl_id:
-            print(f"⚠️  Konnte Template für Produkt {main_product_id} nicht ermitteln — BOM übersprungen.")
+            logger.warning(f"⚠️  Konnte Template für Produkt {pid} nicht ermitteln — BOM übersprungen.")
             continue
-
-        bom_id = create_bom(
-            client, tmpl_id,
-            product_id=main_product_id,
-            quantity=1.0,
-            code=f"BOM-{main_product_id}",
-        )
-        created_bom_ids.append(bom_id)
-        bom_product_map[bom_id] = main_product_id
-
-        # Use Gemini component names or generate fallbacks
-        component_names = list(bom_components_map.get(main_product_name, []))
+        main_tmpl_id[pid] = tmpl_id
+        component_names = list(bom_components_map.get(name, []))
         while len(component_names) < component_count:
-            component_names.append(f"{main_product_name} Modul {len(component_names) + 1}")
+            component_names.append(f"{name} Modul {len(component_names) + 1}")
+        main_component_names[pid] = component_names[:component_count]
 
-        for comp_idx, component_name in enumerate(component_names[:component_count]):
-            comp_list_price = round(random.uniform(80, list_price * 0.6), 2)
+    # --- Step 2: batch-create ALL components (across all products) in one call ---
+    component_meta = []  # [{"main_pid", "name", "standard_price"}, ...], order == component_vals_list
+    component_vals_list = []
+    for pid, comp_names in main_component_names.items():
+        lp = main_list_price[pid]
+        for cname in comp_names:
+            comp_list_price = round(random.uniform(80, lp * 0.6), 2)
             comp_standard_price = round(comp_list_price * random.uniform(0.4, 0.7), 2)
-            comp_id = odoo_actions.create_product(client, {
-                "name": component_name,
-                "sale_ok": False,
-                "purchase_ok": True,
-                "list_price": comp_list_price,
-                "standard_price": comp_standard_price,
-                "tracking": "none",
+            component_vals_list.append({
+                "name": cname, "sale_ok": False, "purchase_ok": True,
+                "list_price": comp_list_price, "standard_price": comp_standard_price, "tracking": "none",
             })
-            ctx.component_ids.append(comp_id)
-            create_bom_line(client, bom_id, comp_id, quantity=max(1, random.randint(1, 4)))
+            component_meta.append({"main_pid": pid, "name": cname, "standard_price": comp_standard_price})
 
-            # Sub-BOM for the first N components
-            if comp_idx < sub_boms_per_product:
-                comp_tmpl_id = get_product_template_id(client, comp_id)
-                if not comp_tmpl_id:
-                    continue
-                sub_bom_id = create_bom(
-                    client, comp_tmpl_id,
-                    product_id=comp_id,
-                    quantity=1.0,
-                    code=f"SUB-{bom_id}-{comp_idx + 1}",
-                )
-                created_bom_ids.append(sub_bom_id)
-                bom_product_map[sub_bom_id] = comp_id
-                raw_count = max(2, min(4, components_per_bom // 2 + 1))
-                for raw_idx in range(raw_count):
-                    raw_name = f"{component_name} Rohteil {raw_idx + 1}"
-                    raw_list = round(max(15, comp_standard_price * random.uniform(0.4, 0.9)), 2)
-                    raw_std = round(raw_list * random.uniform(0.5, 0.85), 2)
-                    raw_id = odoo_actions.create_product(client, {
-                        "name": raw_name,
-                        "sale_ok": False,
-                        "purchase_ok": True,
-                        "list_price": raw_list,
-                        "standard_price": raw_std,
-                        "tracking": "none",
-                    })
-                    ctx.component_ids.append(raw_id)
-                    create_bom_line(
-                        client, sub_bom_id, raw_id,
-                        quantity=round(random.uniform(1.0, 3.0), 2)
-                    )
+    all_component_ids = client.create_batch('product.product', component_vals_list)
+    ctx.component_ids.extend(all_component_ids)
+    for meta, cid in zip(component_meta, all_component_ids):
+        meta["id"] = cid
 
-    print(f"✅ {len(created_bom_ids)} Stücklisten für {num_mrp_products} Fertigungsprodukte erstellt.")
+    components_by_product: dict = {}
+    for meta in component_meta:
+        components_by_product.setdefault(meta["main_pid"], []).append(meta)
+
+    # --- Step 3: batch-create ALL raw materials for sub-BOMs (across all products) ---
+    raw_count = max(2, min(4, components_per_bom // 2 + 1))
+    raw_vals_list = []
+    raw_meta = []  # [{"comp": <component_meta dict>}, ...], order == raw_vals_list
+    for pid, comps in components_by_product.items():
+        for comp in comps[:sub_boms_per_product]:
+            comp_tmpl_id = get_product_template_id(client, comp["id"])
+            if not comp_tmpl_id:
+                continue
+            comp["tmpl_id"] = comp_tmpl_id
+            for raw_idx in range(raw_count):
+                raw_name = f"{comp['name']} Rohteil {raw_idx + 1}"
+                raw_list = round(max(15, comp["standard_price"] * random.uniform(0.4, 0.9)), 2)
+                raw_std = round(raw_list * random.uniform(0.5, 0.85), 2)
+                raw_vals_list.append({
+                    "name": raw_name, "sale_ok": False, "purchase_ok": True,
+                    "list_price": raw_list, "standard_price": raw_std, "tracking": "none",
+                })
+                raw_meta.append({"comp": comp})
+
+    all_raw_ids = client.create_batch('product.product', raw_vals_list)
+    ctx.component_ids.extend(all_raw_ids)
+    for meta, rid in zip(raw_meta, all_raw_ids):
+        meta["comp"].setdefault("raw_ids", []).append(rid)
+
+    # --- Step 4: batch-create ALL BOMs (main + sub) in one call, bom_line_ids inline ---
+    bom_vals_list = []
+    bom_meta = []  # [{"product_id"}, ...], order == bom_vals_list
+    for pid in main_product_ids:
+        tmpl_id = main_tmpl_id.get(pid)
+        if not tmpl_id:
+            continue
+        comps = components_by_product.get(pid, [])
+        line_cmds = [
+            (0, 0, {"product_id": c["id"], "product_qty": max(1, random.randint(1, 4))})
+            for c in comps
+        ]
+        bom_vals_list.append({
+            "product_tmpl_id": tmpl_id, "product_id": pid, "type": "normal",
+            "product_qty": 1.0, "code": f"BOM-{pid}", "bom_line_ids": line_cmds,
+        })
+        bom_meta.append({"product_id": pid})
+
+        for comp_idx, comp in enumerate(comps[:sub_boms_per_product]):
+            comp_tmpl_id = comp.get("tmpl_id")
+            raw_ids = comp.get("raw_ids") or []
+            if not comp_tmpl_id or not raw_ids:
+                continue
+            raw_line_cmds = [
+                (0, 0, {"product_id": rid, "product_qty": round(random.uniform(1.0, 3.0), 2)})
+                for rid in raw_ids
+            ]
+            bom_vals_list.append({
+                "product_tmpl_id": comp_tmpl_id, "product_id": comp["id"], "type": "normal",
+                "product_qty": 1.0, "code": f"SUB-{pid}-{comp_idx + 1}", "bom_line_ids": raw_line_cmds,
+            })
+            bom_meta.append({"product_id": comp["id"]})
+
+    created_bom_ids = client.create_batch('mrp.bom', bom_vals_list)
+    bom_product_map = {}  # bom_id -> product_id, for MO creation
+    for bom_id, meta in zip(created_bom_ids, bom_meta):
+        bom_product_map[bom_id] = meta["product_id"]
+
+    logger.info(f"✅ {len(created_bom_ids)} Stücklisten für {num_mrp_products} Fertigungsprodukte erstellt.")
 
     # --- SECTION A: Work Centers ---
     workcenter_name_to_id: dict = {}
     wc_data: dict = {}
-    mrp_routings_ok = ctx.feature_flags.get('mrp_routings', True)
+    # B15: default aligned with gui.py's routings_on default — a missing
+    # mrp_routings flag must not mean "off in the GUI, on in the module".
+    mrp_routings_ok = ctx.feature_flags.get('mrp_routings', False)
     if mrp_routings_ok and num_workcenters > 0:
         try:
-            print("\n--- MANUFACTURING: Erstelle Arbeitszentren ---")
+            logger.info("\n--- MANUFACTURING: Erstelle Arbeitszentren ---")
             if gemini:
                 wc_data = gemini.fetch_workcenter_data(industry, ctx.language_name, num_workcenters)
             if not wc_data:
@@ -253,16 +296,16 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
                 wc_id = create_workcenter(client, wc_vals)
                 workcenter_name_to_id[wc_name] = wc_id
                 ctx.workcenter_ids.append(wc_id)
-            print(f"Arbeitszentren erstellt: {len(workcenter_name_to_id)}")
+            logger.info(f"Arbeitszentren erstellt: {len(workcenter_name_to_id)}")
         except Exception as e:
-            print(f"Arbeitszentren konnten nicht erstellt werden: {e}")
+            logger.info(f"Arbeitszentren konnten nicht erstellt werden: {e}")
     else:
-        print("ℹ️  Work Orders nicht aktiviert — Arbeitszentren und Arbeitsgänge übersprungen.")
+        logger.info("ℹ️  Work Orders nicht aktiviert — Arbeitszentren und Arbeitsgänge übersprungen.")
 
     # --- SECTION B: BOM Operations ---
     if workcenter_name_to_id and created_bom_ids:
         try:
-            print("\n--- MANUFACTURING: Verknuepfe Arbeitsgaenge mit Stuecklisten ---")
+            logger.info("\n--- MANUFACTURING: Verknuepfe Arbeitsgaenge mit Stuecklisten ---")
             wc_names = list(workcenter_name_to_id.keys())
             op_count = 0
             for bom_id in created_bom_ids:
@@ -280,21 +323,21 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
                         "time_cycle_manual": round(random.uniform(15, 90), 2),
                     })
                     op_count += 1
-            print(f"Arbeitsgaenge erstellt: {op_count}")
+            logger.info(f"Arbeitsgaenge erstellt: {op_count}")
         except Exception as e:
-            print(f"Arbeitsgaenge konnten nicht erstellt werden: {e}")
+            logger.info(f"Arbeitsgaenge konnten nicht erstellt werden: {e}")
 
     # --- SECTION C: Manufacturing Orders ---
     if num_manufacturing_orders > 0 and created_bom_ids:
         try:
-            print("\n--- MANUFACTURING: Erstelle Fertigungsauftraege ---")
+            logger.info("\n--- MANUFACTURING: Erstelle Fertigungsauftraege ---")
             company_id = ctx.company_ids[0] if ctx.company_ids else None
             picking_type_id = (
                 get_manufacturing_picking_type_id(client, company_id)
                 if company_id else None
             )
             if not picking_type_id:
-                print("Kein Fertigungs-Vorgangstyp gefunden - Fertigungsauftraege uebersprungen.")
+                logger.warning("Kein Fertigungs-Vorgangstyp gefunden - Fertigungsauftraege uebersprungen.")
             else:
                 confirmed_mo_ids = []
                 created_mo_count = 0
@@ -327,9 +370,9 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
                             if confirm_manufacturing_order(client, mo_id):
                                 confirmed_mo_ids.append(mo_id)
                     except Exception as mo_e:
-                        print(f"Fertigungsauftrag uebersprungen: {mo_e}")
+                        logger.warning(f"Fertigungsauftrag uebersprungen: {mo_e}")
 
-                print(f"Fertigungsauftraege: {created_mo_count} erstellt, {len(confirmed_mo_ids)} bestaetigt.")
+                logger.info(f"Fertigungsauftraege: {created_mo_count} erstellt, {len(confirmed_mo_ids)} bestaetigt.")
 
                 # Quality Points (per BOM)
                 if create_quality_points and qp_team_id and qp_test_type_id:
@@ -346,8 +389,8 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
                                 "bom_id": bom_id,
                             })
                             qp_count += 1
-                        print(f"Qualitaetspruefpunkte erstellt: {qp_count}")
+                        logger.info(f"Qualitaetspruefpunkte erstellt: {qp_count}")
                     except Exception as qp_e:
-                        print(f"Qualitaetspruefpunkte konnten nicht erstellt werden: {qp_e}")
+                        logger.info(f"Qualitaetspruefpunkte konnten nicht erstellt werden: {qp_e}")
         except Exception as e:
-            print(f"Fertigungsauftraege konnten nicht erstellt werden: {e}")
+            logger.info(f"Fertigungsauftraege konnten nicht erstellt werden: {e}")
