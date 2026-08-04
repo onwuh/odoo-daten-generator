@@ -38,6 +38,9 @@ class ModuleSelections:
     # crm_activities shape: {"enabled": bool, "past_pct": int, "today_pct": int}
     # future_pct is implied: 100 - past_pct - today_pct
     # empty dict → activities disabled
+    documents: dict = field(default_factory=dict)
+    # documents shape: {"bill_pdfs_enabled": bool, "cv_pdfs_enabled": bool}
+    # empty dict → both stages disabled
 
     def get(self, key: str, default=None):
         return getattr(self, key, default)
@@ -76,3 +79,4 @@ class RunContext:
     # DB, so re-running the generator doesn't duplicate transactions (B4).
     invoice_ids: List[int] = field(default_factory=list)
     bill_ids: List[int] = field(default_factory=list)
+    applicant_ids: List[int] = field(default_factory=list)

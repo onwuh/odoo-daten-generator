@@ -33,6 +33,7 @@ from tests.integration import (
     test_hr,
     test_project,
     test_recruiting,
+    test_documents,
 )
 
 
@@ -62,6 +63,7 @@ _MODULES = [
     ("hr",          test_hr.run),
     ("project",     test_project.run),
     ("recruiting",  test_recruiting.run),
+    ("documents",   test_documents.run),
 ]
 
 

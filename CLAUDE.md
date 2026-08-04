@@ -105,6 +105,7 @@ from it, sale orders never do.
 - `hr.job.skill` / `hr.applicant.skill`: `skill_level_id` is **required** and cannot be `False`/omitted — a `hr.skill.type` with no `hr.skill.level` records for it cannot be attached to a job/applicant at all. Skip the skill entirely (don't build the line) when no level exists for it.
 - `hr.leave/action_approve` fails with `UserError: "You cannot approve this leave."` when the record is already in `state='validate'` — this happens on creation itself for `hr.work.entry.type` records with certain `leave_validation_type` values (e.g. `'both'`), which auto-validate on create for the API-key user. Check `state` before calling `action_approve` rather than calling it unconditionally.
 - `hr.leave.allocation` has **no** `allocation_type` field on saas-19.4 (existed on 19.2, since removed — accrual vs. regular is now implied by `accrual_plan_id` being set or absent). Do not send it.
+- `ir.attachment` binary content field is `raw`, **not** `datas` — `datas` doesn't exist as a field on this instance at all (`search_read` raises `Invalid field 'datas' on 'ir.attachment'`), yet `create()` silently accepts and drops a `datas` key instead of raising (200 OK, no content stored, no error). `db_datas` also exists in `fields_get` but writing it directly is silently dropped too (attachments are filestore-backed here, not DB-column-backed). Only `raw` round-trips actual file content on create/read.
 
 ## Debugging
 
@@ -172,8 +173,41 @@ Odoo-Zielversion-Korrektur bestätigt durch diesen Sprint: `ir.module.module`/`b
 angenommenes Format — eine Dot-Segment-Anzahl weniger; Parser darf keine feste Segmentzahl
 voraussetzen).
 
-Nächster Sprint: S6 — PDF (R1/P1+P2), siehe §4/§5 Roadmap; S5 Tier 2 bleibt im Backlog bis
-zum oben genannten Auslöser.
+Nächster Sprint: S7 — Purchase + Inventory (R2/R3), siehe §4/§5 Roadmap; S5 Tier 2 bleibt im
+Backlog bis zum oben genannten Auslöser.
+
+Sprint S6 (2026-08-04) — **abgeschlossen**, nach Peer-Review eines vorab geschriebenen Plans
+durch einen fremden Opus-Agenten (Kontext nur Plan + Live-Repo, keine Konversationshistorie,
+gleiches Verfahren wie S5): `pdf_factory.py` (neu, reines Python/`fpdf2`, keine Odoo-/
+Netzwerk-Calls — `build_vendor_bill_pdf`/`build_cv_pdf`), `modules/documents.py` (neu,
+Pipeline-Schritt P1 Eingangsrechnungs-PDFs an `account.move` ohne neuen LLM-Call, P2
+Bewerbungs-CVs an `hr.applicant` mit einem gebündelten LLM-Call `fetch_cv_bullet_points_batch`,
+nicht gecacht wie `crm_chatter`), `RunContext.applicant_ids` + `ModuleSelections.documents`
+(🔒 `config.py`, rein additiv), ein Voraussetzungs-Fix in `recruiting.py`
+(`_create_applicants` gab die `create_batch`-IDs bisher nirgendwo zurück — ohne Fix hätte P2
+keine Bewerber-ID zum Anhängen gehabt), `orchestrator.py` (🔒, rein additiv — ein Tupel ans
+Ende von `module_order` angehängt, `is_installed=True` hartkodiert statt an
+`installed_modules` gekoppelt, da `ir.attachment` kernfunktional ist und "documents" zufällig
+auch der technische Name von Odoos echter Documents-App ist), GUI-Anbindung in `gui.py`
+(die Peer-Review fand hier einen echten Blocker: `documents` ist kein von Odoo geprüftes Modul,
+lief also nie durch das `if key in installed`-Gate in `module_defs` — als eigenständiger,
+ungegateter `_module_block`-Aufruf plus eigenständiger Zweig in `_on_generate` und
+Sonderfall in Screen 4s `module_order_keys` gelöst, nicht als Eintrag in `module_defs`).
+
+**Live gefundener Bug (nicht vom Plan vorhergesehen):** `ir.attachment`s Inhaltsfeld heißt auf
+dieser Instanz `raw`, nicht `datas` — `datas` existiert als Feld auf `ir.attachment` gar nicht
+(`search_read` wirft `Invalid field 'datas'`), aber `create()` nimmt einen `datas`-Key
+stillschweigend an und verwirft ihn (200 OK, aber kein Inhalt gespeichert, kein Fehler). Auch
+`db_datas` (existiert laut `fields_get`) wird beim direkten Schreiben verworfen — Anhänge liegen
+auf dieser Instanz im Filestore, nicht in der DB-Spalte. Nur `raw` rundet Inhalt beim
+Create/Read korrekt. Erst durch den vollen Live-Suite-Lauf aufgefallen (Unit-Tests mit
+gemocktem Client hätten das nie gefangen) — dokumentiert in CLAUDE.md „Verified field
+gotchas". GUI-Anbindung zusätzlich headless verifiziert (echte `App`-Instanz, echte
+Screen-3-/Screen-4-Widgets, `CTkCheckBox.select()`/`CTkRadioButton.select()` +
+`button.cget("command")()`, kein sichtbares Fenster nötig) — kein manueller Klick-Durchlauf
+im Browser/Desktop, aber Test deckt exakt den von der Peer-Review gefundenen Blocker ab.
+Vollständige Test-Suite (`tests/integration/test_suite.py`): 151/151 Unit- + 61/61
+Live-Integration-Schritte grün, inkl. neuer `test_documents_unit.py`/`test_documents.py`.
 
 **Prozess-Hinweis (2026-08-04):** Dieser Abschnitt lag zeitweise eine ganze Session hinter dem
 tatsächlichen Code-Stand zurück — D1/D2/D3/B11/B14/B15 waren bereits implementiert und getestet,

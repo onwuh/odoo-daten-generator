@@ -422,5 +422,7 @@ def _create_applicants(client, ctx, recruiting_data, num_candidates, job_ids, al
             applicant_vals_list.append(values)
             candidate_idx += 1
 
-    client.create_batch('hr.applicant', applicant_vals_list)
+    applicant_ids = client.create_batch('hr.applicant', applicant_vals_list)
+    ctx.applicant_ids.extend(applicant_ids)
     logger.info(f"✅ {num_candidates} Bewerber erstellt und auf {len(job_ids)} Stellen verteilt.")
+    return applicant_ids

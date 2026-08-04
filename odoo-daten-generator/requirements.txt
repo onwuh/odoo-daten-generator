@@ -2,3 +2,4 @@ openai
 google-genai
 requests
 customtkinter
+fpdf2>=2.7

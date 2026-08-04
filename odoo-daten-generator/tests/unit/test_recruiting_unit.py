@@ -2,6 +2,7 @@
 import os
 import re
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -67,8 +68,12 @@ def run():
 
         mock_client.create_batch.side_effect = _fake_create_batch
 
-        _create_applicants(
-            mock_client, ctx=None, recruiting_data=recruiting_data, num_candidates=2,
+        # ctx.applicant_ids must be populated (config.py RunContext field, added
+        # alongside S6/P2 CV-PDF work) — a bare None ctx would no longer work
+        # here since _create_applicants now writes back to it.
+        ctx = SimpleNamespace(applicant_ids=[])
+        returned_ids = _create_applicants(
+            mock_client, ctx=ctx, recruiting_data=recruiting_data, num_candidates=2,
             job_ids=[42], all_skill_ids=[], skill_levels_map={},
         )
 
@@ -76,6 +81,9 @@ def run():
         assert created_vals[0]["email_from"] == "hans.mueller@example.com"
         assert created_vals[1]["email_from"] == "anna.schmidt@example.com"
         assert all(v["partner_phone"].startswith("+49 1") for v in created_vals)
+        assert returned_ids == ctx.applicant_ids == [1, 2], (
+            f"expected _create_applicants to return and store [1, 2], got returned={returned_ids}, ctx={ctx.applicant_ids}"
+        )
         results.append(("Pattern 2: _create_applicants missing candidate_emails/phones -> derived, no crash", True, ""))
     except Exception as e:
         results.append(("Pattern 2: _create_applicants missing candidate_emails/phones -> derived, no crash", False, str(e)))
