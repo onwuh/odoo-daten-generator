@@ -1,5 +1,6 @@
 """Accounting module: invoices from orders, standalone invoices, vendor bills, bank transactions."""
 
+import logging
 import datetime
 import random
 
@@ -8,30 +9,32 @@ from config import RunContext
 from fallback_data import FALLBACK_SUPPLIERS
 from odoo_repository import resolve_country_ids
 
+logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Low-level accounting helpers (previously in odoo_actions.py)
 # ---------------------------------------------------------------------------
 
 def post_invoices(client, move_ids):
-    print(f"-> Posting invoices: {move_ids}")
+    logger.info(f"-> Posting invoices: {move_ids}")
     try:
         client.call_method('account.move', 'action_post', ids=move_ids)
         return True
     except Exception as e:
-        print(f"[post_invoices] Batch post failed ({e}), retrying individually...")
+        logger.warning(f"[post_invoices] Batch post failed ({e}), retrying individually...")
         success_count = 0
         for mid in move_ids:
             try:
                 client.call_method('account.move', 'action_post', ids=[mid])
                 success_count += 1
             except Exception as e2:
-                print(f"[post_invoices] Failed to post move {mid}: {e2}")
+                logger.warning(f"[post_invoices] Failed to post move {mid}: {e2}")
         return success_count > 0
 
 
 def create_customer_invoice(client, partner_id, line_product_ids):
-    print(f"-> Creating Invoice for partner {partner_id}")
+    logger.info(f"-> Creating Invoice for partner {partner_id}")
     lines = [(0, 0, {"product_id": pid, "quantity": 1}) for pid in line_product_ids]
     values = {
         "move_type": "out_invoice",
@@ -43,10 +46,10 @@ def create_customer_invoice(client, partner_id, line_product_ids):
 
 
 def create_invoices_from_orders(client, order_ids):
-    print(f"-> Creating invoices from orders: {order_ids}")
+    logger.info(f"-> Creating invoices from orders: {order_ids}")
     if not order_ids:
         return []
-    created_invoice_ids = []
+    invoice_vals_list = []
     orders = client.search_read(
         'sale.order', [["id", "in", order_ids]],
         fields=["partner_id", "order_line", "name"], limit=0,
@@ -75,25 +78,28 @@ def create_invoices_from_orders(client, order_ids):
                 partner_id = order.get("partner_id")
                 if isinstance(partner_id, (list, tuple)) and len(partner_id) > 0:
                     partner_id = partner_id[0]
-                invoice_vals = {
+                invoice_vals_list.append({
                     "move_type": "out_invoice",
                     "partner_id": partner_id,
                     "invoice_line_ids": invoice_lines,
                     "invoice_origin": order.get("name", ""),
                     "invoice_date": datetime.date.today().isoformat(),
-                }
-                inv_id = client.create('account.move', invoice_vals)
-                created_invoice_ids.append(inv_id)
+                })
         except Exception as e:
-            print(f"-> Failed to create invoice for order {order.get('id')}: {e}")
+            logger.warning(f"-> Failed to build invoice for order {order.get('id')}: {e}")
             continue
+    created_invoice_ids = client.create_batch('account.move', invoice_vals_list)
     if created_invoice_ids:
         post_invoices(client, created_invoice_ids)
     return created_invoice_ids
 
 
-def create_vendor_bill(client, supplier_id, product_ids, description_prefix="Vendor Bill"):
-    print(f"-> Creating Vendor Bill for supplier {supplier_id}")
+def _vendor_bill_vals(client, supplier_id, product_ids, description_prefix="Vendor Bill"):
+    """Build vals for a single vendor bill (account.move, move_type=in_invoice).
+
+    Pure vals-building, no create/post — shared by create_vendor_bill (single
+    record) and the D3 batch path in create_accounting_data.
+    """
     products = client.search_read(
         'product.product', [["id", "in", product_ids]],
         fields=["standard_price", "list_price"], limit=0,
@@ -110,13 +116,18 @@ def create_vendor_bill(client, supplier_id, product_ids, description_prefix="Ven
         price = product_price_map.get(pid, random.uniform(10, 100))
         qty = random.randint(1, 5)
         lines.append((0, 0, {"product_id": pid, "quantity": qty, "price_unit": round(price, 2)}))
-    values = {
+    return {
         "move_type": "in_invoice",
         "partner_id": supplier_id,
         "invoice_line_ids": lines,
         "ref": description_prefix,
         "invoice_date": datetime.date.today().isoformat(),
     }
+
+
+def create_vendor_bill(client, supplier_id, product_ids, description_prefix="Vendor Bill"):
+    logger.info(f"-> Creating Vendor Bill for supplier {supplier_id}")
+    values = _vendor_bill_vals(client, supplier_id, product_ids, description_prefix)
     bill_id = client.create('account.move', values)
     post_invoices(client, [bill_id])
     return bill_id
@@ -129,11 +140,11 @@ def get_or_create_bank_journal(client):
     )
     if journals:
         journal_id = journals[0].get("id")
-        print(f"-> Using existing bank journal: {journals[0].get('name', 'Bank')} (ID: {journal_id})")
+        logger.info(f"-> Using existing bank journal: {journals[0].get('name', 'Bank')} (ID: {journal_id})")
         return journal_id
-    print("-> Creating new bank journal...")
+    logger.info("-> Creating new bank journal...")
     journal_id = client.create('account.journal', {"name": "Bank", "type": "bank", "code": "BNK"})
-    print(f"   Created bank journal ID: {journal_id}")
+    logger.info(f"   Created bank journal ID: {journal_id}")
     return journal_id
 
 
@@ -159,9 +170,9 @@ def create_bank_transactions_for_all_invoices(client, invoice_ids, bill_ids):
     Vendor bills: exact match, negative amounts (outgoing payments).
     Customer invoices: 80% exact, 20% with label typo OR amount deviation (±5-20%).
     """
-    print(f"\n--- ACCOUNTING: Erstelle Banktransaktionen für Rechnungen dieses Laufs ---")
+    logger.info(f"\n--- ACCOUNTING: Erstelle Banktransaktionen für Rechnungen dieses Laufs ---")
     if not invoice_ids and not bill_ids:
-        print("-> Keine Rechnungen aus diesem Lauf — keine Banktransaktionen")
+        logger.info("-> Keine Rechnungen aus diesem Lauf — keine Banktransaktionen")
         return []
     journal_id = get_or_create_bank_journal(client)
 
@@ -178,9 +189,9 @@ def create_bank_transactions_for_all_invoices(client, invoice_ids, bill_ids):
 
     total_invoices = len(vendor_bills) + len(customer_invoices)
     if total_invoices == 0:
-        print("-> Keine gebuchten Rechnungen gefunden")
+        logger.info("-> Keine gebuchten Rechnungen gefunden")
         return []
-    print(f"-> Gefunden: {len(vendor_bills)} Eingangsrechnungen, {len(customer_invoices)} Ausgangsrechnungen")
+    logger.info(f"-> Gefunden: {len(vendor_bills)} Eingangsrechnungen, {len(customer_invoices)} Ausgangsrechnungen")
 
     transactions_to_create = []
 
@@ -246,9 +257,9 @@ def create_bank_transactions_for_all_invoices(client, invoice_ids, bill_ids):
         client.write('account.bank.statement', [statement_id], {
             "balance_end_real": balance_end_real,
         })
-        print(f"-> Verwende vorhandenen Bank Statement: {statement_id}")
+        logger.info(f"-> Verwende vorhandenen Bank Statement: {statement_id}")
     else:
-        print("-> Erstelle neuen Bank Statement...")
+        logger.info("-> Erstelle neuen Bank Statement...")
         balance_start = 0.0
         balance_end_real = round(balance_start + batch_total, 2)
         statement_id = client.create('account.bank.statement', {
@@ -257,9 +268,9 @@ def create_bank_transactions_for_all_invoices(client, invoice_ids, bill_ids):
             "balance_start": balance_start,
             "balance_end_real": balance_end_real,
         })
-        print(f"   Erstellt: Bank Statement ID {statement_id}")
+        logger.info(f"   Erstellt: Bank Statement ID {statement_id}")
 
-    print(f"-> Saldo: Anfang {balance_start:.2f} / Ende {balance_end_real:.2f}")
+    logger.info(f"-> Saldo: Anfang {balance_start:.2f} / Ende {balance_end_real:.2f}")
 
     created_line_ids = []
     num_exact = num_with_dev = 0
@@ -277,15 +288,15 @@ def create_bank_transactions_for_all_invoices(client, invoice_ids, bill_ids):
             if trans["has_deviation"]:
                 num_with_dev += 1
                 if trans.get("original_amount") and trans["original_amount"] != trans["amount"]:
-                    print(f"-> Banktransaktion {trans['id']}: Abweichung Betrag ({trans['amount']} vs {trans['original_amount']})")
+                    logger.info(f"-> Banktransaktion {trans['id']}: Abweichung Betrag ({trans['amount']} vs {trans['original_amount']})")
                 else:
-                    print(f"-> Banktransaktion {trans['id']}: Abweichung Label ({trans['label']})")
+                    logger.info(f"-> Banktransaktion {trans['id']}: Abweichung Label ({trans['label']})")
             else:
                 num_exact += 1
         except Exception as e:
-            print(f"   ⚠️  Fehler beim Erstellen der Banktransaktion für Rechnung {trans['id']}: {e}")
+            logger.warning(f"   ⚠️  Fehler beim Erstellen der Banktransaktion für Rechnung {trans['id']}: {e}")
 
-    print(f"✅ {len(created_line_ids)} Banktransaktionen erstellt ({num_exact} exakt, {num_with_dev} mit Abweichung)")
+    logger.info(f"✅ {len(created_line_ids)} Banktransaktionen erstellt ({num_exact} exakt, {num_with_dev} mit Abweichung)")
     return created_line_ids
 
 
@@ -317,45 +328,58 @@ def create_accounting_data(client, gemini, ctx: RunContext) -> None:
 
     # Create customer invoices from confirmed sale orders when possible
     if 'sale' in ctx.installed_modules and ctx.confirmed_order_ids:
-        print(f"\n--- ACCOUNTING: Erstelle Kundenrechnungen aus {len(ctx.confirmed_order_ids)} bestätigten Aufträgen ---")
+        logger.info(f"\n--- ACCOUNTING: Erstelle Kundenrechnungen aus {len(ctx.confirmed_order_ids)} bestätigten Aufträgen ---")
         ctx.invoice_ids.extend(create_invoices_from_orders(client, ctx.confirmed_order_ids))
     else:
         if not ctx.company_ids or not ctx.product_ids:
-            print("⚠️  Keine Partner/Produkte — Kundenrechnungen übersprungen.")
+            logger.warning("⚠️  Keine Partner/Produkte — Kundenrechnungen übersprungen.")
         else:
             if 'sale' not in ctx.installed_modules:
-                print("\n--- ACCOUNTING: Erstelle Kundenrechnungen (Verkauf nicht installiert) ---")
+                logger.info("\n--- ACCOUNTING: Erstelle Kundenrechnungen (Verkauf nicht installiert) ---")
             else:
-                print("\n--- ACCOUNTING: Erstelle Kundenrechnungen (keine bestätigten Aufträge) ---")
-            invoice_ids = []
+                logger.info("\n--- ACCOUNTING: Erstelle Kundenrechnungen (keine bestätigten Aufträge) ---")
+            invoice_vals_list = []
             for i in range(num_invoices):
                 cid = ctx.company_ids[i % len(ctx.company_ids)]
                 chosen = random.sample(
                     ctx.product_ids,
                     k=min(len(ctx.product_ids), random.randint(1, min(3, len(ctx.product_ids))))
                 )
-                inv_id = create_customer_invoice(client, cid, chosen)
-                invoice_ids.append(inv_id)
-            post_invoices(client, invoice_ids)
+                lines = [(0, 0, {"product_id": pid, "quantity": 1}) for pid in chosen]
+                invoice_vals_list.append({
+                    "move_type": "out_invoice",
+                    "partner_id": cid,
+                    "invoice_line_ids": lines,
+                    "invoice_date": datetime.date.today().isoformat(),
+                })
+            invoice_ids = client.create_batch('account.move', invoice_vals_list)
+            if invoice_ids:
+                post_invoices(client, invoice_ids)
             ctx.invoice_ids.extend(invoice_ids)
 
     # Vendor bills — draw from component_ids (purchased parts) or fall back to product_ids
     purchase_pool = ctx.component_ids or ctx.product_ids
     if purchase_pool:
-        print("\n--- ACCOUNTING: Erstelle Eingangsrechnungen ---")
+        logger.info("\n--- ACCOUNTING: Erstelle Eingangsrechnungen ---")
         supplier_names = ctx.name_banks.get('supplier_names', []) or FALLBACK_SUPPLIERS
         num_suppliers = min(3, len(supplier_names))
         chosen_supplier_names = random.sample(supplier_names, k=num_suppliers)
         supplier_ids = _create_suppliers(client, chosen_supplier_names)
-        num_bills = max(10, num_invoices // 2)
+        num_bills = max(1, num_invoices // 2)
+        bill_vals_list = []
         for i in range(num_bills):
             supplier_id = supplier_ids[i % len(supplier_ids)]
             chosen = random.sample(
                 purchase_pool,
                 k=min(len(purchase_pool), random.randint(1, min(3, len(purchase_pool))))
             )
-            bill_id = create_vendor_bill(client, supplier_id, chosen, description_prefix=f"Vendor Bill {i+1}")
-            ctx.bill_ids.append(bill_id)
+            bill_vals_list.append(
+                _vendor_bill_vals(client, supplier_id, chosen, description_prefix=f"Vendor Bill {i+1}")
+            )
+        bill_ids = client.create_batch('account.move', bill_vals_list)
+        ctx.bill_ids.extend(bill_ids)
+        if bill_ids:
+            post_invoices(client, bill_ids)
 
     # Bank transactions (if requested)
     if ctx.module_selections.create_bank_transactions:

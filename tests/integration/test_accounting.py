@@ -10,7 +10,22 @@ from modules.accounting import (
     create_customer_invoice, post_invoices, _introduce_typo,
     create_vendor_bill, create_bank_transactions_for_all_invoices,
     get_or_create_bank_journal, _create_suppliers,
+    create_invoices_from_orders, create_accounting_data,
 )
+from modules.sale import create_sale_order, confirm_sale_orders
+from config import DemoCriteria, ModuleSelections, RunContext
+
+
+def _make_rctx(num_invoices):
+    crit = DemoCriteria(
+        mode="both", industry="IT", num_companies=0,
+        num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
+        num_services=0, num_consumables=0, num_storables=0,
+    )
+    return RunContext(
+        criteria=crit, module_selections=ModuleSelections(account=num_invoices), industry="IT",
+        language_name="German", language_code="de_DE", gemini_model_name="test",
+    )
 
 
 def run(client, ctx):
@@ -177,6 +192,61 @@ def run(client, ctx):
         ))
     except Exception as e:
         results.append(("accounting: A1 — supplier gets full address via data_factory", False, str(e)))
+
+    # Step 7 — D3: create_invoices_from_orders end-to-end (batch account.move
+    # create, single post_invoices call), read-back.
+    try:
+        order_id = create_sale_order(client, {
+            "partner_id": partner_id,
+            "order_line": [(0, 0, {"product_id": product_id, "product_uom_qty": 2})],
+        })
+        confirm_sale_orders(client, [order_id])
+        new_invoice_ids = create_invoices_from_orders(client, [order_id])
+        assert len(new_invoice_ids) == 1, f"expected 1 invoice, got {len(new_invoice_ids)}"
+        rec = client.search_read(
+            'account.move', [["id", "=", new_invoice_ids[0]]],
+            fields=["move_type", "state", "invoice_origin"], limit=1,
+        )
+        assert rec and rec[0]["move_type"] == "out_invoice"
+        assert rec[0]["state"] == "posted", f"expected posted, got {rec[0]['state']}"
+        results.append((
+            "accounting: create_invoices_from_orders end-to-end (D3 batch), read-back",
+            True, new_invoice_ids[0],
+        ))
+    except Exception as e:
+        results.append(("accounting: create_invoices_from_orders end-to-end (D3 batch), read-back", False, str(e)))
+
+    # Step 8 — D3: create_accounting_data end-to-end, standalone-invoice +
+    # vendor-bill batch path (no 'sale' in installed_modules forces standalone
+    # invoices instead of from-orders), read-back both.
+    try:
+        rctx = _make_rctx(num_invoices=4)
+        rctx.company_ids = [partner_id]
+        rctx.product_ids = [product_id]
+        rctx.component_ids = [product_id]
+        rctx.installed_modules = set()  # force standalone invoice path
+        create_accounting_data(client, None, rctx)
+        assert len(rctx.invoice_ids) == 4, f"expected 4 invoices, got {len(rctx.invoice_ids)}"
+        assert len(rctx.bill_ids) >= 1, f"expected at least 1 vendor bill, got {len(rctx.bill_ids)}"
+
+        invoices = client.search_read(
+            'account.move', [["id", "in", rctx.invoice_ids]], fields=["move_type", "state"], limit=0,
+        )
+        assert len(invoices) == 4
+        assert all(i["move_type"] == "out_invoice" and i["state"] == "posted" for i in invoices), invoices
+
+        bills = client.search_read(
+            'account.move', [["id", "in", rctx.bill_ids]], fields=["move_type", "state"], limit=0,
+        )
+        assert len(bills) == len(rctx.bill_ids)
+        assert all(b["move_type"] == "in_invoice" and b["state"] == "posted" for b in bills), bills
+
+        results.append((
+            "accounting: create_accounting_data end-to-end (D3 batch), read-back",
+            True, f"{len(invoices)} invoices, {len(bills)} bills",
+        ))
+    except Exception as e:
+        results.append(("accounting: create_accounting_data end-to-end (D3 batch), read-back", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results
