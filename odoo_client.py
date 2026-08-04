@@ -1,5 +1,8 @@
+import logging
 import requests
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class OdooJson2Client:
@@ -19,8 +22,8 @@ class OdooJson2Client:
 
     def _post(self, path: str, payload: Dict[str, Any]) -> Any:
         url = f"{self.base_url}{path}"
-        print(f"[HTTP] POST {url}")
-        print(f"[HTTP] Payload keys: {list(payload.keys())}")
+        logger.info(f"[HTTP] POST {url}")
+        logger.info(f"[HTTP] Payload keys: {list(payload.keys())}")
         response = self.session.post(url, json=payload, timeout=60)
         try:
             response.raise_for_status()
@@ -28,7 +31,7 @@ class OdooJson2Client:
             error_body = ""
             try:
                 error_body = response.text[:500]
-                print(f"[HTTP] Error Body: {error_body}")
+                logger.warning(f"[HTTP] Error Body: {error_body}")
             except Exception:
                 pass
             
@@ -55,12 +58,12 @@ class OdooJson2Client:
                         resp3.raise_for_status()
                         if self.errors and self.errors[-1]["url"] == url:
                             self.errors.pop()
-                        print(f"[HTTP] Success after db query param: {resp3.status_code}")
+                        logger.info(f"[HTTP] Success after db query param: {resp3.status_code}")
                         return resp3.json()
                     resp2.raise_for_status()
                     if self.errors and self.errors[-1]["url"] == url:
                         self.errors.pop()
-                    print(f"[HTTP] Success after removing X-Odoo-Database: {resp2.status_code}")
+                    logger.info(f"[HTTP] Success after removing X-Odoo-Database: {resp2.status_code}")
                     return resp2.json()
                 finally:
                     # Always restore header so subsequent calls are not affected
@@ -68,7 +71,7 @@ class OdooJson2Client:
                         self.session.headers["X-Odoo-Database"] = orig_db
             raise
         # Some endpoints return JSON results directly, others wrap; assume JSON body is the result
-        print(f"[HTTP] {response.status_code} OK")
+        logger.info(f"[HTTP] {response.status_code} OK")
         return response.json()
 
     def _post_with_variants(self, paths: List[str], payload: Dict[str, Any]) -> Any:
@@ -182,7 +185,7 @@ class OdooJson2Client:
             return [int(result)]
         except requests.HTTPError:
             # Fallback: create each record individually
-            print(f"[HTTP] Batch create failed for {model}, falling back to sequential creates")
+            logger.warning(f"[HTTP] Batch create failed for {model}, falling back to sequential creates")
             ids = []
             for values in values_list:
                 ids.append(self.create(model, values, context=context))
