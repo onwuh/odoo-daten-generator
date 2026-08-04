@@ -556,6 +556,39 @@ Aufwand GUI-Teil (falls Spike positiv): klein-mittel, kein 🔒-Konflikt (nur `g
 Config-Schema/Orchestrator-Reihenfolge unverändert). Nicht Teil von S3/S4, eigener Slot
 nach Spike-Ergebnis einplanen.
 
+**Erster Spike-Durchlauf (2026-08-04):** ein Gem-generierter Plan (IT-Systemhaus
+Quote-to-Cash-Workbook) gegen Schema geprüft — JSON-Parsing sauber (0 unbekannte Keys,
+korrekte Typen, `crm_chatter`-Falle vermieden), zwei Nachkorrekturen nötig (`hr_timesheet`
+als Toggle statt Gesamtzahl missverstanden, `hr` fürs Workbook-Detail "Techniker zuweisen"
+vergessen) — für den Exit-Test ein Pass. Dabei aber größerer Folgefund aufgedeckt, siehe R8.
+
+### R8 🟠 Prozessketten-Verknüpfung fehlt (kein durchgängiger Demo-Faden)
+
+**Hinzugefügt:** 2026-08-04, aus erstem R7-Spike-Durchlauf.
+
+Befund: ein realer KI-generierter Demo-Plan (Quote-to-Cash-Workbook, R7-Spike) erwartet
+einen einzelnen durchgängigen Faden Opportunity → Order → Projekt → Aufgabe →
+Zeiterfassung → Rechnung → Bankabgleich. Der Generator erzeugt pro Modul unabhängige
+Bulk-Daten ohne Cross-Modul-Verknüpfung:
+
+- `service_tracking` auf Serviceprodukten wird nirgends gesetzt (0 Treffer im Repo) —
+  Odoo-native Automatik "Produkt → Projekt/Aufgabe bei Auftragsbestätigung" greift nicht.
+- `create_project_data` (`modules/project.py`) erzeugt Projekte ohne jede Verknüpfung zu
+  `sale.order`/`crm.lead`/Partner.
+- Timesheets landen auf zufälligen, unverbundenen Projekten (`project.py:179`,
+  `i % len(ctx.project_ids)`).
+
+Betrifft **nicht nur R7** — dieselbe Lücke existiert identisch bei rein manueller
+GUI-Bedienung, kein Regler behebt sie. Ist Voraussetzung dafür, dass irgendein Plan
+(KI-generiert oder manuell) einen präsentierbaren Einzel-Ablauf liefert statt nur
+statistisch plausibler Bulk-Daten.
+
+Aufwand: groß. Mind. nötig: (a) `service_tracking`/`invoice_policy`-Konfiguration auf
+erzeugten Serviceprodukten, (b) optionale Sale→Project-Verknüpfung (Odoo-native Automatik
+für mind. einen "Hero"-Datensatz pro Lauf nutzen statt der unabhängigen Zufallslogik in
+`create_project_data`), (c) ggf. Timesheet→Task→Order-Linie für Delivered-Qty-Invoicing.
+Nicht Teil von S3/S4 — eigene Aufwandsschätzung vor Einplanung nötig.
+
 ---
 
 ## 5. Umsetzungsreihenfolge
