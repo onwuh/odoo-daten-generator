@@ -6,7 +6,24 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from modules.sale import create_sale_order, confirm_sale_orders, link_order_to_opportunity, _move_won_opportunities
+from modules.sale import (
+    create_sale_order, confirm_sale_orders, link_order_to_opportunity,
+    _move_won_opportunities, create_sale_data, _DEFAULT_CONFIRM_PCT,
+)
+from modules.crm import create_opportunity
+from config import DemoCriteria, ModuleSelections, RunContext
+
+
+def _make_rctx(num_orders):
+    crit = DemoCriteria(
+        mode="both", industry="IT", num_companies=0,
+        num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
+        num_services=0, num_consumables=0, num_storables=0,
+    )
+    return RunContext(
+        criteria=crit, module_selections=ModuleSelections(sale=num_orders), industry="IT",
+        language_name="German", language_code="de_DE", gemini_model_name="test",
+    )
 
 
 def run(client, ctx):
@@ -112,6 +129,69 @@ def run(client, ctx):
         results.append(("sale: _move_won_opportunities writes Won stage_id", True, "stage_id=99"))
     except Exception as e:
         results.append(("sale: _move_won_opportunities writes Won stage_id", False, str(e)))
+
+    # Step 5 — B8: create_sale_data end-to-end, confirm count scales with
+    # order count (was hardcoded to a fixed 5), read-back.
+    try:
+        rctx = _make_rctx(num_orders=10)
+        rctx.company_ids = [partner_id]
+        rctx.product_ids = ctx.product_ids
+        create_sale_data(client, None, rctx)
+        assert len(rctx.order_ids) == 10, f"expected 10 orders, got {len(rctx.order_ids)}"
+        expected_confirmed = max(1, round(10 * _DEFAULT_CONFIRM_PCT / 100))
+        assert expected_confirmed != 5, "test setup coincidentally matches the old hardcoded 5"
+        assert len(rctx.confirmed_order_ids) == expected_confirmed, (
+            f"expected {expected_confirmed} confirmed orders, got {len(rctx.confirmed_order_ids)}"
+        )
+        confirmed = client.search_read(
+            'sale.order', [["id", "in", rctx.confirmed_order_ids]], fields=["state"], limit=0,
+        )
+        assert all(o["state"] in ("sale", "done") for o in confirmed), confirmed
+        results.append((
+            "sale: create_sale_data end-to-end (B8 scaling), read-back",
+            True, f"{len(rctx.order_ids)} orders, {len(rctx.confirmed_order_ids)} confirmed",
+        ))
+    except Exception as e:
+        results.append(("sale: create_sale_data end-to-end (B8 scaling), read-back", False, str(e)))
+
+    # Step 6 — B14: orders link to the opportunity of the SAME partner, not by
+    # position. Two partners, one opportunity each, opportunity list built in
+    # the OPPOSITE order from the company list — a positional zip() would
+    # cross-link them; the partner-matched fix must not.
+    try:
+        partner_a = partner_id
+        partner_b = client.create('res.partner', {"name": "Integration Test B14 Partner B"})
+        opp_a = create_opportunity(client, partner_a, "B14 Opp A")
+        opp_b = create_opportunity(client, partner_b, "B14 Opp B")
+
+        rctx = _make_rctx(num_orders=2)
+        rctx.company_ids = [partner_a, partner_b]
+        rctx.product_ids = ctx.product_ids
+        rctx.opportunity_ids = [opp_b, opp_a]  # deliberately reversed vs. company order
+
+        create_sale_data(client, None, rctx)
+        assert len(rctx.order_ids) == 2, f"expected 2 orders, got {len(rctx.order_ids)}"
+
+        orders = client.search_read(
+            'sale.order', [["id", "in", rctx.order_ids]],
+            fields=["partner_id", "opportunity_id"], limit=0,
+        )
+        assert len(orders) == 2, orders
+
+        def _unwrap(v):
+            return v[0] if isinstance(v, (list, tuple)) else v
+
+        expected = {partner_a: opp_a, partner_b: opp_b}
+        for order in orders:
+            order_partner = _unwrap(order["partner_id"])
+            order_opp = _unwrap(order["opportunity_id"])
+            assert order_opp == expected[order_partner], (
+                f"order for partner {order_partner} linked to opp {order_opp}, "
+                f"expected {expected[order_partner]} (cross-partner link — B14 regressed)"
+            )
+        results.append(("sale: create_sale_data links orders to same-partner opportunity (B14)", True, "2/2 matched"))
+    except Exception as e:
+        results.append(("sale: create_sale_data links orders to same-partner opportunity (B14)", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results
