@@ -52,7 +52,7 @@ diese Sektion nicht ausgewertet.
 | `hr` | int | 0 | Anzahl Mitarbeiter |
 | `project` | int | 0 | Anzahl Projekte |
 | `tasks_per_project` | int | 10 | |
-| `hr_timesheet` | int | 0 | 0 = aus, >0 = an |
+| `hr_timesheet` | int | 0 | **Gesamtzahl** Zeiteinträge über den gesamten Lauf verteilt — kein Flag, kein Wert pro Projekt. `project.py:159`: `for i in range(num_timesheets)`. `hr_timesheet: 1` erzeugt genau einen einzigen Zeiteintrag |
 | `mrp` | object | `{}` | siehe 3.1 |
 | `hr_recruitment` | object | `{}` | siehe 3.2 |
 | `hr_timeoff` | object | `{}` | siehe 3.3 |
@@ -159,3 +159,20 @@ Wegwerf-Skript gegen dieses Schema:
 
 **Exit-Kriterium:** Braucht ein typischer Gem-Plan mehr Nachkorrekturen an den GUI-Reglern
 als er an Klicks gespart hätte, gewinnt manuelle Eingabe — Feature wird nicht weiterverfolgt.
+
+## 6. Bekannte Grenzen (nicht plan-steuerbar)
+
+Diese Punkte kann kein JSON-Feld anfordern, egal wie das Schema erweitert wird — betrifft
+die Code-Ebene, nicht das Plan-Format:
+
+- **Bestätigungsquote von Verkaufsaufträgen** ist hardcoded (`_DEFAULT_CONFIRM_PCT = 65` in
+  `sale.py`), nicht über `modules` steuerbar. Ergebnis ist immer ~65% der erzeugten Aufträge
+  bestätigt, unabhängig vom Plan.
+- **`service_tracking`** (native Odoo-Automatik: Serviceprodukt löst bei Auftragsbestätigung
+  automatisch Projekt+Aufgabe aus) wird vom Generator nirgends gesetzt.
+- **Keine Verknüpfung** zwischen `sale.order`, `crm.lead` und den von `project`-Modul
+  erzeugten Projekten — jedes Modul erzeugt unabhängige Bulk-Daten.
+
+Siehe R8 in `IMPLEMENTIERUNGSPLAN.md` — Voraussetzung dafür, dass ein Plan (KI-generiert
+oder manuell) einen durchgängigen, präsentierbaren Einzel-Ablauf statt nur statistisch
+plausibler Bulk-Daten liefert.
