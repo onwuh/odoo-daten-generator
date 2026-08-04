@@ -7,14 +7,6 @@ from config import RunContext
 
 logger = logging.getLogger(__name__)
 
-# B7 (accounting.py num_bills) is min-1; sale confirmation needs the mirror-image
-# fix: was hardcoded to a fixed 5 orders regardless of how many were generated
-# (200 orders -> exactly 5 confirmed). A user-facing GUI slider (like hr_timeoff's
-# validate_pct) would need a new ModuleSelections field, which is a config-schema
-# change gated behind architect approval — deferred; this constant fixes the
-# actual defect (confirmations now scale with order count) without touching config.py.
-_DEFAULT_CONFIRM_PCT = 65
-
 
 # ---------------------------------------------------------------------------
 # Low-level sale helpers (previously in odoo_actions.py)
@@ -104,9 +96,10 @@ def create_sale_data(client, gemini, ctx: RunContext) -> None:
             # rather than linking it to an unrelated customer's opportunity.
 
     # Confirm a subset of orders — scales with order count (B8), not a fixed 5
-    num_to_confirm = max(1, round(len(ctx.order_ids) * _DEFAULT_CONFIRM_PCT / 100))
+    confirm_pct = ctx.module_selections.sale_confirm_pct
+    num_to_confirm = max(1, round(len(ctx.order_ids) * confirm_pct / 100))
     orders_to_confirm = ctx.order_ids[:num_to_confirm]
-    logger.info(f"-> Bestätige {len(orders_to_confirm)} von {len(ctx.order_ids)} Verkaufsaufträgen")
+    logger.info(f"-> Bestätige {len(orders_to_confirm)} von {len(ctx.order_ids)} Verkaufsaufträgen ({confirm_pct}%)")
     confirm_sale_orders(client, orders_to_confirm)
 
     # Verify confirmation

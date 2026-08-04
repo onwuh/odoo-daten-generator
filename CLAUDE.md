@@ -136,15 +136,24 @@ but do not replace live integration tests.
 
 ## Current Sprint
 <!-- Architect updates this before each Claude Code session -->
-Sprint S3 aus `IMPLEMENTIERUNGSPLAN.md` abgeschlossen (2026-08-03): A1 (`fetch_creative_data`
-ersetzt durch `fetch_creative_atoms` + `data_factory.py`/`static_data.py`/`text_utils.py` —
-Adressen, Kontakte, Preise, Lieferanten-Adressen jetzt deterministisch im Code, nicht vom LLM),
-A2 (Bewerber-E-Mail/Telefon aus Namen abgeleitet statt vom LLM angefragt), A3 (Cache für
-`workcenter_data`/`project_stages`/`bom_components`/`creative_atoms`, gemeinsamer
-`_cached_llm_call`-Helper, `job_summaries`-Cache-Bug behoben). Landed als 4 separate Commits
-(PR1–PR4), je grün gegen die volle Testsuite. S2 (B4, B5, B6, B9, B12, B13) und S1 (B1–B3, B16)
-waren bereits vorher erledigt. Nächster Sprint: S4 — Architektur (D1 Fortschritts-Callback,
-D2 `logging` statt `print`, D3 Batch-Erstellung; danach B7, B8, B10, B11, B14, B15).
+Sprint S4 aus `IMPLEMENTIERUNGSPLAN.md` abgeschlossen (2026-08-03/04): D1 (Fortschritts-Callback
+in `orchestrator.run()`, kein Monkeypatch mehr), D2 (`logging_setup.py` statt `print`/
+`sys.stdout`-Umleitung), D3 (`create_batch` an 18 Call-Sites über `modules/*.py`), B11
+(`call_method`-Fallback-Guard), B14 (Order↔Opportunity partnerbasiert verknüpft), B15
+(`num_workcenters` erlaubt 0) landeten am 2026-08-03/04. B7/B8/B10 hatten zu dem Zeitpunkt
+bereits ihren Kernbug behoben; im direkten Folgesprint (2026-08-04) ergänzt: B7
+(`ModuleSelections.account_bills`, GUI-Feld "Anzahl Eingangsrechnungen"), B8
+(`ModuleSelections.sale_confirm_pct`, GUI-Slider "Bestätigt (%)"), B10 (Architekten-Review
+entschied gegen den ursprünglich vorgeschlagenen `RunContext.selected_modules`-Umbau — der
+Bug war bereits funktional behoben und kein Modul braucht das Feld; nur dokumentiert, kein
+Code-Change). S3 (A1–A3), S2 (B4/B5/B6/B9/B12/B13) und S1 (B1–B3, B16) waren bereits vorher
+erledigt. Nächster Sprint: S5 — API-Versions-Schicht (R5), siehe §4 Roadmap.
+
+**Prozess-Hinweis (2026-08-04):** Dieser Abschnitt lag zeitweise eine ganze Session hinter dem
+tatsächlichen Code-Stand zurück — D1/D2/D3/B11/B14/B15 waren bereits implementiert und getestet,
+aber hier noch als "nächster Sprint" gelistet, und `IMPLEMENTIERUNGSPLAN.md` zitierte `gui.py`-
+Zeilennummern, die nicht mehr existierten. Vor dem Vertrauen auf die Sprint-Status-Prosa hier:
+gegen den tatsächlichen Datei-Inhalt/Zeilennummern verifizieren, nicht nur gegen diesen Text.
 
 Neuer Backlog-Punkt seit S3-Review: R6 — Multi-Country Customer/Supplier Generation (siehe
 §4 Roadmap). `static_data.py` ist bereits länderweise (DE/AT/CH) strukturiert, damit weitere

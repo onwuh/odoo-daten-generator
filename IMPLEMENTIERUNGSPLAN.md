@@ -213,23 +213,13 @@ selected = [stages[i] for i in idx]
 
 **Test:** Unit — `random.seed(42)`, Assert: Reihenfolge der Auswahl entspricht Reihenfolge der Quellliste.
 
-### B7 🟡 `accounting.py:319` — Mindestens 10 Eingangsrechnungen, immer
+### B7 ✅ Erledigt — `accounting.py` — Mindestens 10 Eingangsrechnungen, immer
 
-```python
-num_bills = max(10, num_invoices // 2)
-```
+War: `num_bills = max(10, num_invoices // 2)` erzwang immer ≥10 Vendor Bills. Core-Bug bereits am 2026-08-03/04 behoben (`max(1, num_invoices // 2)`); GUI-Konfigurierbarkeit (`ModuleSelections.account_bills: Optional[int] = None`, GUI-Feld "Anzahl Eingangsrechnungen" in `_sub_account`, min 0) im S4-Folgesprint ergänzt — `num_bills` wird jetzt vor dem `purchase_pool`-Gate berechnet, damit ein `0`-Override auch `_create_suppliers` überspringt. Getestet in `tests/unit/test_accounting_batch_unit.py` (B7-Tests) und `tests/integration/test_accounting.py` (Step 9, Pattern 4 Read-Back).
 
-Nutzer wählt 1 Rechnung → bekommt trotzdem 10 Vendor Bills. Vermutlich war `min` gemeint oder ein eigener GUI-Parameter.
-**Fix:** Eigenes GUI-Feld "Anzahl Eingangsrechnungen" in `_sub_account` (Default `num_invoices // 2`, min 0); solange nicht vorhanden: `max(1, num_invoices // 2)`.
+### B8 ✅ Erledigt — `sale.py` — Bestätigung hart auf 5 Aufträge begrenzt
 
-### B8 🟡 `sale.py:75` — Bestätigung hart auf 5 Aufträge begrenzt
-
-```python
-orders_to_confirm = ctx.order_ids[:max(1, min(5, len(ctx.order_ids)))]
-```
-
-Bei 200 Aufträgen werden genau 5 bestätigt — und Accounting fakturiert nur bestätigte Aufträge → der Demo-Datenbestand skaliert nicht mit der Nutzereingabe.
-**Fix:** Prozentsatz statt Fixzahl (`confirm_pct`, Default 60–70 %, als GUI-Slider analog zu `validate_pct` bei Urlaub).
+War: `orders_to_confirm = ctx.order_ids[:max(1, min(5, len(ctx.order_ids)))]` bestätigte bei 200 Aufträgen genau 5. Core-Bug bereits am 2026-08-03/04 behoben (`_DEFAULT_CONFIRM_PCT = 65`-Konstante, skaliert mit Auftragsanzahl); GUI-Konfigurierbarkeit (`ModuleSelections.sale_confirm_pct: int = 65`, GUI-Slider "Bestätigt (%)" in `_sub_sale`, analog `validate_pct`) im S4-Folgesprint ergänzt — die Modul-Konstante ist entfernt, `sale.py` liest `ctx.module_selections.sale_confirm_pct`. Getestet in `tests/unit/test_sale_unit.py` und `tests/integration/test_sale.py` (Step 7, Pattern 4 Read-Back).
 
 ### B9 🟡 `crm.py:271-278` — Chatter-Teilnehmernamen nur von der ersten Opportunity
 
@@ -241,20 +231,15 @@ Bei 200 Aufträgen werden genau 5 bestätigt — und Accounting fakturiert nur b
 
 **Test:** Unit — Pattern 8 (call_count == 1) bleibt; Assert: Titel im Request eindeutig.
 
-### B10 🟡 `gui.py:911` — `installed_modules` enthält *ausgewählte*, nicht installierte Module
+### B10 ✅ Erledigt (dokumentiert, kein Code-Change) — `installed_modules` enthielt *ausgewählte*, nicht installierte Module
 
-```python
-installed_modules=selected_modules if mode_val == "both" else set(),
-```
+War: `installed_modules=selected_modules if mode_val == "both" else set()` — Namenskonflation zwischen "installiert" und "ausgewählt". Core-Bug bereits am 2026-08-03/04 behoben: `gui.py` befüllt `ctx.installed_modules` wieder aus `self.installed_modules` (dem echten Screen-2-Odoo-Probe); nicht ausgewählte Module bleiben bei ihrem `ModuleSelections`-Default (0/leeres dict), sodass das bestehende Truthiness-Gate im Orchestrator sie korrekt überspringt (verifiziert u. a. durch den bestehenden "B10 Pattern 4"-Test in `test_accounting_batch_unit.py`).
 
-`ctx.installed_modules` bedeutet semantisch überall "in Odoo installiert" (so nutzt es z. B. `sale.py:94` für die CRM-Won-Logik und `accounting.py:286` für die Order-Erkennung). Die GUI füllt es mit der Nutzer-*Auswahl* → Namenskonflation. Aktuell zufällig meist harmlos, aber: Wählt der Nutzer Sale ohne Account, meldet `accounting` nicht "sale nicht installiert" sondern läuft in den falschen Zweig, und jede künftige Nutzung des Feldes erbt die Doppeldeutigkeit.
+Architekten-Review (2026-08-04, S4-Folgesprint) hat den ursprünglich vorgeschlagenen Mechanismus (`RunContext.selected_modules: Set[str]` + explizites Orchestrator-Gate) bewusst **nicht** umgesetzt: kein Modul liest `selected_modules` heute, ein zusätzliches 🔒-Config-Schema-Feld ohne Konsument wäre totes Gewicht, und ein explizites Zweit-Gate (Option 2) würde eine zweite "was soll laufen"-Eingabe einführen, die mit den bestehenden Zählfeldern nicht zwangsläufig synchron bleibt — ein Aufrufer, der Zählwerte setzt aber `selected_modules` vergisst, würde still gar nichts ausführen. Bewusste Entscheidung gegen weiteren Umbau; siehe Sprint-S4-Notiz unten.
 
-**Fix:** 🔒 (Config-Schema) `RunContext` um `selected_modules: Set[str]` erweitern; `installed_modules` wieder mit `self.installed_modules` (Screen 2) befüllen; Orchestrator-Gate auf `is_installed and module_code in ctx.selected_modules` umstellen.
+### B11 ✅ Erledigt — `odoo_client.py` — Letzter `call_method`-Fallback wirft Argumente weg 🔒
 
-### B11 🟡 `odoo_client.py:242-248` — Letzter `call_method`-Fallback wirft Argumente weg 🔒
-
-Fallback 3 postet `{}` (nur Context) an `/{model}/{method}` — ein `message_post` würde so als **leere Nachricht** durchgehen, ein `action_confirm` auf nichts. Stiller Datenmüll statt Fehler.
-**Fix (nach Architekten-Freigabe):** Fallback 3 nur zulassen, wenn `args`, `kwargs` und `ids` alle leer sind; sonst letzte Exception durchreichen.
+War: Fallback 3 postete `{}` (nur Context) unabhängig vom Inhalt von `args`/`kwargs`/`ids`. Behoben (2026-08-03/04): Guard `if ids or args or kwargs: raise` (odoo_client.py, in `call_method`) lässt Fallback 3 nur noch feuern, wenn wirklich nichts zu senden war. Getestet in `tests/unit/test_odoo_client_unit.py`.
 
 ### B12 🟡 `crm.py:116` — Verkäufer-Zuordnung hängt an Chatter-Option
 
@@ -271,15 +256,13 @@ Existiert der Skill-Typ bereits, werden Skills **und Levels trotzdem neu angeleg
 **Fix:** Level-Erstellung nur im `else`-Zweig (neuer Typ); für existierende Typen `fetch_skill_levels_map` nutzen. Nebenbefund: `levels[:max(3, len(levels))]` ist ein No-Op — entfernen.
 **Test:** Integration — zweimaliger Lauf, Assert: Level-Anzahl pro Typ konstant.
 
-### B14 ⚪ `sale.py:71` — Order↔Opportunity-Verknüpfung ignoriert Partner
+### B14 ✅ Erledigt — `sale.py` — Order↔Opportunity-Verknüpfung ignoriert Partner
 
-`zip(ctx.order_ids, ctx.opportunity_ids)` verknüpft positionsweise — Auftrag von Kunde A hängt an Opportunity von Kunde B.
-**Fix:** Beim Verknüpfen nach `partner_id` matchen (Opp-Liste nach Partner gruppieren, Order dem passenden Opp zuordnen; ohne Match keine Verknüpfung).
+War: `zip(ctx.order_ids, ctx.opportunity_ids)` verknüpfte positionsweise. Behoben (2026-08-03/04): `create_sale_data` gruppiert Opportunities nach `partner_id` und ordnet jeder Order nur eine Opportunity desselben Kunden zu (kein Match → keine Verknüpfung). Getestet in `test_sale_unit.py` und `tests/integration/test_sale.py` (Step 6, bewusst umgekehrte Opp-Reihenfolge zur Regressionsprüfung gegen positionsbasiertes `zip`).
 
-### B15 ⚪ `mrp.py:109` — `max(1, num_workcenters)` macht 0 unmöglich
+### B15 ✅ Erledigt — `mrp.py` — `max(1, num_workcenters)` machte 0 unmöglich
 
-`num_workcenters = max(1, int(...))` erzwingt ≥1, obwohl die GUI 0 liefert, wenn Routings aus sind. Zusammen mit dem `mrp_routings`-Default `True` (siehe B1) entstehen ungewollte Arbeitszentren.
-**Fix:** `max(0, ...)`; Abschnitt A prüft bereits `num_workcenters > 0`.
+War: `num_workcenters = max(1, int(...))` erzwang ≥1 auch bei deaktivierten Routings. Behoben (2026-08-03/04): `max(0, ...)`. Getestet in `tests/unit/test_mrp_batch_unit.py`.
 
 ### B16 ⚪ `crm.py:52` — toter Code / unklare Präzedenz
 
@@ -289,46 +272,17 @@ Existiert der Skill-Typ bereits, werden Skills **und Levels trotzdem neu angeleg
 
 ## 3. Architektur- & Design-Verbesserungen
 
-### D1 🟠 Fortschritts-Callback statt Monkeypatching
+### D1 ✅ Erledigt — Fortschritts-Callback statt Monkeypatching
 
-`gui.py:1059-1089` patcht `orchestrator._run_module` zur Laufzeit und stellt es im `finally` zurück — fragil (Race bei Fehler, verdeckte Kopplung, bricht bei Refactoring des Orchestrators unsichtbar).
+War: `gui.py` patchte `orchestrator._run_module` zur Laufzeit. Behoben (2026-08-03/04): `orchestrator.run(client, gemini, ctx, on_module_start=None, on_module_done=None)` mit `_run_module(name, handler, ..., on_start=None, on_done=None)` — kein Monkeypatch mehr, `gui.py` übergibt Thread-sichere `self.after(0, ...)`-Wrapper. Getestet in `tests/unit/test_orchestrator_unit.py` (D1a–e, inkl. Regressionsguard, dass Callbacks an **beiden** Call-Sites feuern — master_data-Sonderfall und Modul-Schleife).
 
-**Fix:** Observer-Parameter im Orchestrator:
+### D2 ✅ Erledigt — `logging` statt `print` + stdout-Umleitung
 
-```python
-# orchestrator.py
-def run(client, gemini, ctx, on_module_start=None, on_module_done=None) -> None:
-    ...
-def _run_module(name, handler, ..., on_start=None, on_done=None):
-    if on_start: on_start(name)
-    try:
-        handler(...); on_done and on_done(name, ok=True)
-    except Exception as exc:
-        ...; on_done and on_done(name, ok=False)
-```
+War: `QueueWriter` bog global `sys.stdout` um. Behoben (2026-08-03/04): `logging_setup.py` (`configure_logging()` für einen Konsolen-`StreamHandler`, `QueueLogHandler` fürs GUI-Log-Textfeld); alle Module nutzen `logger.info/warning` statt `print` (0 verbleibende `print()`-Aufrufe in `orchestrator.py`, `llm_service.py`, `odoo_client.py`, `gui.py`, `modules/*.py` — nur noch in Test-Runnern/`test_mrp_live.py`, außerhalb des D2-Scopes). Emoji-Präfixe bleiben über den `"%(message)s"`-Formatter erhalten. Getestet in `tests/unit/test_logging_setup.py`.
 
-GUI übergibt Thread-sichere Wrapper (`self.after(0, ...)`). Kein Monkeypatch mehr.
+### D3 ✅ Erledigt — Batch-Erstellung konsequent nutzen
 
-### D2 🟠 `logging` statt `print` + stdout-Umleitung
-
-`QueueWriter` biegt global `sys.stdout` um (gui.py:1047) — betrifft alle Threads, kollidiert mit künftigen parallelen Läufen und macht Log-Level unmöglich.
-
-**Fix:** Standard-`logging` mit zwei Handlern: `StreamHandler` (Konsole) + `QueueHandler` (GUI). Module ersetzen `print` durch `logger.info/warning`. Mechanischer Umbau, gut in einem eigenen PR machbar; Emojis/Format bleiben via Formatter erhalten.
-
-### D3 🟠 Batch-Erstellung konsequent nutzen
-
-`create_batch` existiert (`odoo_client.py:168`), wird aber nur von `master_data._create_products` genutzt. N+1-Muster heute:
-
-| Stelle | Heute | Ziel |
-|---|---|---|
-| `master_data._create_partners` | 1 Call pro Firma + 1 pro Kontakt | 1 Call pro Firma **inkl. Kontakten** via `child_ids: [(0, 0, {...})]` — oder `create_batch` über alle Firmen |
-| `crm.create_crm_data` | 1 Call pro Opportunity | `create_batch('crm.lead', ...)` |
-| `project` Tasks | 1 Call pro Task | `create_batch('project.task', ...)` |
-| `project.create_timesheet_data` | 1 Call pro Eintrag | `create_batch('account.analytic.line', ...)` |
-| `mrp` Komponenten/BOM-Lines | je 1 Call | Komponenten via `create_batch`; BOM-Lines via `bom_line_ids: [(0,0,...)]` direkt im BOM-Create |
-| `accounting` Vendor Bills | `post_invoices` **pro Bill** | IDs sammeln, **ein** `action_post`-Batch am Ende |
-
-Erwartung: 5–10× weniger HTTP-Roundtrips bei großen Läufen.
+War: `create_batch` (`odoo_client.py`) wurde nur von `master_data._create_products` genutzt, alle anderen Stellen N+1. Behoben (2026-08-03/04): 18 `create_batch`-Call-Sites über `modules/master_data.py`, `crm.py`, `project.py`, `mrp.py`, `accounting.py`, `hr.py`, `recruiting.py` verteilt — inkl. `mrp.bom`-BOM-Lines via `bom_line_ids: [(0,0,...)]` inline im Create, und `accounting`-Vendor-Bills via einmaligem `action_post`-Batch statt `post_invoices` pro Bill. Getestet in `test_master_data_unit.py`, `test_crm_batch_unit.py`, `test_project_batch_unit.py`, `test_mrp_batch_unit.py`, `test_accounting_batch_unit.py`, `test_hr_batch_unit.py`, `test_recruiting_batch_unit.py` (je Pattern 5 + Call-Count-Assertion).
 
 ### D4 🟡 `gui.py` aufteilen
 
@@ -600,7 +554,7 @@ Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-
 | **S1 — Bugfixes kritisch** | B1, B2, B3 (+ B16 als Beifang) | Kleine, isolierte Fixes; B1 schaltet verlorene Features frei |
 | **S2 — Datenqualität** | B4, B5, B6, B9, B12, B13 | Sichtbare Qualität der Demo-Daten; keine Strukturänderungen |
 | **S3 — LLM-Minimalismus** | A1 (`data_factory` + `static_data`), A2, A3 | Kern-Maxime; baut auf stabilem Fundament aus S1/S2 |
-| **S4 — Architektur** | D1, D2, D3; danach B7, B8, B10, B11, B14, B15 (z. T. 🔒) | Callback + Logging + Batching vor weiterem Feature-Ausbau |
+| **S4 — Architektur** ✅ | D1, D2, D3, B11, B14, B15 (2026-08-03/04); B7/B8 GUI-Config-Felder + B10-Architekten-Entscheidung (2026-08-04, Folgesprint) | Callback + Logging + Batching vor weiterem Feature-Ausbau — abgeschlossen |
 | **S5 — API-Versions-Schicht (R5)** | Versions-Erkennung, `api_versions/*.json`, Client-Adapter (🔒), `fields_get`-Warnliste | Vor weiteren Feature-Ausbauten, damit neue Module von Anfang an kanonisch gegen den Adapter schreiben |
 | **S6 — PDF (R1/P1+P2)** | `pdf_factory`, `modules/documents`, GUI-Optionen | Erster Roadmap-Ausbau, größter Demo-Effekt |
 | **S7 — Purchase + Inventory** | R2, R3 | Prozessketten vervollständigen |

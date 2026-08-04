@@ -248,5 +248,31 @@ def run(client, ctx):
     except Exception as e:
         results.append(("accounting: create_accounting_data end-to-end (D3 batch), read-back", False, str(e)))
 
+    # Step 9 — B7: account_bills override is honored exactly, decoupled from
+    # num_invoices (7 bills with only 4 invoices — mismatched on purpose so
+    # the test can't pass by coincidence), read-back.
+    try:
+        rctx = _make_rctx(num_invoices=4)
+        rctx.module_selections.account_bills = 7
+        rctx.company_ids = [partner_id]
+        rctx.product_ids = [product_id]
+        rctx.component_ids = [product_id]
+        rctx.installed_modules = set()  # force standalone invoice path
+        create_accounting_data(client, None, rctx)
+        assert len(rctx.bill_ids) == 7, f"expected 7 vendor bills (override), got {len(rctx.bill_ids)}"
+
+        bills = client.search_read(
+            'account.move', [["id", "in", rctx.bill_ids]], fields=["move_type", "state"], limit=0,
+        )
+        assert len(bills) == 7, bills
+        assert all(b["move_type"] == "in_invoice" for b in bills), bills
+
+        results.append((
+            "accounting: create_accounting_data honors account_bills=7, read-back",
+            True, f"{len(bills)} bills",
+        ))
+    except Exception as e:
+        results.append(("accounting: create_accounting_data honors account_bills=7, read-back", False, str(e)))
+
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

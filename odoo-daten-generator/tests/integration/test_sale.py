@@ -8,7 +8,7 @@ if _ROOT not in sys.path:
 
 from modules.sale import (
     create_sale_order, confirm_sale_orders, link_order_to_opportunity,
-    _move_won_opportunities, create_sale_data, _DEFAULT_CONFIRM_PCT,
+    _move_won_opportunities, create_sale_data,
 )
 from modules.crm import create_opportunity
 from config import DemoCriteria, ModuleSelections, RunContext
@@ -138,7 +138,7 @@ def run(client, ctx):
         rctx.product_ids = ctx.product_ids
         create_sale_data(client, None, rctx)
         assert len(rctx.order_ids) == 10, f"expected 10 orders, got {len(rctx.order_ids)}"
-        expected_confirmed = max(1, round(10 * _DEFAULT_CONFIRM_PCT / 100))
+        expected_confirmed = max(1, round(10 * rctx.module_selections.sale_confirm_pct / 100))
         assert expected_confirmed != 5, "test setup coincidentally matches the old hardcoded 5"
         assert len(rctx.confirmed_order_ids) == expected_confirmed, (
             f"expected {expected_confirmed} confirmed orders, got {len(rctx.confirmed_order_ids)}"
@@ -192,6 +192,30 @@ def run(client, ctx):
         results.append(("sale: create_sale_data links orders to same-partner opportunity (B14)", True, "2/2 matched"))
     except Exception as e:
         results.append(("sale: create_sale_data links orders to same-partner opportunity (B14)", False, str(e)))
+
+    # Step 7 — B8: sale_confirm_pct=50 (non-default) is honored end-to-end,
+    # read-back on confirmed order state. Distinct from Step 5, which
+    # validates the unmodified 65% default path.
+    try:
+        rctx = _make_rctx(num_orders=10)
+        rctx.module_selections.sale_confirm_pct = 50
+        rctx.company_ids = [partner_id]
+        rctx.product_ids = ctx.product_ids
+        create_sale_data(client, None, rctx)
+        assert len(rctx.order_ids) == 10, f"expected 10 orders, got {len(rctx.order_ids)}"
+        assert len(rctx.confirmed_order_ids) == 5, (
+            f"expected 5 confirmed orders (50% of 10), got {len(rctx.confirmed_order_ids)}"
+        )
+        confirmed = client.search_read(
+            'sale.order', [["id", "in", rctx.confirmed_order_ids]], fields=["state"], limit=0,
+        )
+        assert all(o["state"] in ("sale", "done") for o in confirmed), confirmed
+        results.append((
+            "sale: create_sale_data honors sale_confirm_pct=50, read-back",
+            True, f"{len(rctx.confirmed_order_ids)}/10 confirmed",
+        ))
+    except Exception as e:
+        results.append(("sale: create_sale_data honors sale_confirm_pct=50, read-back", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results
