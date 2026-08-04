@@ -9,7 +9,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from config import ModuleSelections, RunContext, DemoCriteria
-from modules.hr import create_leave_data
+from modules.hr import create_leave_data, get_or_create_annual_leave_type
 
 
 def _make_ctx(hr_timeoff: dict, employee_ids=None) -> RunContext:
@@ -255,6 +255,24 @@ def run():
                         f"{len(created_dates)} new leaves, no overlap with 2 existing"))
     except Exception as e:
         results.append(("hr: get_existing_leaves blocks overlap with prior runs", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # B17 — hr.work.entry.type.shortcut_behavior doesn't exist on saas-19.4;
+    # get_or_create_annual_leave_type must not send it on create.
+    # ------------------------------------------------------------------
+    try:
+        mock_client = unittest.mock.MagicMock()
+        mock_client.search_read.return_value = []  # no existing leave type -> create() branch
+        mock_client.create.return_value = 42
+        get_or_create_annual_leave_type(mock_client)
+        assert mock_client.create.called, "Expected create() to be called"
+        sent_vals = mock_client.create.call_args[0][1]
+        assert 'shortcut_behavior' not in sent_vals, (
+            f"B17 regression: 'shortcut_behavior' sent again, vals={sent_vals}"
+        )
+        results.append(("B17: get_or_create_annual_leave_type omits shortcut_behavior", True, ""))
+    except Exception as e:
+        results.append(("B17: get_or_create_annual_leave_type omits shortcut_behavior", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

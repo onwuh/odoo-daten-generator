@@ -268,6 +268,30 @@ War: `num_workcenters = max(1, int(...))` erzwang ≥1 auch bei deaktivierten Ro
 
 `(company_ids * 2)[:len(company_ids) * 2]` — der Slice ist ein No-Op. Und `crm.py:46` `return early or [stages[0]["id"]] if stages else []` funktioniert nur wegen Operator-Präzedenz korrekt — Klammern setzen: `return (early or [stages[0]["id"]]) if stages else []`.
 
+### B17 ✅ Erledigt (2026-08-04) — `hr.py:33` — `hr.work.entry.type.shortcut_behavior` existiert nicht auf saas-19.4
+
+Entdeckt 2026-08-04 durch S5s neue `fields_get`-Warnliste (`odoo_actions.
+check_field_compatibility`), live gegen `demo-pahu-test1.odoo.com` verifiziert: 74
+Live-Felder auf `hr.work.entry.type` geprüft, keines heißt oder ähnelt `shortcut_behavior`.
+`get_or_create_annual_leave_type` (`modules/hr.py:18-39`) sendet das Feld im `create()`-Call
+für einen neuen Urlaubstyp — bisher unbemerkt, weil der `create()`-Zweig nur feuert, wenn
+**keine** `hr.work.entry.type` mit `requires_allocation=True` existiert; auf der Live-Instanz
+existiert durch frühere Läufe bereits einer, der Zweig wird im aktuellen Test-Lauf also nie
+mehr durchlaufen. Auf einer frischen/leeren Odoo-Instanz (erster Lauf überhaupt) würde
+`create()` mit einem unbekannten Feld gegen die Instanz gehen — Odoo verwirft unbekannte
+Keys teils still, teils mit Fehler, je nach ORM-Version; nicht abschließend getestet, da auf
+der einzigen Live-Instanz kein leerer `hr.work.entry.type`-Zustand mehr herstellbar ist, ohne
+bestehende Daten zu löschen.
+
+**Fix:** `'shortcut_behavior': 'add',` aus dem `create()`-Call in `modules/hr.py:33` entfernt
+(kein Ersatzfeld gefunden — kein `shortcut_behavior`-ähnliches Feld im Live-`fields_get`).
+**Test:** `tests/unit/test_hr_unit.py` ("B17: get_or_create_annual_leave_type omits
+shortcut_behavior") — Mock-Client mit leerem `search_read` (erzwingt den `create()`-Zweig),
+Assert `'shortcut_behavior'` nicht in den übergebenen `vals`. Live-`create()`-Zweig bleibt
+auf der aktuellen Instanz nicht direkt testbar (bereits ein `hr.work.entry.type` mit
+`requires_allocation=True` vorhanden aus früheren Läufen) — Unit-Test ist der einzig
+mögliche Regressionsschutz dafür, siehe Bug-Beschreibung oben.
+
 ---
 
 ## 3. Architektur- & Design-Verbesserungen
@@ -383,19 +407,63 @@ Für `storables` und MRP-Komponenten Anfangsbestände (`stock.quant` via `action
 
 ### R5 🟡 API-Versions-Schicht — Feld-/Methoden-Mapping pro Odoo-Release
 
-**Problem:** Zwischen SaaS-Releases werden Felder umbenannt oder gestrichen (reale Beispiele aus der Projekthistorie: `detailed_type` entfiel, Leave-Type-Feld wurde zu `work_entry_type_id`, `action_confirm` vs. `button_confirm`). Heute sind diese Namen hart in den Modulen codiert — jedes Release erzwingt Programmänderungen.
+**S5-Status (2026-08-04, siehe CLAUDE.md "Current Sprint" für Details):** Sprint in zwei
+Tiers gesplittet, nach Architekten-Review eines vorab peer-reviewten Plans (fremder
+Opus-Agent, Kontext nur Plan+Live-Repo). **Tier 1 — Baustein 1 (Versions-Erkennung) +
+`fields_get`-Warnliste — implementiert und getestet.** **Tier 2 — Baustein 2 (Mapping-Dateien)
++ Baustein 3 (Client-Adapter, 🔒 `odoo_client.py`) — bewusst zurückgestellt**, siehe
+Begründung unten. Zwei Korrekturen an diesem Abschnitt gegenüber dem Original-Stand
+(2026-07-20):
+1. **Kanonische Version ist 19.4, nicht 19.2** — der Live-Instanz-Stand hat sich seit
+   Schreiben dieses Abschnitts geändert (siehe CLAUDE.md-Update 2026-08-03), und der Code
+   schreibt bereits 19.4-Feldnamen. Jede Mapping-Datei muss Deltas relativ zu 19.4
+   beschreiben, nicht relativ zu 19.2 wie unten ursprünglich skizziert.
+2. **Die "realen Beispiele" in der Problem-Beschreibung unten sind teils nicht belegt:**
+   `work_entry_type_id` ist laut Projekt-Memory auf 19.2 *und* 19.4 identisch (kein Delta);
+   `action_confirm` vs. `button_confirm` ist eine JSON/2-API-vs.-ORM-Unterscheidung, kein
+   Versions-Delta. Einzig belegter Delta zwischen 19.2 und 19.4: `hr.leave.allocation.
+   allocation_type` existierte auf 19.2, wurde auf 19.4 entfernt — und brauchte keine
+   Mapping-Zeile, weil der Code das Feld nie referenziert. **Tier 2 wurde deshalb
+   zurückgestellt: eine Adapter-Infrastruktur ohne einen einzigen belegten Rename lässt sich
+   nur gegen synthetische Test-Daten prüfen, nicht gegen echtes Odoo-Verhalten — Bausteine 2+3
+   werden gebaut, sobald eine zweite reale Ziel-Version einen konkreten Rename liefert.**
+   Baustein 1 + die `fields_get`-Warnliste liefern schon heute echten, live-geprüften Wert
+   ohne dieses Risiko (`odoo_actions.get_server_version`, `odoo_actions.
+   check_field_compatibility`, `FIELD_COMPAT_WHITELIST` — alle ohne 🔒-Berührung).
+   Nebenbefund aus dem ersten Live-Lauf der neuen Warnliste: `hr.work.entry.type.
+   shortcut_behavior` (`modules/hr.py:33`) existiert auf saas-19.4 nicht (74 Live-Felder
+   geprüft, keine Nähe-Übereinstimmung) — bisher unbemerkt, weil der `create()`-Zweig in
+   `get_or_create_annual_leave_type` nur bei komplett leerer `hr.work.entry.type`-Tabelle
+   feuert. Nicht Teil von S5 behoben (Scope-Grenze) — siehe Bug-Liste.
+
+**Problem:** Zwischen SaaS-Releases werden Felder umbenannt oder gestrichen. Heute sind
+Feld-/Methodennamen hart in den Modulen codiert — jedes Release erzwingt Programmänderungen.
 
 **Ziel:** Release-Unterschiede so weit wie sinnvoll in *nutzer­editierbare Konfiguration* verlagern — und die Grenze klar ziehen, ab der Code die richtige Antwort ist (siehe Tabelle unten).
 
-#### Baustein 1: Versions-Erkennung (automatisch, überschreibbar)
+#### Baustein 1: Versions-Erkennung (automatisch, überschreibbar) ✅ Erledigt (Tier 1)
 
-Die Serverversion ist ohne neuen Endpunkt abfragbar:
+`odoo_actions.get_server_version(client)` — Live-bestätigtes Format auf saas-19.4:
+`"saas~19.4.1.3"` (Segmentanzahl nach dem Punkt variiert, Parser darf sie nicht annehmen):
 
 ```python
 rec = client.search_read('ir.module.module', [['name', '=', 'base']],
                          fields=['latest_version'], limit=1)
-# "saas~19.2.1.0.0" → normalisiert "19.2"
+# "saas~19.4.1.3" → normalisiert "19.4"
 ```
+
+GUI: neue Statuszeile "Odoo-Version" in Screen 2 (`gui.py`), nicht-blockierend (kein Gate auf
+"Weiter" bei Erkennungsfehler, analog zum bestehenden "Vorhandene Stammdaten"-Verhalten).
+Auf einen manuellen Override-Dropdown wurde **bewusst verzichtet** (analog zur B10-
+Architekten-Entscheidung: ein Override-Wert ohne Konsumenten — Tier 2/der Adapter, der ihn
+lesen würde, ist zurückgestellt — wäre totes Gewicht).
+
+**Zusätzlich implementiert (Baustein 3 "Ausbaustufe", vorgezogen weil unabhängig von
+Bausteinen 2+3):** `odoo_actions.check_field_compatibility(client)` — `fields_get` gegen eine
+kuratierte Liste von ~16 Modell/Feld-Paaren (aus echten `client.create`/`create_batch`/
+`write`-Call-Sites über `modules/*.py` gezogen, priorisiert nach CLAUDE.md "Verified field
+gotchas"). Nicht-fataler Log-Warnung, kein GUI-Gate. Modelle, deren übergeordnetes App nicht
+installiert ist, werden still übersprungen (Installations-, kein Versions-Thema).
 
 Screen 2 zeigt die erkannte Version als eigene Statuszeile; daneben ein Dropdown zum manuellen Überschreiben (für Edge-Fälle / Testsysteme). Unbekannte Version → nächstniedrigere bekannte verwenden + deutliche Warnung im Log.
 
@@ -555,7 +623,8 @@ Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-
 | **S2 — Datenqualität** | B4, B5, B6, B9, B12, B13 | Sichtbare Qualität der Demo-Daten; keine Strukturänderungen |
 | **S3 — LLM-Minimalismus** | A1 (`data_factory` + `static_data`), A2, A3 | Kern-Maxime; baut auf stabilem Fundament aus S1/S2 |
 | **S4 — Architektur** ✅ | D1, D2, D3, B11, B14, B15 (2026-08-03/04); B7/B8 GUI-Config-Felder + B10-Architekten-Entscheidung (2026-08-04, Folgesprint) | Callback + Logging + Batching vor weiterem Feature-Ausbau — abgeschlossen |
-| **S5 — API-Versions-Schicht (R5)** | Versions-Erkennung, `api_versions/*.json`, Client-Adapter (🔒), `fields_get`-Warnliste | Vor weiteren Feature-Ausbauten, damit neue Module von Anfang an kanonisch gegen den Adapter schreiben |
+| **S5 — API-Versions-Schicht (R5), Tier 1** ✅ | Versions-Erkennung (`get_server_version`), `fields_get`-Warnliste (`check_field_compatibility`) (2026-08-04) | Beide ohne 🔒-Berührung, unabhängig testbar; siehe R5-Statusblock für die Tier-2-Zurückstellungs-Begründung |
+| S5 Tier 2 (zurückgestellt) | `api_versions/*.json`, Client-Adapter (🔒) | Erst mit einem echten, belegten Rename zwischen zwei Live-Versionen — siehe R5 |
 | **S6 — PDF (R1/P1+P2)** | `pdf_factory`, `modules/documents`, GUI-Optionen | Erster Roadmap-Ausbau, größter Demo-Effekt |
 | **S7 — Purchase + Inventory** | R2, R3 | Prozessketten vervollständigen |
 

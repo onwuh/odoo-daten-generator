@@ -132,6 +132,89 @@ def get_main_company_name(client) -> Optional[str]:
     return None
 
 
+def get_server_version(client) -> Optional[str]:
+    """Returns the normalized 'MAJOR.MINOR' Odoo server version (e.g. '19.4'), or
+    None if it can't be determined/parsed.
+
+    Reads ir.module.module 'base' latest_version. Live-confirmed format on
+    saas-19.4: 'saas~19.4.1.3' (a 'saas~' prefix, then a variable number of
+    dot-separated segments — do not assume a fixed segment count). Self-hosted
+    installs may report a plain 'MAJOR.MINOR' with no prefix; both are handled by
+    stripping an optional 'saas~' prefix and taking the first two dot-segments.
+    """
+    try:
+        records = client.search_read(
+            'ir.module.module', [["name", "=", "base"]], fields=["latest_version"], limit=1,
+        )
+    except Exception as e:
+        logger.warning(f"-> Warning: Could not determine Odoo server version: {e}")
+        return None
+    if not records:
+        return None
+    raw = records[0].get("latest_version")
+    if not raw or not isinstance(raw, str):
+        return None
+    raw = raw.split("~")[-1]  # strip an optional 'saas~' prefix
+    parts = raw.split(".")
+    if len(parts) < 2:
+        return None
+    return f"{parts[0]}.{parts[1]}"
+
+
+# Fixed whitelist of {model: [canonical field names the codebase writes/reads]},
+# curated (not auto-derived) from the actual client.create/create_batch/write call
+# sites across modules/*.py — deriving it automatically would mean parsing module
+# source, more machinery than this warning is worth. Prioritizes models/fields
+# already documented as version-sensitive in CLAUDE.md's "Verified field gotchas".
+FIELD_COMPAT_WHITELIST: Dict[str, List[str]] = {
+    'res.partner': ['name', 'is_company', 'street', 'zip', 'city', 'email', 'phone', 'website'],
+    'product.product': ['name', 'list_price', 'type', 'sale_ok', 'purchase_ok'],
+    'crm.lead': ['type', 'partner_id', 'name'],
+    'mail.activity': ['res_id', 'res_model_id', 'activity_type_id', 'date_deadline'],
+    'sale.order': ['partner_id'],
+    'account.move': ['move_type', 'partner_id', 'invoice_line_ids', 'invoice_date'],
+    'account.bank.statement': ['journal_id', 'balance_start', 'balance_end_real'],
+    'hr.employee': ['name'],
+    'hr.leave': ['employee_id', 'work_entry_type_id', 'date_from', 'date_to',
+                 'request_date_from', 'request_date_to'],
+    'hr.leave.allocation': ['employee_id', 'work_entry_type_id'],
+    'hr.work.entry.type': ['name', 'code', 'count_as', 'shortcut_behavior',
+                            'requires_allocation', 'employee_requests'],
+    'hr.applicant': ['partner_name', 'email_from', 'partner_phone', 'job_id',
+                      'schedule_pay', 'applicant_skill_ids'],
+    'hr.job.skill': ['skill_id', 'skill_type_id', 'skill_level_id'],
+    'project.task': ['name', 'project_id'],
+    'mrp.production': ['product_id', 'date_start'],
+    'mrp.bom': ['product_tmpl_id', 'type', 'product_qty'],
+}
+
+
+def check_field_compatibility(client, whitelist: Optional[Dict[str, List[str]]] = None) -> List[str]:
+    """Connect-time check: for each model in the whitelist, calls fields_get and
+    warns about any field the codebase writes/reads that this instance doesn't
+    have. A model that errors out entirely (e.g. its parent app isn't installed)
+    is skipped silently — that's an install-state concern, not a version-
+    compatibility one. Non-fatal: logs each warning and returns the list of
+    warning strings; callers should not treat a non-empty result as fatal.
+    """
+    whitelist = FIELD_COMPAT_WHITELIST if whitelist is None else whitelist
+    warnings: List[str] = []
+    for model, fields in whitelist.items():
+        try:
+            live_fields = client.model_method(model, 'fields_get', {'attributes': []})
+        except Exception:
+            continue
+        if not isinstance(live_fields, dict):
+            continue
+        for field in fields:
+            if field not in live_fields:
+                msg = (f"Feld '{field}' auf Modell '{model}' existiert auf dieser "
+                       f"Odoo-Instanz nicht — Code in modules/ prüfen.")
+                warnings.append(msg)
+                logger.warning(f"[version-check] {msg}")
+    return warnings
+
+
 def get_main_company_language(client) -> str:
     """Get the language of the main company, falling back to de_DE."""
     try:

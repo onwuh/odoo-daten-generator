@@ -30,7 +30,6 @@ def get_or_create_annual_leave_type(client):
         'name': 'Jahresurlaub',
         'code': 'JURL',
         'count_as': 'leave',
-        'shortcut_behavior': 'add',
         'requires_allocation': True,
         'employee_requests': True,
         'request_unit': 'day',
