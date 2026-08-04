@@ -547,3 +547,62 @@ Rules:
             return {}
         sets = list(data.values())
         return {name: sets[i % len(sets)] for i, name in enumerate(products.keys())}
+
+    # Deliberately NOT cached: variance across runs is wanted (see CLAUDE.md
+    # LLM Layer section), same rationale as fetch_crm_chatter_messages — every
+    # generated CV should read a little differently even for the same
+    # applicant pool across runs.
+    def fetch_cv_bullet_points_batch(
+        self, applicants: List[Dict], industry: str, language: str = "German"
+    ) -> Dict[int, List[str]]:
+        """Fetch 3-4 career-history bullet points per applicant in one batch call.
+
+        Args:
+            applicants: list of {"id": int, "name": str, "skills": [str, ...]}
+                        — one entry per applicant, so each CV's bullets reflect
+                        that applicant's own name/skills instead of one profile
+                        reused across the whole batch.
+            industry: industry name for context
+            language: language for generated text
+
+        Returns dict {applicant_id: [bullet_text, ...]} keyed by applicant id
+        (never by name — names are not guaranteed unique, see B9).
+        """
+        if not applicants:
+            return {}
+
+        applicants_json = json.dumps([
+            {"id": a["id"], "name": a["name"], "skills": a.get("skills", [])}
+            for a in applicants
+        ], ensure_ascii=False)
+
+        prompt = f"""You are writing short CV career-history bullet points for a demo
+in the "{industry}" industry. Language: {language}.
+
+For each applicant below, generate exactly 3-4 concise {language} bullet points
+(prior roles / achievements / responsibilities) that plausibly fit their name and
+listed skills. Do not invent contact details, dates, or company names — only
+short achievement/responsibility phrases (max ~12 words each).
+
+Applicants: {applicants_json}
+
+Return ONLY valid JSON, no markdown, no code blocks, keyed by applicant "id" (as a
+string):
+{{
+  "123": ["bullet 1", "bullet 2", "bullet 3"],
+  "124": ["bullet 1", "bullet 2", "bullet 3", "bullet 4"]
+}}"""
+        logger.info(f"Frage LLM ({self.provider}/{self.model_name}) nach CV-Stichpunkten ({len(applicants)} Bewerber)...")
+        data = self._call_json(prompt, timeout=180)
+        if not isinstance(data, dict):
+            return {}
+        result: Dict[int, List[str]] = {}
+        for key, bullets in data.items():
+            try:
+                applicant_id = int(key)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(bullets, list):
+                result[applicant_id] = [str(b) for b in bullets]
+        logger.info(f"✅ CV-Stichpunkte vom LLM empfangen: {len(result)} Bewerber")
+        return result

@@ -10,6 +10,8 @@ Module execution order is important:
 7. project      — projects, tasks, stages (timesheets need project_ids)
 8. hr_timesheet — timesheets
 9. hr_recruitment — recruiting
+10. documents      — PDF attachments for vendor bills (needs bill_ids) and
+                      applicant CVs (needs applicant_ids); always runs last
 """
 
 import logging
@@ -18,7 +20,7 @@ from config import RunContext
 from llm_service import LLMService
 from odoo_client import OdooJson2Client
 from logging_setup import configure_logging
-from modules import master_data, crm, sale, accounting, hr, project, mrp, recruiting
+from modules import master_data, crm, sale, accounting, hr, project, mrp, recruiting, documents
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -57,6 +59,12 @@ def run(client: OdooJson2Client, gemini: LLMService, ctx: RunContext,
         ("project",        "project" in ctx.installed_modules,          project.create_project_data),
         ("hr_timesheet",   "hr_timesheet" in ctx.installed_modules,     project.create_timesheet_data),
         ("hr_recruitment", "hr_recruitment" in ctx.installed_modules,   recruiting.create_recruiting_data),
+        # "documents" is not a real Odoo-probed module — ir.attachment is core,
+        # always available, hence hardcoded True (not gated on installed_modules,
+        # which would incorrectly tie this to Odoo's unrelated real "Documents"
+        # app). Runs last: depends on ctx.bill_ids (accounting) and
+        # ctx.applicant_ids (hr_recruitment) already being populated.
+        ("documents",      True,                                       documents.create_documents),
     ]
 
     for module_code, is_installed, handler in module_order:

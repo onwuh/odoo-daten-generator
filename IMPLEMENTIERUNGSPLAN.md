@@ -625,7 +625,7 @@ Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-
 | **S4 — Architektur** ✅ | D1, D2, D3, B11, B14, B15 (2026-08-03/04); B7/B8 GUI-Config-Felder + B10-Architekten-Entscheidung (2026-08-04, Folgesprint) | Callback + Logging + Batching vor weiterem Feature-Ausbau — abgeschlossen |
 | **S5 — API-Versions-Schicht (R5), Tier 1** ✅ | Versions-Erkennung (`get_server_version`), `fields_get`-Warnliste (`check_field_compatibility`) (2026-08-04) | Beide ohne 🔒-Berührung, unabhängig testbar; siehe R5-Statusblock für die Tier-2-Zurückstellungs-Begründung |
 | S5 Tier 2 (zurückgestellt) | `api_versions/*.json`, Client-Adapter (🔒) | Erst mit einem echten, belegten Rename zwischen zwei Live-Versionen — siehe R5 |
-| **S6 — PDF (R1/P1+P2)** | `pdf_factory`, `modules/documents`, GUI-Optionen | Erster Roadmap-Ausbau, größter Demo-Effekt |
+| **S6 — PDF (R1/P1+P2)** ✅ | `pdf_factory`, `modules/documents`, GUI-Optionen, `RunContext.applicant_ids` (Voraussetzungs-Fix in `recruiting.py`) (2026-08-04) | Erster Roadmap-Ausbau, größter Demo-Effekt — siehe CLAUDE.md „Current Sprint" für Peer-Review-Ergebnis und den live gefundenen `ir.attachment`-Feldnamen-Bug |
 | **S7 — Purchase + Inventory** | R2, R3 | Prozessketten vervollständigen |
 
 **Pro Arbeitspaket verbindlich** (aus CLAUDE.md Testing Design Patterns):

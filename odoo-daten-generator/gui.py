@@ -47,6 +47,7 @@ MODULE_LABELS = {
     "hr_timesheet": "Zeiterfassung",
     "mrp": "Fertigung",
     "hr_recruitment": "Recruiting",
+    "documents": "Dokumente (PDFs)",
 }
 
 
@@ -797,6 +798,18 @@ class App(ctk.CTk):
                 "skills_per_type": v4,
             }
 
+        def _sub_documents(parent):
+            bill_pdfs_var = ctk.BooleanVar(value=True)
+            ctk.CTkCheckBox(parent, text="PDF-Rechnungen für Eingangsrechnungen",
+                            variable=bill_pdfs_var).pack(anchor="w", pady=2)
+            cv_pdfs_var = ctk.BooleanVar(value=True)
+            ctk.CTkCheckBox(parent, text="Lebenslauf-PDFs für Bewerber",
+                            variable=cv_pdfs_var).pack(anchor="w", pady=2)
+            return {
+                "bill_pdfs": bill_pdfs_var,
+                "cv_pdfs": cv_pdfs_var,
+            }
+
         module_defs = [
             ("crm", "CRM", _sub_crm),
             ("sale", "Verkauf", _sub_sale),
@@ -824,6 +837,11 @@ class App(ctk.CTk):
         for key, lbl, sub_fn in module_defs:
             if key in installed:
                 _module_block(modules_container, key, lbl, sub_fn)
+
+        # "documents" is a pseudo-module (PDF generation, ir.attachment) — not
+        # a real Odoo app, so it's rendered unconditionally instead of being
+        # gated by `installed` like everything in module_defs above.
+        _module_block(modules_container, "documents", "Dokumente (PDFs)", _sub_documents)
 
         if not any(k in installed for k, _, _ in module_defs):
             ctk.CTkLabel(modules_container,
@@ -923,6 +941,18 @@ class App(ctk.CTk):
                             "skills_per_type": w["skills_per_type"].get(),
                         }
 
+                # "documents" is a pseudo-module (see module render loop above)
+                # not covered by module_defs, so it's handled as a standalone
+                # block rather than inside the module_defs loop.
+                if "documents" in module_widgets:
+                    w = module_widgets["documents"]
+                    if w["_enabled"].get():
+                        selected_modules.add("documents")
+                        sel.documents = {
+                            "bill_pdfs_enabled": w["bill_pdfs"].get(),
+                            "cv_pdfs_enabled": w["cv_pdfs"].get(),
+                        }
+
             ctx = RunContext(
                 criteria=criteria,
                 module_selections=sel,
@@ -976,11 +1006,16 @@ class App(ctk.CTk):
         active_keys = [] if ctx.skip_master_data else ["stammdaten"]
 
         module_order_keys = ["mrp", "crm", "sale", "account", "hr",
-                             "project", "hr_timesheet", "hr_recruitment"]
+                             "project", "hr_timesheet", "hr_recruitment", "documents"]
         for key in module_order_keys:
             # B10: gate on installed AND selected — ctx.installed_modules is now
             # the true Odoo-probed set (may be a superset of what the user picked).
-            if key in ctx.installed_modules and key in selected_modules:
+            # "documents" is a pseudo-module with no installed_modules entry
+            # (see orchestrator.py module_order) — gate on selection only.
+            if key == "documents":
+                if key in selected_modules:
+                    active_keys.append(key)
+            elif key in ctx.installed_modules and key in selected_modules:
                 active_keys.append(key)
 
         for key in active_keys:

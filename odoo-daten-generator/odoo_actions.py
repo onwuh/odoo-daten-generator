@@ -186,6 +186,7 @@ FIELD_COMPAT_WHITELIST: Dict[str, List[str]] = {
     'project.task': ['name', 'project_id'],
     'mrp.production': ['product_id', 'date_start'],
     'mrp.bom': ['product_tmpl_id', 'type', 'product_qty'],
+    'ir.attachment': ['res_model', 'res_id', 'raw', 'mimetype', 'type'],
 }
 
 

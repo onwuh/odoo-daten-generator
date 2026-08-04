@@ -37,3 +37,10 @@ FALLBACK_PROJECT_STAGES = {
 }
 
 FALLBACK_TASK_NAMES = ['Analyse', 'Design', 'Entwicklung', 'Testing', 'Schulung', 'Dokumentation', 'Review']
+
+FALLBACK_CV_BULLETS = [
+    'Mehrjährige Berufserfahrung in vergleichbarer Position',
+    'Erfolgreiche Mitarbeit in verschiedenen Projektteams',
+    'Kontinuierliche Weiterbildung im relevanten Fachbereich',
+    'Verantwortung für die Betreuung von Kunden und Partnern',
+]
