@@ -12,29 +12,36 @@ Module execution order is important:
 9. hr_recruitment — recruiting
 """
 
+import logging
 import data_factory
 from config import RunContext
 from llm_service import LLMService
 from odoo_client import OdooJson2Client
+from logging_setup import configure_logging
 from modules import master_data, crm, sale, accounting, hr, project, mrp, recruiting
 
+configure_logging()
+logger = logging.getLogger(__name__)
 
-def run(client: OdooJson2Client, gemini: LLMService, ctx: RunContext) -> None:
+
+def run(client: OdooJson2Client, gemini: LLMService, ctx: RunContext,
+        on_module_start=None, on_module_done=None) -> None:
     # --- Upfront Gemini calls (data needed before any Odoo writes) ---
     if not ctx.skip_master_data:
-        print("\n--- Generiere kreative Stammdaten ---")
+        logger.info("\n--- Generiere kreative Stammdaten ---")
         creative_atoms = gemini.fetch_creative_atoms(vars(ctx.criteria), ctx.language_name) or {}
     else:
         creative_atoms = {}
-        print("\n-> Stammdaten-Erstellung übersprungen (vorhandene Daten werden verwendet)")
+        logger.info("\n-> Stammdaten-Erstellung übersprungen (vorhandene Daten werden verwendet)")
 
-    print("\n--- Generiere Namensvorschläge ---")
+    logger.info("\n--- Generiere Namensvorschläge ---")
     ctx.name_banks = gemini.fetch_name_suggestions(vars(ctx.criteria), ctx.language_name) or {}
 
     # --- Master data (no dependencies) ---
     if not ctx.skip_master_data:
         _run_module("Stammdaten", master_data.create_master_data, client, gemini, ctx,
-                    extra_args=(creative_atoms,))
+                    extra_args=(creative_atoms,),
+                    on_start=on_module_start, on_done=on_module_done)
 
     # Ensure fallback partners/products if master data failed or returned nothing
     _ensure_fallback_partners(client, ctx)
@@ -63,17 +70,24 @@ def run(client: OdooJson2Client, gemini: LLMService, ctx: RunContext) -> None:
                 continue
         elif not sel:
             continue
-        _run_module(module_code, handler, client, gemini, ctx)
+        _run_module(module_code, handler, client, gemini, ctx,
+                    on_start=on_module_start, on_done=on_module_done)
 
     # Summary
-    print(f"\n[LLM] Gesamtanfragen: {gemini.total_calls}, Gesamttoken: {gemini.total_tokens}")
+    logger.info(f"\n[LLM] Gesamtanfragen: {gemini.total_calls}, Gesamttoken: {gemini.total_tokens}")
 
 
-def _run_module(name, handler, client, gemini, ctx, extra_args=()):
+def _run_module(name, handler, client, gemini, ctx, extra_args=(), on_start=None, on_done=None):
+    if on_start:
+        on_start(name)
     try:
         handler(client, gemini, ctx, *extra_args)
+        if on_done:
+            on_done(name, ok=True)
     except Exception as exc:
-        print(f"⚠️  Modul '{name}' fehlgeschlagen: {exc} — andere Module werden fortgesetzt.")
+        logger.warning(f"⚠️  Modul '{name}' fehlgeschlagen: {exc} — andere Module werden fortgesetzt.")
+        if on_done:
+            on_done(name, ok=False)
 
 
 # ------------------------------------------------------------------
@@ -93,7 +107,7 @@ def _ensure_fallback_partners(client, ctx: RunContext) -> None:
     from fallback_data import FALLBACK_COMPANIES
     import random
     names = ctx.name_banks.get('company_names', []) or FALLBACK_COMPANIES
-    print("-> Erstelle Fallback-Partner")
+    logger.info("-> Erstelle Fallback-Partner")
     cid = client.create('res.partner', {"name": random.choice(names)})
     ctx.company_ids.append(cid)
 
@@ -116,4 +130,4 @@ def _ensure_fallback_products(client, ctx: RunContext) -> None:
             "list_price": list_price, "standard_price": standard_price,
         })
         ctx.product_ids.append(pid)
-        print(f"-> Fallback-Produkt erstellt: {name} (ID: {pid})")
+        logger.info(f"-> Fallback-Produkt erstellt: {name} (ID: {pid})")

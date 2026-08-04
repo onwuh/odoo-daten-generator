@@ -8,6 +8,7 @@ Run from the odoo-daten-generator directory:
 import os
 import sys
 import queue
+import logging
 import threading
 import configparser
 
@@ -25,6 +26,10 @@ import odoo_actions  # noqa: E402
 from llm_service import LLMService, get_language_name  # noqa: E402
 from config import DemoCriteria, ModuleSelections, RunContext  # noqa: E402
 import orchestrator  # noqa: E402
+from logging_setup import configure_logging, QueueLogHandler  # noqa: E402
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -48,30 +53,6 @@ MODULE_LABELS = {
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-class QueueWriter:
-    """Redirect sys.stdout writes to a queue so the GUI can display them."""
-
-    def __init__(self, q: queue.Queue, original=None):
-        self.q = q
-        self.original = original
-
-    def write(self, text: str):
-        if text and text.strip():
-            self.q.put(text.rstrip("\n"))
-        if self.original:
-            try:
-                self.original.write(text)
-            except Exception:
-                pass
-
-    def flush(self):
-        if self.original:
-            try:
-                self.original.flush()
-            except Exception:
-                pass
-
 
 def _section_label(parent, text: str):
     """Bold section header with subtle separator line."""
@@ -1041,10 +1022,19 @@ class App(ctk.CTk):
         # Background worker
         # ---------------------------------------------------------------
 
-        original_stdout = sys.stdout
+        _module_key_map = {
+            "Stammdaten": "stammdaten",
+            "mrp": "mrp", "crm": "crm", "sale": "sale",
+            "account": "account", "hr": "hr",
+            "project": "project", "hr_timesheet": "hr_timesheet",
+            "hr_recruitment": "hr_recruitment",
+        }
 
         def _run():
-            sys.stdout = QueueWriter(self._log_queue, original_stdout)
+            queue_handler = QueueLogHandler(self._log_queue)
+            queue_handler.setFormatter(logging.Formatter("%(message)s"))
+            root_logger = logging.getLogger()
+            root_logger.addHandler(queue_handler)
 
             def _ui_start(key):
                 self.after(0, lambda k=key: _start_bar(k))
@@ -1052,42 +1042,24 @@ class App(ctk.CTk):
             def _ui_done(key, error=False):
                 self.after(0, lambda k=key, e=error: _set_bar(k, done=True, error=e))
 
+            def _on_module_start(name):
+                _ui_start(_module_key_map.get(name, name))
+
+            def _on_module_done(name, ok=True):
+                _ui_done(_module_key_map.get(name, name), error=not ok)
+
+            _ui_start("stammdaten")  # visual feedback during upfront LLM calls, before master_data itself starts
+
             try:
-                _ui_start("stammdaten")
-
-                # Wrap orchestrator.run to intercept per-module progress
-                _original_run_module = orchestrator._run_module
-
-                _current_module = {"key": "stammdaten"}
-
-                def _patched_run_module(name, handler, client, gemini, ctx_inner,
-                                        extra_args=()):
-                    key_map = {
-                        "Stammdaten": "stammdaten",
-                        "mrp": "mrp", "crm": "crm", "sale": "sale",
-                        "account": "account", "hr": "hr",
-                        "project": "project", "hr_timesheet": "hr_timesheet",
-                        "hr_recruitment": "hr_recruitment",
-                    }
-                    key = key_map.get(name, name)
-                    _ui_start(key)
-                    _current_module["key"] = key
-                    try:
-                        handler(client, gemini, ctx_inner, *extra_args)
-                        _ui_done(key)
-                    except Exception as exc:
-                        print(f"Modul '{name}' fehlgeschlagen: {exc}")
-                        _ui_done(key, error=True)
-
-                orchestrator._run_module = _patched_run_module
-                orchestrator.run(self.client, self.llm, ctx)
+                orchestrator.run(self.client, self.llm, ctx,
+                                  on_module_start=_on_module_start,
+                                  on_module_done=_on_module_done)
 
             except Exception as exc:
-                print(f"Kritischer Fehler: {exc}")
+                logger.error(f"Kritischer Fehler: {exc}")
                 _ui_done("stammdaten", error=True)
             finally:
-                orchestrator._run_module = _original_run_module
-                sys.stdout = original_stdout
+                root_logger.removeHandler(queue_handler)
 
             # Gather results
             api_errors = self.client.get_errors() if self.client else []
