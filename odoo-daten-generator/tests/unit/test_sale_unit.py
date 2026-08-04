@@ -63,7 +63,7 @@ def run():
         assert confirm_calls, "action_confirm never called"
         confirmed_ids = confirm_calls[0].kwargs.get("ids", [])
         assert len(confirmed_ids) != 5, f"B8 regressed: still hardcoded to 5 (got {len(confirmed_ids)})"
-        expected = max(1, round(200 * sale._DEFAULT_CONFIRM_PCT / 100))
+        expected = max(1, round(200 * ctx.module_selections.sale_confirm_pct / 100))
         assert len(confirmed_ids) == expected, f"expected {expected} confirmed orders, got {len(confirmed_ids)}"
         results.append((
             "create_sale_data: 200 orders -> confirm count scales (not fixed 5)",
@@ -71,6 +71,26 @@ def run():
         ))
     except AssertionError as e:
         results.append(("create_sale_data: 200 orders -> confirm count scales (not fixed 5)", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # B8: sale_confirm_pct is honored when explicitly set to a non-default
+    # value — 50% of 10 orders must confirm exactly 5, computed independently
+    # of the field the code itself reads (guards against a self-referential
+    # test that would pass even if the field were ignored).
+    # ------------------------------------------------------------------
+    try:
+        client = _mock_client()
+        ctx = _make_ctx(num_orders=10)
+        ctx.module_selections.sale_confirm_pct = 50
+        sale.create_sale_data(client, gemini=None, ctx=ctx)
+        confirm_calls = [
+            c for c in client.call_method.call_args_list if c.args[1] == 'action_confirm'
+        ]
+        confirmed_ids = confirm_calls[0].kwargs.get("ids", []) if confirm_calls else []
+        assert len(confirmed_ids) == 5, f"expected 5 confirmed orders (50% of 10), got {len(confirmed_ids)}"
+        results.append(("create_sale_data: sale_confirm_pct=50 -> confirms exactly 5 of 10", True, ""))
+    except AssertionError as e:
+        results.append(("create_sale_data: sale_confirm_pct=50 -> confirms exactly 5 of 10", False, str(e)))
 
     # ------------------------------------------------------------------
     # B8: small order counts still confirm at least 1, never 0.

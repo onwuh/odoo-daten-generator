@@ -359,13 +359,15 @@ def create_accounting_data(client, gemini, ctx: RunContext) -> None:
 
     # Vendor bills — draw from component_ids (purchased parts) or fall back to product_ids
     purchase_pool = ctx.component_ids or ctx.product_ids
-    if purchase_pool:
+    num_bills = ctx.module_selections.account_bills
+    if num_bills is None:
+        num_bills = max(1, num_invoices // 2)
+    if purchase_pool and num_bills > 0:
         logger.info("\n--- ACCOUNTING: Erstelle Eingangsrechnungen ---")
         supplier_names = ctx.name_banks.get('supplier_names', []) or FALLBACK_SUPPLIERS
         num_suppliers = min(3, len(supplier_names))
         chosen_supplier_names = random.sample(supplier_names, k=num_suppliers)
         supplier_ids = _create_suppliers(client, chosen_supplier_names)
-        num_bills = max(1, num_invoices // 2)
         bill_vals_list = []
         for i in range(num_bills):
             supplier_id = supplier_ids[i % len(supplier_ids)]

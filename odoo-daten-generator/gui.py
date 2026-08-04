@@ -626,15 +626,33 @@ class App(ctk.CTk):
         def _sub_sale(parent):
             f, v = _spin_row(parent, "Anzahl Aufträge", 10, 1, 200)
             f.pack(anchor="w", pady=2)
-            return {"count": v}
+
+            ctk.CTkLabel(parent, text="Bestätigt (%)", anchor="w").pack(anchor="w")
+            _default_confirm_pct = ModuleSelections().sale_confirm_pct
+            v_confirm_pct = ctk.IntVar(value=_default_confirm_pct)
+            v_confirm_pct_str = ctk.StringVar(value=f"{_default_confirm_pct}%")
+            v_confirm_pct.trace_add("write", lambda *_: v_confirm_pct_str.set(f"{v_confirm_pct.get()}%"))
+            _row_cp = ctk.CTkFrame(parent, fg_color="transparent")
+            _row_cp.pack(anchor="w", fill="x")
+            ctk.CTkSlider(_row_cp, from_=0, to=100, variable=v_confirm_pct,
+                          number_of_steps=100).pack(side="left", fill="x", expand=True)
+            ctk.CTkLabel(_row_cp, textvariable=v_confirm_pct_str, width=40, anchor="e").pack(side="left")
+
+            return {"count": v, "confirm_pct": v_confirm_pct}
 
         def _sub_account(parent):
             f, v = _spin_row(parent, "Anzahl Rechnungen", 10, 1, 200)
             f.pack(anchor="w", pady=2)
+            # Static default (no live cross-widget binding in this codebase); the
+            # field's real default is None (derive from Anzahl Rechnungen) — this
+            # is only what the spinner shows before the user touches it.
+            _default_bills = 5
+            f2, v2 = _spin_row(parent, "Anzahl Eingangsrechnungen", _default_bills, 0, 200)
+            f2.pack(anchor="w", pady=2)
             bank_var = ctk.BooleanVar(value=True)
             ctk.CTkCheckBox(parent, text="Banktransaktionen erstellen",
                             variable=bank_var).pack(anchor="w", pady=2)
-            return {"count": v, "bank_transactions": bank_var}
+            return {"count": v, "bills_count": v2, "bank_transactions": bank_var}
 
         def _sub_hr(parent):
             f, v_count = _spin_row(parent, "Anzahl Mitarbeiter", 10, 1, 200)
@@ -842,8 +860,10 @@ class App(ctk.CTk):
                             sel.crm_activities = {"enabled": True, "past_pct": past, "today_pct": today}
                     elif key == "sale":
                         sel.sale = w["count"].get()
+                        sel.sale_confirm_pct = w["confirm_pct"].get()
                     elif key == "account":
                         sel.account = w["count"].get()
+                        sel.account_bills = w["bills_count"].get()
                         sel.create_bank_transactions = w["bank_transactions"].get()
                     elif key == "hr":
                         sel.hr = w["count"].get()

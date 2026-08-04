@@ -168,6 +168,73 @@ def run():
         results.append(("B7: num_invoices=1 -> exactly 1 vendor bill, not forced 10", False, str(e)))
 
     # ------------------------------------------------------------------
+    # B7: account_bills override is honored exactly, decoupled from
+    # num_invoices — proves the override is used, not just "not forced to 10".
+    # ------------------------------------------------------------------
+    try:
+        client = _mock_client(product_price_rows=[{"id": 1, "standard_price": 10.0, "list_price": 20.0}])
+        ctx = _make_ctx(num_invoices=3)
+        ctx.module_selections.account_bills = 25
+        ctx.company_ids = [1]
+        ctx.product_ids = [1]
+        accounting.create_accounting_data(client, gemini=None, ctx=ctx)
+        assert len(ctx.bill_ids) == 25, f"B7: expected 25 vendor bills (override), got {len(ctx.bill_ids)}"
+        results.append(("B7: account_bills=25 -> exactly 25 vendor bills (decoupled from num_invoices)", True, f"bills={len(ctx.bill_ids)}"))
+    except AssertionError as e:
+        results.append(("B7: account_bills=25 -> exactly 25 vendor bills (decoupled from num_invoices)", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # B7 (Pattern 3 — Feature-Flag Skip): account_bills=0 with a non-empty
+    # purchase_pool and num_invoices>0 skips vendor-bill creation entirely,
+    # including the now-pointless _create_suppliers call — this is a zero
+    # *count* gating a sub-path, not an empty pool, hence Pattern 3.
+    # ------------------------------------------------------------------
+    try:
+        client = _mock_client(product_price_rows=[{"id": 1, "standard_price": 10.0, "list_price": 20.0}])
+        ctx = _make_ctx(num_invoices=3)
+        ctx.module_selections.account_bills = 0
+        ctx.company_ids = [1]
+        ctx.product_ids = [1]
+        accounting.create_accounting_data(client, gemini=None, ctx=ctx)
+        assert ctx.bill_ids == [], f"B7: expected no vendor bills, got {ctx.bill_ids}"
+        assert client.create_batch.call_count == 1, (
+            f"expected exactly 1 create_batch call (invoices only), got {client.create_batch.call_count}"
+        )
+        batched_models = [call.args[0] for call in client.create_batch.call_args_list]
+        assert batched_models == ['account.move'], batched_models
+        supplier_creates = [c for c in client.create.call_args_list if c.args[0] == 'res.partner']
+        assert not supplier_creates, f"_create_suppliers should not run when account_bills=0: {supplier_creates}"
+        results.append(("B7: account_bills=0 -> no bills, no _create_suppliers call (Pattern 3)", True, ""))
+    except AssertionError as e:
+        results.append(("B7: account_bills=0 -> no bills, no _create_suppliers call (Pattern 3)", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # B7: account_bills=0 combined with create_bank_transactions=True must
+    # not crash — bank transactions are created off the customer invoices
+    # alone (create_bank_transactions_for_all_invoices already tolerates an
+    # empty bill_ids list).
+    # ------------------------------------------------------------------
+    try:
+        client = _mock_client(product_price_rows=[{"id": 1, "standard_price": 10.0, "list_price": 20.0}])
+        ctx = _make_ctx(num_invoices=3)
+        ctx.module_selections.account_bills = 0
+        ctx.module_selections.create_bank_transactions = True
+        ctx.company_ids = [1]
+        ctx.product_ids = [1]
+        accounting.create_accounting_data(client, gemini=None, ctx=ctx)
+        assert ctx.bill_ids == [], ctx.bill_ids
+        assert len(ctx.invoice_ids) == 3, ctx.invoice_ids
+        results.append((
+            "B7: account_bills=0 + create_bank_transactions=True -> no crash, invoices still created",
+            True, f"invoices={len(ctx.invoice_ids)}",
+        ))
+    except Exception as e:
+        results.append((
+            "B7: account_bills=0 + create_bank_transactions=True -> no crash, invoices still created",
+            False, str(e),
+        ))
+
+    # ------------------------------------------------------------------
     # B10 Pattern 4: 'sale' genuinely installed but not selected this run
     # (ctx.confirmed_order_ids empty because sale never ran) -> standalone
     # invoice path still produces exactly num_invoices invoices, not zero

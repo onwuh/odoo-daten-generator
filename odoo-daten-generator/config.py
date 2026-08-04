@@ -20,7 +20,9 @@ class ModuleSelections:
     crm: int = 0
     leads: int = 0
     sale: int = 0
+    sale_confirm_pct: int = 65  # % of created orders to confirm (B8); GUI slider default
     account: int = 0
+    account_bills: Optional[int] = None  # vendor bill count (B7); None -> derive max(1, account // 2)
     create_bank_transactions: bool = False
     hr: int = 0
     project: int = 0

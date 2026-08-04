@@ -129,8 +129,9 @@ def run():
     # ------------------------------------------------------------------
     # B10 Pattern 3: installed_modules a strict superset of what's selected
     # (module_selections) -> only selected modules run. This is the invariant
-    # gui.py:911's fix relies on (installed_modules is now the true Odoo-probed
-    # set, which can be larger than what the user picked in the GUI).
+    # gui.py's RunContext construction relies on (installed_modules is now the
+    # true Odoo-probed set, which can be larger than what the user picked in
+    # the GUI).
     # ------------------------------------------------------------------
     try:
         events = []
