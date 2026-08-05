@@ -29,7 +29,8 @@ def _make_rctx(num_orders):
 def run(client, ctx):
     """
     Consumes: ctx.product_ids, ctx.partner_ids
-    Populates: ctx.order_ids
+    Populates: ctx.order_ids, ctx.confirmed_order_ids (R8 — one order with two
+    service_tracking-tagged lines, consumed by test_project.py/test_accounting.py)
     Returns: (all_passed, [(label, ok, detail), ...])
     """
     results = []
@@ -216,6 +217,57 @@ def run(client, ctx):
         ))
     except Exception as e:
         results.append(("sale: create_sale_data honors sale_confirm_pct=50, read-back", False, str(e)))
+
+    # Step 8 — R8: confirming an order with two service_tracking-tagged
+    # products creates a Project+Task per line, sharing ONE project across
+    # both lines (verified live in the Phase-0 spike, pinned here as a
+    # permanent regression guard). The confirmed order id is handed to
+    # shared ctx.confirmed_order_ids so test_project.py/test_accounting.py's
+    # R8 steps can log real timesheets and invoice from it.
+    try:
+        svc_a = client.create('product.product', {
+            "name": "R8 Test Service A", "type": "service", "sale_ok": True,
+            "service_tracking": "task_in_project", "invoice_policy": "delivery",
+            "service_type": "timesheet", "list_price": 100.0,
+        })
+        svc_b = client.create('product.product', {
+            "name": "R8 Test Service B", "type": "service", "sale_ok": True,
+            "service_tracking": "task_in_project", "invoice_policy": "delivery",
+            "service_type": "timesheet", "list_price": 150.0,
+        })
+        r8_order_id = create_sale_order(client, {
+            "partner_id": partner_id,
+            "order_line": [
+                (0, 0, {"product_id": svc_a, "product_uom_qty": 1}),
+                (0, 0, {"product_id": svc_b, "product_uom_qty": 1}),
+            ],
+        })
+        confirm_sale_orders(client, [r8_order_id])
+        order_rec = client.search_read(
+            'sale.order', [["id", "=", r8_order_id]], fields=["order_line"], limit=1,
+        )[0]
+        lines = client.search_read(
+            'sale.order.line', [["id", "in", order_rec["order_line"]]],
+            fields=["product_id", "project_id", "task_id"], limit=0,
+        )
+
+        def _unwrap(v):
+            return v[0] if isinstance(v, (list, tuple)) else v
+
+        assert len(lines) == 2, lines
+        for l in lines:
+            assert l.get("project_id") and l.get("task_id"), f"native automation did not fire: {l}"
+        proj_ids = {_unwrap(l["project_id"]) for l in lines}
+        task_ids = {_unwrap(l["task_id"]) for l in lines}
+        assert len(proj_ids) == 1, f"expected both service lines to share one project, got {proj_ids}"
+        assert len(task_ids) == 2, f"expected 2 distinct tasks, got {task_ids}"
+        ctx.confirmed_order_ids.append(r8_order_id)
+        results.append((
+            "sale: R8 — service_tracking creates shared Project + distinct Tasks on confirm",
+            True, f"project_id={proj_ids}, task_ids={task_ids}",
+        ))
+    except Exception as e:
+        results.append(("sale: R8 — service_tracking creates shared Project + distinct Tasks on confirm", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

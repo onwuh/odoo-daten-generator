@@ -113,6 +113,67 @@ def run():
     except AssertionError as e:
         results.append(("create_timesheet_data: no project_ids -> no create_batch call (Pattern 5)", False, str(e)))
 
+    # ------------------------------------------------------------------
+    # R8 Pattern 5 regression guard: no bulk project_ids at all, but real
+    # order-linked billable tasks exist -> must NOT early-return (this is
+    # exactly the bug the early-return condition used to have: a run with
+    # Zeiterfassung+Verkauf but not Projekte would previously skip timesheets
+    # entirely even though billable tasks existed).
+    # ------------------------------------------------------------------
+    try:
+        billable = [
+            {"id": 501, "task_id": [77, "Task A"], "project_id": [88, "Proj A"]},
+            {"id": 502, "task_id": [78, "Task B"], "project_id": [88, "Proj A"]},
+        ]
+        client = _mock_client(search_read_return=billable)
+        ctx = _make_ctx(hr_timesheet=1)
+        ctx.project_ids = []
+        ctx.employee_ids = [10, 11]
+        ctx.confirmed_order_ids = [900]
+        project.create_timesheet_data(client, gemini=None, ctx=ctx)
+        assert client.create_batch.call_count == 1, client.create_batch.call_count
+        vals_list = client.create_batch.call_args_list[0].args[1]
+        assert len(vals_list) == 1, f"budget=1 should yield exactly 1 entry, got {vals_list}"
+        assert vals_list[0]["so_line"] == 501, vals_list[0]
+        assert vals_list[0]["task_id"] == 77, vals_list[0]
+        assert vals_list[0]["project_id"] == 88, vals_list[0]
+        results.append((
+            "R8: billable order-linked tasks alone (no bulk project_ids) still create timesheets",
+            True, f"vals={vals_list[0]}",
+        ))
+    except AssertionError as e:
+        results.append(("R8: billable order-linked tasks alone (no bulk project_ids) still create timesheets", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # R8: billable lines claim the budget first; remaining budget fills the
+    # bulk pool — one combined create_batch call (Pattern 8 preserved).
+    # ------------------------------------------------------------------
+    try:
+        billable = [
+            {"id": 501, "task_id": [77, "Task A"], "project_id": [88, "Proj A"]},
+            {"id": 502, "task_id": [78, "Task B"], "project_id": [88, "Proj A"]},
+        ]
+        client = _mock_client(search_read_return=billable)
+        ctx = _make_ctx(hr_timesheet=5)
+        ctx.project_ids = [1, 2]
+        ctx.employee_ids = [10, 11]
+        ctx.confirmed_order_ids = [900]
+        project.create_timesheet_data(client, gemini=None, ctx=ctx)
+        assert client.create_batch.call_count == 1, client.create_batch.call_count
+        vals_list = client.create_batch.call_args_list[0].args[1]
+        assert len(vals_list) == 5, f"budget=5 should yield exactly 5 entries total, got {len(vals_list)}"
+        so_lines = [v.get("so_line") for v in vals_list[:2]]
+        assert so_lines == [501, 502], f"first 2 entries should be the billable lines: {so_lines}"
+        bulk_entries = vals_list[2:]
+        assert all("so_line" not in v for v in bulk_entries), bulk_entries
+        assert all(v.get("project_id") in (1, 2) for v in bulk_entries), bulk_entries
+        results.append((
+            "R8: billable lines claim budget first, remainder fills bulk pool (1 create_batch call)",
+            True, f"total entries={len(vals_list)}",
+        ))
+    except AssertionError as e:
+        results.append(("R8: billable lines claim budget first, remainder fills bulk pool (1 create_batch call)", False, str(e)))
+
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results
 

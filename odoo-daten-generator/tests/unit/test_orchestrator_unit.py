@@ -164,6 +164,43 @@ def run():
     except AssertionError as e:
         results.append(("run(): installed ⊋ selected -> only selected modules run (B10 Pattern 3)", False, str(e)))
 
+    # ------------------------------------------------------------------
+    # R8: module_order pins 'account' to run AFTER hr/project/hr_timesheet
+    # (moved from position 4 to 7) — a service line's invoiced quantity
+    # depends on qty_delivered, which is computed from timesheets that must
+    # already exist by the time accounting runs. Regression guard against a
+    # future edit silently reverting the order.
+    # ------------------------------------------------------------------
+    try:
+        events = []
+        gemini = MagicMock()
+        gemini.fetch_creative_atoms.return_value = {}
+        gemini.fetch_name_suggestions.return_value = {}
+        gemini.total_calls = 0
+        gemini.total_tokens = 0
+        ctx = _make_ctx(
+            installed_modules={"mrp", "crm", "sale", "hr", "project", "hr_timesheet",
+                                "account", "hr_recruitment"},
+            module_selections=ModuleSelections(
+                sale=1, hr=1, project=1, hr_timesheet=1, account=1, hr_recruitment={"num_jobs": 1},
+            ),
+            skip_master_data=True,
+        )
+        with patch("modules.mrp.create_mrp_data"), patch("modules.crm.create_crm_data"), \
+             patch("modules.sale.create_sale_data"), patch("modules.hr.create_hr_data"), \
+             patch("modules.project.create_project_data"), \
+             patch("modules.project.create_timesheet_data"), \
+             patch("modules.accounting.create_accounting_data"), \
+             patch("modules.recruiting.create_recruiting_data"):
+            orchestrator.run(
+                client=MagicMock(), gemini=gemini, ctx=ctx,
+                on_module_start=lambda name: events.append(name),
+            )
+        assert events.index("account") > events.index("hr_timesheet") > events.index("project") > events.index("hr"), events
+        results.append(("R8: module_order — account runs after hr/project/hr_timesheet", True, str(events)))
+    except AssertionError as e:
+        results.append(("R8: module_order — account runs after hr/project/hr_timesheet", False, str(e)))
+
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results
 

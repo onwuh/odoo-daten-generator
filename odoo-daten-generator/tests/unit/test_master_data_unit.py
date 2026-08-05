@@ -80,6 +80,52 @@ def run():
     except Exception as e:
         results.append(("_create_partners: num_companies=0 -> no crash, empty ids", False, str(e)))
 
+    # ------------------------------------------------------------------
+    # R8: _create_products tags every service product with service_tracking/
+    # invoice_policy/service_type when project+hr_timesheet are installed.
+    # ------------------------------------------------------------------
+    try:
+        client = _mock_client_for_batches()
+        ctx = _make_ctx()
+        ctx.installed_modules = {"project", "hr_timesheet"}
+        atoms = {"product_names": {"services": ["Beratung"], "consumables": [], "storables": []}}
+        master_data._create_products(client, atoms, ctx)
+        assert client.create_batch.call_count == 1, client.create_batch.call_count
+        vals_list = client.create_batch.call_args_list[0].args[1]
+        assert len(vals_list) == 1, vals_list
+        vals = vals_list[0]
+        assert vals.get("service_tracking") == "task_in_project", vals
+        assert vals.get("invoice_policy") == "delivery", vals
+        assert vals.get("service_type") == "timesheet", vals
+        results.append((
+            "R8: _create_products tags service product when project+hr_timesheet installed",
+            True, f"vals={vals}",
+        ))
+    except AssertionError as e:
+        results.append(("R8: _create_products tags service product when project+hr_timesheet installed", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # R8 Pattern 3: gate is off when either app is missing from
+    # installed_modules — existing (pre-R8) vals shape unchanged.
+    # ------------------------------------------------------------------
+    try:
+        for missing in ({"project"}, {"hr_timesheet"}, set()):
+            client = _mock_client_for_batches()
+            ctx = _make_ctx()
+            ctx.installed_modules = missing
+            atoms = {"product_names": {"services": ["Beratung"], "consumables": [], "storables": []}}
+            master_data._create_products(client, atoms, ctx)
+            vals = client.create_batch.call_args_list[0].args[1][0]
+            assert "service_tracking" not in vals, f"installed_modules={missing}: {vals}"
+            assert "invoice_policy" not in vals, f"installed_modules={missing}: {vals}"
+            assert "service_type" not in vals, f"installed_modules={missing}: {vals}"
+        results.append((
+            "R8 Pattern 3: no tagging when project or hr_timesheet not installed",
+            True, "",
+        ))
+    except AssertionError as e:
+        results.append(("R8 Pattern 3: no tagging when project or hr_timesheet not installed", False, str(e)))
+
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results
 

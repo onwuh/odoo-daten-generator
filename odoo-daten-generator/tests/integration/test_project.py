@@ -32,6 +32,8 @@ def _make_rctx(num_projects=2, tasks_per_project=3, hr_timesheet=0):
 def run(client, ctx):
     """
     Populates: ctx.project_ids
+    R8 step also consumes: ctx.confirmed_order_ids (test_sale.py),
+    ctx.employee_ids (test_hr.py)
     Returns: (all_passed, [(label, ok, detail), ...])
     """
     results = []
@@ -136,6 +138,42 @@ def run(client, ctx):
         ))
     except Exception as e:
         results.append(("project: create_timesheet_data end-to-end (D3 batch), read-back", False, str(e)))
+
+    # Step 7 — R8: billable order-linked tasks (from test_sale.py's step 8)
+    # claim the timesheet budget first; logging a real timesheet against one
+    # drives Odoo's own qty_delivered computation (second Phase-0 spike
+    # check, pinned here as a permanent regression guard). num_projects=0
+    # forces the billable-only path — the exact scenario the early-return
+    # fix (R8) needed to stop skipping timesheets entirely.
+    try:
+        assert ctx.confirmed_order_ids, "test_sale.py step 8 must have run first"
+        assert ctx.employee_ids, "test_hr.py must have run first"
+        billable_before = client.search_read(
+            'sale.order.line',
+            [['order_id', 'in', ctx.confirmed_order_ids], ['task_id', '!=', False]],
+            fields=['id'], limit=0,
+        )
+        assert billable_before, "no billable order-linked task found — did test_sale.py's R8 step run?"
+
+        r8_rctx = _make_rctx(num_projects=0, hr_timesheet=len(billable_before))
+        r8_rctx.confirmed_order_ids = ctx.confirmed_order_ids
+        r8_rctx.employee_ids = ctx.employee_ids
+        create_timesheet_data(client, None, r8_rctx)
+
+        so_line_id = billable_before[0]["id"]
+        line_after = client.search_read(
+            'sale.order.line', [["id", "=", so_line_id]],
+            fields=["qty_delivered_method", "qty_delivered"], limit=1,
+        )
+        assert line_after, "billable line disappeared"
+        assert line_after[0]["qty_delivered_method"] == "timesheet", line_after[0]
+        assert (line_after[0]["qty_delivered"] or 0) > 0, line_after[0]
+        results.append((
+            "project: R8 — billable order-linked task timesheet drives qty_delivered",
+            True, f"so_line={so_line_id}, {line_after[0]}",
+        ))
+    except Exception as e:
+        results.append(("project: R8 — billable order-linked task timesheet drives qty_delivered", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

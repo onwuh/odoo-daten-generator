@@ -92,42 +92,87 @@ def run():
         results.append(("create_accounting_data: invoices+bills via create_batch, action_post once per batch", False, str(e)))
 
     # ------------------------------------------------------------------
-    # D3: create_invoices_from_orders — exactly 1 create_batch call regardless
-    # of order count.
+    # R8: create_invoices_from_orders — wizard success path. One
+    # sale.advance.payment.inv wizard call per order (client.create), no
+    # fallback to the manual account.move rebuild (create_batch untouched).
     # ------------------------------------------------------------------
     try:
         client = _mock_client()
-        client.search_read.side_effect = None
-        client.search_read.return_value = [
-            {"id": 100, "partner_id": [1, "P"], "order_line": [1, 2], "name": "SO001"},
-            {"id": 101, "partner_id": [2, "P2"], "order_line": [3], "name": "SO002"},
-        ]
+        wizard_ids = iter([501, 502])
+        client.create.side_effect = lambda model, vals, context=None: next(wizard_ids)
 
         def _sr(model, domain=None, fields=None, limit=None, **kw):
-            if model == 'sale.order':
-                return [
-                    {"id": 100, "partner_id": [1, "P"], "order_line": [1, 2], "name": "SO001"},
-                    {"id": 101, "partner_id": [2, "P2"], "order_line": [3], "name": "SO002"},
-                ]
-            if model == 'sale.order.line':
-                return [
-                    {"id": 1, "product_id": [10, "X"], "product_uom_qty": 2, "price_unit": 5.0},
-                    {"id": 2, "product_id": [11, "Y"], "product_uom_qty": 1, "price_unit": 7.0},
-                    {"id": 3, "product_id": [12, "Z"], "product_uom_qty": 3, "price_unit": 9.0},
-                ]
+            if model == 'sale.order' and fields == ['invoice_ids']:
+                oid = domain[0][2]
+                return [{"id": oid, "invoice_ids": [900 + oid]}]
             return []
         client.search_read.side_effect = _sr
 
         result_ids = accounting.create_invoices_from_orders(client, [100, 101])
-        assert len(result_ids) == 2, result_ids
-        assert client.create_batch.call_count == 1, client.create_batch.call_count
-        assert client.create.call_count == 0, "fell back to per-record create()"
+        assert result_ids == [1000, 1001], result_ids
+        assert client.create.call_count == 2, "expected 1 wizard create() per order"
+        assert client.create_batch.call_count == 0, (
+            f"wizard succeeded for both orders — manual fallback create_batch "
+            f"should never fire, got {client.create_batch.call_count} calls"
+        )
+        create_invoices_calls = [
+            c for c in client.call_method.call_args_list if c.args[1] == 'create_invoices'
+        ]
+        assert len(create_invoices_calls) == 2, create_invoices_calls
+        post_calls = [c for c in client.call_method.call_args_list if c.args[1] == 'action_post']
+        assert len(post_calls) == 1, f"expected 1 batched action_post call, got {len(post_calls)}"
         results.append((
-            "create_invoices_from_orders: exactly 1 create_batch call",
-            True, f"create_batch calls={client.create_batch.call_count}",
+            "create_invoices_from_orders: wizard success path, no manual fallback",
+            True, f"result_ids={result_ids}",
         ))
     except AssertionError as e:
-        results.append(("create_invoices_from_orders: exactly 1 create_batch call", False, str(e)))
+        results.append(("create_invoices_from_orders: wizard success path, no manual fallback", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # R8: create_invoices_from_orders — mixed batch. One order's wizard call
+    # raises (e.g. nothing to invoice yet); only that order falls back to the
+    # manual account.move rebuild — the other order's wizard-created invoice
+    # is unaffected (per-order isolation, not one whole-batch try/except).
+    # ------------------------------------------------------------------
+    try:
+        client = _mock_client()
+
+        def _create(model, vals, context=None):
+            oid = vals['sale_order_ids'][0][2][0]
+            if oid == 101:
+                raise Exception("simulated: nothing to invoice")
+            return 501
+        client.create.side_effect = _create
+
+        def _sr(model, domain=None, fields=None, limit=None, **kw):
+            if model == 'sale.order' and fields == ['invoice_ids']:
+                oid = domain[0][2]
+                return [{"id": oid, "invoice_ids": [1000]}]
+            if model == 'sale.order' and fields and 'order_line' in fields:
+                return [{"id": 101, "partner_id": [2, "P2"], "order_line": [3], "name": "SO002"}]
+            if model == 'sale.order.line':
+                return [{"id": 3, "product_id": [12, "Z"], "product_uom_qty": 3, "price_unit": 9.0}]
+            return []
+        client.search_read.side_effect = _sr
+
+        result_ids = accounting.create_invoices_from_orders(client, [100, 101])
+        assert 1000 in result_ids, result_ids
+        assert client.create_batch.call_count == 1, (
+            f"expected exactly 1 manual-fallback create_batch call (order 101 only), "
+            f"got {client.create_batch.call_count}"
+        )
+        fallback_call = client.create_batch.call_args_list[0]
+        assert fallback_call.args[0] == 'account.move', fallback_call.args
+        assert len(fallback_call.args[1]) == 1, (
+            f"manual fallback should build exactly 1 invoice (for order 101), "
+            f"got {fallback_call.args[1]}"
+        )
+        results.append((
+            "create_invoices_from_orders: mixed batch, per-order fallback isolation",
+            True, f"result_ids={result_ids}",
+        ))
+    except AssertionError as e:
+        results.append(("create_invoices_from_orders: mixed batch, per-order fallback isolation", False, str(e)))
 
     # ------------------------------------------------------------------
     # Pattern 1: create_invoices_from_orders([]) -> no create_batch call

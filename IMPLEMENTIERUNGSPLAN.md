@@ -584,9 +584,77 @@ korrekte Typen, `crm_chatter`-Falle vermieden), zwei Nachkorrekturen nötig (`hr
 als Toggle statt Gesamtzahl missverstanden, `hr` fürs Workbook-Detail "Techniker zuweisen"
 vergessen) — für den Exit-Test ein Pass. Dabei aber größerer Folgefund aufgedeckt, siehe R8.
 
-### R8 🟠 Prozessketten-Verknüpfung fehlt (kein durchgängiger Demo-Faden)
+### R8 ✅ Erledigt (2026-08-05, als Sprint S7) — Prozessketten-Verknüpfung fehlte (kein durchgängiger Demo-Faden)
 
-**Hinzugefügt:** 2026-08-04, aus erstem R7-Spike-Durchlauf.
+**Hinzugefügt:** 2026-08-04, aus erstem R7-Spike-Durchlauf. **Umgesetzt:** 2026-08-05 als
+Sprint **S7** — Sprint-Reihenfolge wurde außerhalb dieser Session neu priorisiert:
+Prozessketten-Kontinuität ist Voraussetzung für R2/R3, nicht parallel dazu, daher rückte R8
+auf S7 vor und Purchase+Inventory (R2/R3) auf **S8** (siehe §5-Tabelle unten und Draft-Plan
+`/Users/paul/.claude/plans/continue-implementation-with-the-woolly-toast.md`).
+
+**Kurswechsel während der Planung (wichtig für künftige ähnliche Aufgaben):** der erste
+Plan-Entwurf markierte genau *ein* "Hero"-Serviceprodukt pro Lauf und fädelte 5 neue
+`hero_*`-IDs durch `RunContext`/Testsuite, inkl. eines von Hand nachgebauten Reverse-Links
+für `account.move.line.sale_line_ids` (readonly). Nutzer-Feedback nach Plan-Review: wenn der
+Odoo-Mechanismus für ein Produkt funktioniert, funktioniert er für alle — kein Grund, einen
+einzelnen Datensatz zu privilegieren statt das zugrunde liegende Verhalten für jedes
+Serviceprodukt und jeden Auftrag zu beheben. Die finale, umgesetzte Version wendet den Fix
+**universell** an und ist dadurch *kleiner* als die Hero-Version (keine neuen
+`RunContext`-Felder, `sale.py`/`config.py` komplett unangetastet) — siehe
+[[feedback_native_over_manual]] (Claude-Memory) für das daraus abgeleitete, dauerhafte
+Prinzip.
+
+**Umsetzung (Kernmechanismus):**
+- `modules/master_data.py._create_products`: **jedes** Serviceprodukt bekommt
+  `service_tracking='task_in_project'`, `invoice_policy='delivery'`,
+  `service_type='timesheet'` — gated auf `'project' in ctx.installed_modules and
+  'hr_timesheet' in ctx.installed_modules` (Installations-, keine Lauf-Auswahl-Frage, da
+  `'task_in_project'` ohne die `project`-App kein gültiger `service_tracking`-Wert ist).
+  Damit erzeugt Odoo bei `action_confirm` automatisch Projekt+Aufgabe pro Service-Zeile —
+  **kein neuer Pipeline-Schritt nötig**, der Mechanismus hängt am bereits produktiv
+  genutzten `action_confirm`-Aufruf.
+- `modules/project.py.create_timesheet_data`: fragt `sale.order.line`s mit gesetztem
+  `task_id` aus `ctx.confirmed_order_ids` ab ("billable lines") und bedient das
+  `hr_timesheet`-Budget zuerst daraus (`so_line`/`task_id`/`project_id` gesetzt — treibt
+  Odoos eigene `qty_delivered`-Berechnung), Rest-Budget füllt den bestehenden
+  Zufalls-Pool aus `ctx.project_ids` unverändert auf. Nebenbefund/Fix: der alte
+  Early-Return (`not ctx.project_ids`) hätte Zeiterfassung bei "Zeiterfassung+Verkauf aber
+  nicht Projekte" komplett übersprungen, obwohl billable Tasks existieren — behoben.
+- `modules/accounting.py.create_invoices_from_orders`: fakturiert jetzt **pro Auftrag** über
+  Odoos eigenen `sale.advance.payment.inv`-Wizard (`advance_payment_method='delivered'`,
+  öffentliche `create_invoices`-Methode — dieselbe, die der "Rechnung erstellen"-Button in
+  Odoo öffnet) statt manuellem `account.move`-Nachbau. Der Wizard respektiert pro Zeile die
+  jeweilige `invoice_policy` (delivery vs. order) und setzt `sale_line_ids` nativ — der alte
+  manuelle Aufbau bleibt als `_create_invoices_from_orders_manual` reiner Fallback pro
+  Auftrag (nicht Batch-weit — ein Auftrag ohne fakturierbare Menge darf nicht alle anderen
+  in den Fallback mitziehen, live bestätigt: ein Wizard-Aufruf mit nur einem leeren Auftrag
+  wirft eine Exception, ein Batch mit mind. einem echten Auftrag daneben nicht).
+- `orchestrator.py` 🔒: `module_order` umsortiert zu `mrp → crm → sale → hr → project →
+  hr_timesheet → account → hr_recruitment → documents` (war: `account` an Position 4) —
+  eine Service-Zeile braucht ihre Zeiterfassung, bevor sie fakturiert werden kann.
+
+**Live-Spike-Befunde (11 Checks, alle bestanden, `demo-pahu-test1.odoo.com` saas-19.4):**
+`service_tracking`/`invoice_policy` allein reichen **nicht** — `product.product.service_type
+='timesheet'` ist das dritte, unabhängige Feld, das `qty_delivered_method` tatsächlich auf
+`'timesheet'` setzt (leicht zu übersehen, keines der drei Felder folgt zwingend aus den
+anderen beiden). Zwei Service-Zeilen auf demselben Auftrag teilen sich EIN
+Odoo-generiertes Projekt (unterschiedliche Aufgaben) — kein Duplikat-Projekt pro Zeile.
+`account.move.line.sale_line_ids` ist readonly (gleiche Fallenklasse wie
+`ir.attachment.datas`/`stock.quant.quantity`) — der Wizard setzt ihn serverseitig, kein
+manueller `write` nötig.
+
+**Datenerzeugungs-Audit (auf Nutzer-Anfrage, vor Plan-Freigabe):** alle `client.create`/
+`create_batch`-Aufrufstellen der 9 implementierten Module gegen bekannte Odoo-native
+Automatiken geprüft. `modules/mrp.py` explizit auditiert: keine Kollisionsgefahr, da nie
+`route_ids` (Fertigungsroute) auf Produkten gesetzt wird — Auftragsbestätigung eines
+MRP-Fertigprodukts löst deshalb heute keine native Fertigungsauftrags-Automatik aus, die mit
+`create_mrp_data`s eigener manueller MO-Erstellung kollidieren könnte. Bulk-Projekte
+(`create_project_data`) und auftragsgetriebene Projekte koexistieren bewusst (getrennter
+ID-Raum, unterschiedlicher Zweck) — keine Duplizierung.
+
+Getestet: 157/157 Unit- + 65/65 Live-Integration-Schritte grün (inkl. 7 neuer R8-Schritte:
+Produkt-Tagging, geteiltes Projekt bei zwei Service-Zeilen, billable-lines-first
+Zeiterfassung, Wizard-Fakturierung mit exaktem Mengen- und `sale_line_ids`-Abgleich).
 
 Befund: ein realer KI-generierter Demo-Plan (Quote-to-Cash-Workbook, R7-Spike) erwartet
 einen einzelnen durchgängigen Faden Opportunity → Order → Projekt → Aufgabe →
@@ -626,7 +694,8 @@ Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-
 | **S5 — API-Versions-Schicht (R5), Tier 1** ✅ | Versions-Erkennung (`get_server_version`), `fields_get`-Warnliste (`check_field_compatibility`) (2026-08-04) | Beide ohne 🔒-Berührung, unabhängig testbar; siehe R5-Statusblock für die Tier-2-Zurückstellungs-Begründung |
 | S5 Tier 2 (zurückgestellt) | `api_versions/*.json`, Client-Adapter (🔒) | Erst mit einem echten, belegten Rename zwischen zwei Live-Versionen — siehe R5 |
 | **S6 — PDF (R1/P1+P2)** ✅ | `pdf_factory`, `modules/documents`, GUI-Optionen, `RunContext.applicant_ids` (Voraussetzungs-Fix in `recruiting.py`) (2026-08-04) | Erster Roadmap-Ausbau, größter Demo-Effekt — siehe CLAUDE.md „Current Sprint" für Peer-Review-Ergebnis und den live gefundenen `ir.attachment`-Feldnamen-Bug |
-| **S7 — Purchase + Inventory** | R2, R3 | Prozessketten vervollständigen |
+| **S7 — Prozessketten-Kontinuität (R8)** ✅ | Universelles Service-Produkt-Tagging, billable-lines-first Zeiterfassung, Wizard-basierte Fakturierung, `orchestrator.py`-Reorder 🔒 (2026-08-05) | Umnummeriert von "S7 = Purchase+Inventory" — Prozessketten-Kontinuität ist Voraussetzung, nicht parallel; siehe R8-Statusblock oben für Details, Peer-Review-Verlauf (2× fremder Opus-Agent, Plan+Repo-Kontext) und den Hero→Universal-Kurswechsel |
+| **S8 — Purchase + Inventory** | R2, R3 | War ursprünglich S7; Draft-Plan existiert bereits (`continue-implementation-with-the-woolly-toast.md`), vor Umsetzung gegen aktuellen Code-Stand re-verifizieren |
 
 **Pro Arbeitspaket verbindlich** (aus CLAUDE.md Testing Design Patterns):
 - Empty-Pool-Guards (P1) für jede neue `random.choice/sample`-Stelle

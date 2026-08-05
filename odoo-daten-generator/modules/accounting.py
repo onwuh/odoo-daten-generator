@@ -46,7 +46,55 @@ def create_customer_invoice(client, partner_id, line_product_ids):
 
 
 def create_invoices_from_orders(client, order_ids):
+    """Invoices confirmed orders via Odoo's own sale.advance.payment.inv wizard
+    (R8) — the same mechanism the "Create Invoice" button uses — so each
+    line's quantity respects its own invoice_policy (delivered vs. ordered)
+    and the sale_line_ids reverse link is set natively, instead of this
+    codebase re-deriving those rules by hand. Called once per order (not once
+    for the whole batch): an order with nothing left to invoice yet (e.g. a
+    delivery-policy line with zero qty_delivered) makes the wizard raise for
+    that order alone — per-order isolation means one such order doesn't drag
+    every other, perfectly invoiceable order into the manual fallback with it.
+    """
     logger.info(f"-> Creating invoices from orders: {order_ids}")
+    if not order_ids:
+        return []
+    invoice_ids = []
+    failed_order_ids = []
+    for oid in order_ids:
+        try:
+            wizard_id = client.create('sale.advance.payment.inv', {
+                'advance_payment_method': 'delivered',
+                'sale_order_ids': [(6, 0, [oid])],
+            })
+            client.call_method(
+                'sale.advance.payment.inv', 'create_invoices', ids=[wizard_id],
+                context={'active_model': 'sale.order', 'active_ids': [oid]},
+            )
+            order_rec = client.search_read(
+                'sale.order', [['id', '=', oid]], fields=['invoice_ids'], limit=1,
+            )
+            new_ids = (order_rec[0].get('invoice_ids') or []) if order_rec else []
+            if new_ids:
+                invoice_ids.extend(new_ids)
+            else:
+                logger.info(f"-> Auftrag {oid}: nichts zu fakturieren (noch keine "
+                            f"gelieferte Menge) — kein Rechnungsversuch nötig.")
+        except Exception as e:
+            logger.warning(f"-> Wizard-Rechnungserstellung für Auftrag {oid} "
+                            f"fehlgeschlagen ({e}) — Fallback auf manuellen Aufbau.")
+            failed_order_ids.append(oid)
+    if invoice_ids:
+        post_invoices(client, invoice_ids)
+    if failed_order_ids:
+        invoice_ids.extend(_create_invoices_from_orders_manual(client, failed_order_ids))
+    return invoice_ids
+
+
+def _create_invoices_from_orders_manual(client, order_ids):
+    """Fallback for create_invoices_from_orders: manually rebuilds invoice
+    lines from order data instead of using the native wizard. Used only when
+    the wizard raises for a given order (see create_invoices_from_orders)."""
     if not order_ids:
         return []
     invoice_vals_list = []
