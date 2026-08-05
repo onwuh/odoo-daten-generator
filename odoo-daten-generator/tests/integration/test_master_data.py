@@ -131,5 +131,27 @@ def run(client, ctx):
     except Exception as e:
         results.append(("master_data: Pattern 2 — empty atoms/name_banks -> fallback chain, no crash", False, str(e)))
 
+    # Step 6 — R8: service products get service_tracking/invoice_policy/
+    # service_type tagged when project+hr_timesheet are installed, so Odoo's
+    # own automation creates a Project+Task on order confirmation later
+    # (verified in modules/sale.py's integration test).
+    try:
+        rctx = _make_rctx()
+        rctx.installed_modules = {"project", "hr_timesheet"}
+        atoms = {"product_names": {"services": ["R8 Testservice"]}, "product_descriptions": {}}
+        master_data._create_products(client, atoms, rctx)
+        assert len(rctx.product_ids) == 1, f"expected 1 product, got {len(rctx.product_ids)}"
+        rec = client.search_read(
+            'product.product', [["id", "=", rctx.product_ids[0]]],
+            fields=["service_tracking", "invoice_policy", "service_type"], limit=1,
+        )
+        assert rec, "product not found after create"
+        assert rec[0]["service_tracking"] == "task_in_project", rec[0]
+        assert rec[0]["invoice_policy"] == "delivery", rec[0]
+        assert rec[0]["service_type"] == "timesheet", rec[0]
+        results.append(("master_data: R8 — service product tagged for native automation", True, rctx.product_ids[0]))
+    except Exception as e:
+        results.append(("master_data: R8 — service product tagged for native automation", False, str(e)))
+
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

@@ -47,6 +47,7 @@ class TestContext:
     employee_ids:      list = field(default_factory=list)
     project_ids:       list = field(default_factory=list)
     order_ids:         list = field(default_factory=list)
+    confirmed_order_ids: list = field(default_factory=list)
     job_ids:           list = field(default_factory=list)
     opportunity_ids:   list = field(default_factory=list)
     lead_ids:          list = field(default_factory=list)
@@ -59,9 +60,9 @@ _MODULES = [
     ("mrp",         test_mrp.run),
     ("crm",         test_crm.run),
     ("sale",        test_sale.run),
-    ("accounting",  test_accounting.run),
     ("hr",          test_hr.run),
     ("project",     test_project.run),
+    ("accounting",  test_accounting.run),
     ("recruiting",  test_recruiting.run),
     ("documents",   test_documents.run),
 ]

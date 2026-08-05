@@ -51,13 +51,20 @@ Single entry point: `gui.py` (CustomTkinter wizard, 4 screens).
 ## Object Pipeline
 
 Execution order (respect dependencies, never change without architect approval):
-Stammdaten → MRP → CRM → Sales → Accounting → HR → Projects → Timesheets → Recruiting
+Stammdaten → MRP → CRM → Sales → HR → Projects → Timesheets → Accounting → Recruiting
+
+(Reordered 2026-08-05, Sprint S7/R8: Accounting moved from position 5 to position 8 —
+a confirmed service-line's invoiced quantity is delivered-qty-based and computed from
+timesheets that must already exist, which in turn need employees/the order's
+auto-created task to exist first.)
 
 Critical: `ctx.company_ids` and `ctx.product_ids` are the single source of truth for all
 downstream modules. They are seeded by `master_data` + orchestrator fallbacks; when
 `skip_master_data` is set, the caller (GUI) must fill them with existing IDs before
 `orchestrator.run()`. `ctx.component_ids` holds purchased parts (MRP) — vendor bills draw
-from it, sale orders never do.
+from it, sale orders never do. `ctx.confirmed_order_ids` (populated by `sale.py`) is also
+read by `project.py`'s `create_timesheet_data` since Sprint S7/R8 (billable order-linked
+tasks claim the timesheet budget first).
 
 ## LLM Layer
 
@@ -106,6 +113,9 @@ from it, sale orders never do.
 - `hr.leave/action_approve` fails with `UserError: "You cannot approve this leave."` when the record is already in `state='validate'` — this happens on creation itself for `hr.work.entry.type` records with certain `leave_validation_type` values (e.g. `'both'`), which auto-validate on create for the API-key user. Check `state` before calling `action_approve` rather than calling it unconditionally.
 - `hr.leave.allocation` has **no** `allocation_type` field on saas-19.4 (existed on 19.2, since removed — accrual vs. regular is now implied by `accrual_plan_id` being set or absent). Do not send it.
 - `ir.attachment` binary content field is `raw`, **not** `datas` — `datas` doesn't exist as a field on this instance at all (`search_read` raises `Invalid field 'datas' on 'ir.attachment'`), yet `create()` silently accepts and drops a `datas` key instead of raising (200 OK, no content stored, no error). `db_datas` also exists in `fields_get` but writing it directly is silently dropped too (attachments are filestore-backed here, not DB-column-backed). Only `raw` round-trips actual file content on create/read.
+- `product.template`/`product.product`: enabling Odoo's native "auto-create Project+Task on order confirmation" needs **three** independent fields, not two — `service_tracking='task_in_project'` (creates the Project+Task), `invoice_policy='delivery'` (invoice delivered not ordered qty), **and** `service_type='timesheet'` (the field that actually makes `sale.order.line.qty_delivered_method` become `'timesheet'`, easy to miss since it doesn't follow from the other two). Do not use the convenience field `service_policy` — it's `store: false` (a UI-only onchange helper) and may be silently dropped by `create()` on this instance, same trap class as `ir.attachment.datas`.
+- `account.move.line.sale_line_ids` (m2m → `sale.order.line`) is **readonly** — cannot be set on `account.move`/`account.move.line` `create()`. The writable reverse side is `sale.order.line.invoice_lines` (m2m → `account.move.line`) — but as of Sprint S7/R8, invoicing goes through the `sale.advance.payment.inv` wizard instead, which sets this link server-side natively; no manual write needed either way.
+- Invoicing a `sale.order` the way Odoo's own "Create Invoice" button does: create a `sale.advance.payment.inv` record (`advance_payment_method='delivered'`, `sale_order_ids=[(6,0,[order_id])]`), then `call_method('sale.advance.payment.inv', 'create_invoices', ids=[wizard_id])` — this public method (no leading underscore) is callable via JSON2 even though it wraps the private `sale.order._create_invoices()`. Read back the created invoice(s) via `sale.order.invoice_ids` (m2m → `account.move`) afterward — the method's own return value is an `ir.actions.act_window` dict, not usable directly. A single order with nothing currently invoiceable (e.g. a delivery-policy line with `qty_delivered=0`) makes the call raise for that order; call the wizard **per order**, not once for a whole batch, so one such order doesn't drag every other invoiceable order in the batch into a fallback with it — live-confirmed a multi-order batch does NOT raise as a whole when only some orders are empty, but a solo empty-order call does.
 
 ## Debugging
 
@@ -173,8 +183,9 @@ Odoo-Zielversion-Korrektur bestätigt durch diesen Sprint: `ir.module.module`/`b
 angenommenes Format — eine Dot-Segment-Anzahl weniger; Parser darf keine feste Segmentzahl
 voraussetzen).
 
-Nächster Sprint: S7 — Purchase + Inventory (R2/R3), siehe §4/§5 Roadmap; S5 Tier 2 bleibt im
-Backlog bis zum oben genannten Auslöser.
+S5 Tier 2 bleibt im Backlog bis zum oben genannten Auslöser. (Sprint-Reihenfolge ab hier
+umnummeriert — siehe S7-Block unten: S7 wurde zu Prozessketten-Kontinuität/R8, S8 ist jetzt
+Purchase+Inventory/R2+R3.)
 
 Sprint S6 (2026-08-04) — **abgeschlossen**, nach Peer-Review eines vorab geschriebenen Plans
 durch einen fremden Opus-Agenten (Kontext nur Plan + Live-Repo, keine Konversationshistorie,
@@ -208,6 +219,33 @@ Screen-3-/Screen-4-Widgets, `CTkCheckBox.select()`/`CTkRadioButton.select()` +
 im Browser/Desktop, aber Test deckt exakt den von der Peer-Review gefundenen Blocker ab.
 Vollständige Test-Suite (`tests/integration/test_suite.py`): 151/151 Unit- + 61/61
 Live-Integration-Schritte grün, inkl. neuer `test_documents_unit.py`/`test_documents.py`.
+
+Sprint S7 (2026-08-05) — **abgeschlossen**, Prozessketten-Kontinuität (R8). Sprint-Reihenfolge
+wurde außerhalb dieser Session neu priorisiert: R8 ist Voraussetzung für R2/R3
+(Purchase+Inventory), nicht parallel dazu — S7 = R8, Purchase+Inventory rückt auf **S8** (Draft
+bereits vorhanden: `/Users/paul/.claude/plans/continue-implementation-with-the-woolly-toast.md`,
+vor Umsetzung gegen aktuellen Code-Stand re-verifizieren). Plan wurde **zweimal** von einem
+fremden Opus-Agenten peer-reviewed (Kontext nur Plan+Live-Repo, keine Konversationshistorie,
+gleiches Verfahren wie S5/S6) — nach der ersten Review erfolgte ein Nutzer-Kurswechsel: der
+Erst-Entwurf markierte genau ein "Hero"-Serviceprodukt pro Lauf (5 neue `RunContext`-Felder,
+manueller Reverse-Link-Workaround); Nutzer-Feedback "wenn es für ein Produkt funktioniert,
+funktioniert es für alle" führte zu einer zweiten, universellen Version (angewendet auf jedes
+Serviceprodukt, keine neuen `RunContext`-Felder, `sale.py`/`config.py` unangetastet — kleinerer
+Diff als die Hero-Version). Volle Details, Live-Spike-Ergebnisse und das
+Datenerzeugungs-Audit (auf Nutzer-Anfrage: alle `create`/`create_batch`-Aufrufstellen der 9
+Module gegen native Odoo-Automatiken geprüft, `mrp.py` explizit als kollisionsfrei bestätigt)
+in `IMPLEMENTIERUNGSPLAN.md`s R8-Statusblock (§4). Kern: `service_tracking`/`invoice_policy`/
+`service_type` auf allen Serviceprodukten (gated auf `project`+`hr_timesheet` installiert) lässt
+Odoo bei Auftragsbestätigung selbst Projekt+Aufgabe erzeugen; Zeiterfassung gegen diese
+Aufgaben treibt echte Delivered-Qty-Fakturierung über den nativen
+`sale.advance.payment.inv`-Wizard statt manuellem `account.move`-Nachbau.
+`orchestrator.py`-Reorder (🔒, architekten-freigegeben im Plan): `account` läuft jetzt nach
+`hr`/`project`/`hr_timesheet` statt davor. 157/157 Unit- + 65/65 Live-Integration-Schritte
+grün, inkl. 7 neuer R8-Schritte über `test_master_data.py`/`test_sale.py`/`test_project.py`/
+`test_accounting.py`.
+
+Nächster Sprint: S8 — Purchase + Inventory (R2/R3), siehe §4/§5 Roadmap in
+`IMPLEMENTIERUNGSPLAN.md`.
 
 **Prozess-Hinweis (2026-08-04):** Dieser Abschnitt lag zeitweise eine ganze Session hinter dem
 tatsächlichen Code-Stand zurück — D1/D2/D3/B11/B14/B15 waren bereits implementiert und getestet,

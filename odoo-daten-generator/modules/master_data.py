@@ -52,6 +52,18 @@ def _create_products(client, atoms: Dict[str, Any], ctx: RunContext) -> None:
         logger.info("-> Keine Produkte zu erstellen.")
         return
 
+    # R8: tag every service product so Odoo's own automation creates a
+    # Project+Task on order confirmation and drives invoicing from delivered
+    # (timesheet) quantity — gated on app installation, not per-run selection,
+    # since 'task_in_project' isn't a legal service_tracking value without the
+    # 'project' app (added by the sale_project integration module).
+    if 'project' in ctx.installed_modules and 'hr_timesheet' in ctx.installed_modules:
+        for vals in all_vals:
+            if vals.get('type') == 'service':
+                vals['service_tracking'] = 'task_in_project'
+                vals['invoice_policy'] = 'delivery'
+                vals['service_type'] = 'timesheet'
+
     ids = client.create_batch('product.product', all_vals)
     ctx.product_ids.extend(ids)
     logger.info(f"✅ {len(ids)} Produkte erstellt.")

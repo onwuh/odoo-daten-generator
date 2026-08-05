@@ -4,11 +4,19 @@ Module execution order is important:
 1. master_data  — products and partners (everything else depends on these)
 2. mrp          — manufacturing products + BOMs (products feed into sale orders)
 3. crm          — opportunities (linked to orders in sale module)
-4. sale         — orders, confirmation, CRM won-stage update
-5. account      — invoices from orders, vendor bills, bank transactions
-6. hr           — employees (project/timesheet need them)
-7. project      — projects, tasks, stages (timesheets need project_ids)
-8. hr_timesheet — timesheets
+4. sale         — orders, confirmation, CRM won-stage update; confirming an
+                   order with a service_tracking-tagged product also triggers
+                   Odoo's native project/task creation (R8)
+5. hr           — employees (project/timesheet need them)
+6. project      — projects, tasks, stages (timesheets need project_ids)
+7. hr_timesheet — timesheets; logs hours against order-linked tasks (R8),
+                   which is what makes their delivered quantity non-zero
+8. account      — invoices from orders (delivered-qty-aware, via the native
+                   sale.advance.payment.inv wizard — R8), vendor bills, bank
+                   transactions. Moved from position 4 to run after
+                   hr_timesheet: a service line's invoiced quantity is driven
+                   by qty_delivered, computed from timesheets that don't exist
+                   yet if account ran earlier.
 9. hr_recruitment — recruiting
 10. documents      — PDF attachments for vendor bills (needs bill_ids) and
                       applicant CVs (needs applicant_ids); always runs last
@@ -54,10 +62,10 @@ def run(client: OdooJson2Client, gemini: LLMService, ctx: RunContext,
         ("mrp",            "mrp" in ctx.installed_modules,              mrp.create_mrp_data),
         ("crm",            "crm" in ctx.installed_modules,              crm.create_crm_data),
         ("sale",           "sale" in ctx.installed_modules,             sale.create_sale_data),
-        ("account",        "account" in ctx.installed_modules,          accounting.create_accounting_data),
         ("hr",             "hr" in ctx.installed_modules,               hr.create_hr_data),
         ("project",        "project" in ctx.installed_modules,          project.create_project_data),
         ("hr_timesheet",   "hr_timesheet" in ctx.installed_modules,     project.create_timesheet_data),
+        ("account",        "account" in ctx.installed_modules,          accounting.create_accounting_data),
         ("hr_recruitment", "hr_recruitment" in ctx.installed_modules,   recruiting.create_recruiting_data),
         # "documents" is not a real Odoo-probed module — ir.attachment is core,
         # always available, hence hardcoded True (not gated on installed_modules,

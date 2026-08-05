@@ -155,9 +155,26 @@ def create_project_data(client, gemini, ctx: RunContext) -> None:
 
 
 def create_timesheet_data(client, gemini, ctx: RunContext) -> None:
-    """Creates timesheet entries. Needs at least one employee and one project."""
+    """Creates timesheet entries. Needs at least one employee and either a
+    bulk project or a real order-linked billable task (R8)."""
     num_timesheets = ctx.module_selections.hr_timesheet
-    if num_timesheets <= 0 or not ctx.project_ids:
+    if num_timesheets <= 0:
+        return
+
+    # R8: sale.order.line's auto-created task_id (via service_tracking, set
+    # on order confirmation) is what makes qty_delivered non-zero once a
+    # timesheet is logged against it with so_line set — these lines claim the
+    # budget first, driving real invoicing for as many service lines as
+    # possible; any remaining budget fills the existing bulk-project pool.
+    billable_lines = []
+    if ctx.confirmed_order_ids:
+        billable_lines = client.search_read(
+            'sale.order.line',
+            [['order_id', 'in', ctx.confirmed_order_ids], ['task_id', '!=', False]],
+            fields=['task_id', 'project_id'], limit=0,
+        )
+
+    if not ctx.project_ids and not billable_lines:
         return
 
     logger.info("\n--- TIMESHEET: Erstelle Zeiteinträge ---")
@@ -173,22 +190,50 @@ def create_timesheet_data(client, gemini, ctx: RunContext) -> None:
             employee_ids.append(odoo_actions.create_employee(client, name))
 
     today = datetime.date.today()
-    timesheet_vals_list = []
-    for i in range(num_timesheets):
-        emp = employee_ids[i % len(employee_ids)]
-        proj = ctx.project_ids[i % len(ctx.project_ids)]
-        offset = random.randint(1, 180)
-        entry_date = today - datetime.timedelta(days=offset)
-        # Shift to nearest weekday (Mon=0 … Fri=4)
-        if entry_date.weekday() >= 5:
-            entry_date -= datetime.timedelta(days=entry_date.weekday() - 4)
-        timesheet_vals_list.append({
-            "name": f"Arbeitstag {i + 1}",
-            "employee_id": emp,
-            "project_id": proj,
-            "unit_amount": float(random.randint(1, 8)),
-            "date": entry_date.isoformat(),
-        })
 
-    client.create_batch('account.analytic.line', timesheet_vals_list)
-    logger.info(f"✅ {num_timesheets} Zeiteinträge erstellt.")
+    def _next_date():
+        offset = random.randint(1, 180)
+        d = today - datetime.timedelta(days=offset)
+        # Shift to nearest weekday (Mon=0 … Fri=4)
+        if d.weekday() >= 5:
+            d -= datetime.timedelta(days=d.weekday() - 4)
+        return d
+
+    def _unwrap(v):
+        return v[0] if isinstance(v, (list, tuple)) else v
+
+    timesheet_vals_list = []
+    remaining = num_timesheets
+
+    # Billable order-linked tasks claim the budget first.
+    for line in billable_lines:
+        if remaining <= 0:
+            break
+        emp = employee_ids[len(timesheet_vals_list) % len(employee_ids)]
+        timesheet_vals_list.append({
+            "name": f"Projektarbeit {len(timesheet_vals_list) + 1}",
+            "employee_id": emp,
+            "task_id": _unwrap(line.get("task_id")),
+            "project_id": _unwrap(line.get("project_id")),
+            "so_line": line["id"],
+            "unit_amount": float(random.randint(2, 8)),
+            "date": _next_date().isoformat(),
+        })
+        remaining -= 1
+
+    # Remaining budget fills the existing random-bulk-project pool, unchanged.
+    if ctx.project_ids:
+        for i in range(remaining):
+            emp = employee_ids[len(timesheet_vals_list) % len(employee_ids)]
+            proj = ctx.project_ids[i % len(ctx.project_ids)]
+            timesheet_vals_list.append({
+                "name": f"Arbeitstag {len(timesheet_vals_list) + 1}",
+                "employee_id": emp,
+                "project_id": proj,
+                "unit_amount": float(random.randint(1, 8)),
+                "date": _next_date().isoformat(),
+            })
+
+    if timesheet_vals_list:
+        client.create_batch('account.analytic.line', timesheet_vals_list)
+        logger.info(f"✅ {len(timesheet_vals_list)} Zeiteinträge erstellt.")

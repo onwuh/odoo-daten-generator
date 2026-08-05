@@ -1005,8 +1005,8 @@ class App(ctk.CTk):
         module_bars: dict = {}
         active_keys = [] if ctx.skip_master_data else ["stammdaten"]
 
-        module_order_keys = ["mrp", "crm", "sale", "account", "hr",
-                             "project", "hr_timesheet", "hr_recruitment", "documents"]
+        module_order_keys = ["mrp", "crm", "sale", "hr", "project",
+                             "hr_timesheet", "account", "hr_recruitment", "documents"]
         for key in module_order_keys:
             # B10: gate on installed AND selected — ctx.installed_modules is now
             # the true Odoo-probed set (may be a superset of what the user picked).

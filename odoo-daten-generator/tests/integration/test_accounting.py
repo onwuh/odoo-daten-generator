@@ -31,6 +31,8 @@ def _make_rctx(num_invoices):
 def run(client, ctx):
     """
     Consumes: ctx.partner_ids, ctx.product_ids
+    R8 step also consumes: ctx.confirmed_order_ids (test_sale.py, after
+    test_project.py has logged timesheets against its billable lines)
     Returns: (all_passed, [(label, ok, detail), ...])
     """
     results = []
@@ -273,6 +275,58 @@ def run(client, ctx):
         ))
     except Exception as e:
         results.append(("accounting: create_accounting_data honors account_bills=7, read-back", False, str(e)))
+
+    # Step 10 — R8: invoicing via the native wizard for the order from
+    # test_sale.py's step 8 (two service lines, each with a timesheet logged
+    # in test_project.py's step 7 by the time this runs, per the reordered
+    # pipeline). Asserts the invoiced quantity matches the exact
+    # qty_delivered observed there (not just ">0"), and that Odoo's own
+    # sale_line_ids reverse link is set natively — no manual write needed,
+    # unlike the readonly-field workaround an earlier design would have
+    # required.
+    try:
+        assert ctx.confirmed_order_ids, "test_sale.py step 8 must have run first"
+        lines_before = client.search_read(
+            'sale.order.line',
+            [['order_id', 'in', ctx.confirmed_order_ids], ['task_id', '!=', False]],
+            fields=['id', 'product_id', 'qty_delivered'], limit=0,
+        )
+        assert lines_before, "no billable order-linked lines found"
+
+        new_invoice_ids = create_invoices_from_orders(client, ctx.confirmed_order_ids)
+        assert new_invoice_ids, "expected at least 1 invoice from R8 orders"
+
+        def _unwrap(v):
+            return v[0] if isinstance(v, (list, tuple)) else v
+
+        src_product_ids = [_unwrap(l['product_id']) for l in lines_before]
+        move_lines = client.search_read(
+            'account.move.line',
+            [['move_id', 'in', new_invoice_ids], ['product_id', 'in', src_product_ids]],
+            fields=['product_id', 'quantity', 'sale_line_ids'], limit=0,
+        )
+        assert move_lines, "no matching invoice lines found for R8 service products"
+
+        checked = 0
+        for src in lines_before:
+            src_pid = _unwrap(src['product_id'])
+            ml = next((m for m in move_lines if _unwrap(m['product_id']) == src_pid), None)
+            if ml is None:
+                continue
+            assert ml['quantity'] == src['qty_delivered'], (
+                f"product {src_pid}: invoice qty {ml['quantity']} != qty_delivered {src['qty_delivered']}"
+            )
+            assert src['id'] in (ml.get('sale_line_ids') or []), (
+                f"sale_line_ids {ml.get('sale_line_ids')} missing source line {src['id']}"
+            )
+            checked += 1
+        assert checked > 0, "none of the R8 billable lines matched an invoice line"
+        results.append((
+            "accounting: R8 — wizard invoices delivered qty with native sale_line_ids link",
+            True, f"checked {checked} line(s)",
+        ))
+    except Exception as e:
+        results.append(("accounting: R8 — wizard invoices delivered qty with native sale_line_ids link", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results
