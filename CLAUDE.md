@@ -116,6 +116,8 @@ tasks claim the timesheet budget first).
 - `product.template`/`product.product`: enabling Odoo's native "auto-create Project+Task on order confirmation" needs **three** independent fields, not two — `service_tracking='task_in_project'` (creates the Project+Task), `invoice_policy='delivery'` (invoice delivered not ordered qty), **and** `service_type='timesheet'` (the field that actually makes `sale.order.line.qty_delivered_method` become `'timesheet'`, easy to miss since it doesn't follow from the other two). Do not use the convenience field `service_policy` — it's `store: false` (a UI-only onchange helper) and may be silently dropped by `create()` on this instance, same trap class as `ir.attachment.datas`.
 - `account.move.line.sale_line_ids` (m2m → `sale.order.line`) is **readonly** — cannot be set on `account.move`/`account.move.line` `create()`. The writable reverse side is `sale.order.line.invoice_lines` (m2m → `account.move.line`) — but as of Sprint S7/R8, invoicing goes through the `sale.advance.payment.inv` wizard instead, which sets this link server-side natively; no manual write needed either way.
 - Invoicing a `sale.order` the way Odoo's own "Create Invoice" button does: create a `sale.advance.payment.inv` record (`advance_payment_method='delivered'`, `sale_order_ids=[(6,0,[order_id])]`), then `call_method('sale.advance.payment.inv', 'create_invoices', ids=[wizard_id])` — this public method (no leading underscore) is callable via JSON2 even though it wraps the private `sale.order._create_invoices()`. Read back the created invoice(s) via `sale.order.invoice_ids` (m2m → `account.move`) afterward — the method's own return value is an `ir.actions.act_window` dict, not usable directly. A single order with nothing currently invoiceable (e.g. a delivery-policy line with `qty_delivered=0`) makes the call raise for that order; call the wizard **per order**, not once for a whole batch, so one such order doesn't drag every other invoiceable order in the batch into a fallback with it — live-confirmed a multi-order batch does NOT raise as a whole when only some orders are empty, but a solo empty-order call does.
+- `RunContext.company_ids` (`config.py`) is misleadingly named: despite "company", it holds **`res.partner`** IDs — customer/company contacts `master_data.py` creates via `client.create_batch('res.partner', ...)` — **never** a real `res.company` ID. `sale.py` already uses `ctx.company_ids[i]` correctly as a `sale.order.partner_id`; `mrp.py:282,334` does not (it passes `ctx.company_ids[0]` as `company_id` to `mrp.workcenter`/`get_manufacturing_picking_type_id`, silently degraded behind broad try/except — likely a live, pre-existing bug, not fixed as of S8). Wherever an actual `res.company` ID is needed (e.g. `stock.warehouse`/`purchase.order`/`stock.quant` `company_id`), use `odoo_actions.get_main_company_id(client)` instead (added in S8) — never `ctx.company_ids[0]`.
+- `purchase.order.action_create_invoice` creates the vendor bill with `invoice_date` unset (`False`) — it's the vendor's own external date, Odoo sets no default. `account.move.action_post` then raises `UserError: "Das Datum der Rechnung/Erstattung ist erforderlich..."` (invoice date required). Write `invoice_date` (e.g. `datetime.date.today().isoformat()`) on the bill before posting — the manual `account.move` rebuild fallback already sets it, only the `action_create_invoice` path needs the extra write.
 
 ## Debugging
 
@@ -244,7 +246,76 @@ Aufgaben treibt echte Delivered-Qty-Fakturierung über den nativen
 grün, inkl. 7 neuer R8-Schritte über `test_master_data.py`/`test_sale.py`/`test_project.py`/
 `test_accounting.py`.
 
-Nächster Sprint: S8 — Purchase + Inventory (R2/R3), siehe §4/§5 Roadmap in
+Sprint S8 (2026-08-28) — **abgeschlossen**, Purchase + Inventory (R2/R3). Plan wurde
+zweimal peer-reviewed nach dem etablierten S5-S7-Verfahren: ein Plan-Agent verifizierte den
+2026-08-04-Erstentwurf komplett neu gegen den aktuellen Code-Stand (Zeilennummern,
+Funktionssignaturen, live via odoo-fields MCP nachgeprüfte Odoo-Feldschemata), danach ein
+zweiter, fremder Agent (nur Plan-Text + Live-Repo, keine Konversationshistorie) review'te
+das Ergebnis kalt. Kern: `modules/purchase.py` (neu) — `purchase.order` → `button_confirm`
+→ `action_create_invoice` (mit manuellem `account.move`-Nachbau als Fallback, gleiches
+Per-Order-Isolations-Muster wie `create_invoices_from_orders` post-R8) →
+`odoo_actions.post_invoices`; `modules/inventory.py` (neu) — `stock.quant` mit
+`inventory_quantity` gesät, `action_apply_inventory` angewendet. `odoo_actions.py` erhielt
+drei neue Exports (`create_suppliers`, `post_invoices` — beide aus `accounting.py`
+herausgezogen, `accounting.py`s fünf Call-Sites entsprechend aktualisiert — sowie
+`get_default_warehouse`); `config.py` additiv um `ModuleSelections.purchase`/
+`purchase_confirm_pct`/`stock` und `RunContext.supplier_ids` erweitert;
+`orchestrator.py`-Anhang (🔒, additiv) nach `hr_recruitment`, vor `documents`.
+
+**Ein von der Plan-Review selbst gefundener Bug (vor Implementierung gefixt):** der
+2026-08-04-Entwurf sah `ModuleSelections.stock_avg_qty: int` vor, gepaart mit
+`orchestrator.py`s `module_code="stock"` — da `ModuleSelections.get(module_code)` reines
+`getattr(self, module_code)` ist, hätte das Modul auf jedem Lauf still und für immer
+übersprungen (kein Attribut namens `stock`). Gefixt durch dict-Form
+(`stock: dict = {"avg_qty": int}`), analog zu `mrp`/`documents`.
+
+**Zwei live gefundene Bugs (nicht vom Plan vorhergesehen, erst beim ersten echten
+End-to-End-Lauf entdeckt):**
+1. `RunContext.company_ids` heißt zwar "company", enthält aber trotz seines Namens
+   `res.partner`-IDs (von `master_data.py` erstellte Kunden-/Firmenkontakte — z.B.
+   verwendet `sale.py` `ctx.company_ids[i]` direkt als `partner_id` einer Bestellung),
+   **niemals** eine echte `res.company`-ID. Der ursprüngliche Plan übernahm unkritisch
+   `mrp.py`s vorhandenes Muster (`company_id = ctx.company_ids[0]`, benutzt für
+   `mrp.workcenter.company_id`/`get_manufacturing_picking_type_id`) — das ist dort
+   vermutlich selbst bereits ein stiller, durch breites try/except maskierter Bug (Work
+   Centers/Fertigungsaufträge könnten deshalb schon länger leise übersprungen werden,
+   **nicht in diesem Sprint gefixt**, siehe Backlog-Hinweis unten). Für `purchase.py`/
+   `inventory.py` wäre dieser Fehler nicht harmlos maskiert gewesen, sondern hätte
+   `get_default_warehouse` immer `None` liefern lassen und beide neuen Module bei jedem
+   echten Lauf komplett stillschweigend übersprungen. Gefixt durch neuen
+   `odoo_actions.get_main_company_id(client)`-Helper (gleiches Fallback-Muster wie
+   `get_main_company_name`: erst `id=1`, dann erste gefundene `res.company`), von beiden
+   neuen Modulen statt `ctx.company_ids[0]` verwendet.
+2. `purchase.order.action_create_invoice` lässt `account.move.invoice_date` unbelegt
+   (`False`) — das Datum ist das externe Lieferantendatum, Odoo setzt hier keinen
+   Default. `action_post` scheitert dann mit "Das Datum der Rechnung/Erstattung ist
+   erforderlich" (live bestätigt gegen `demo-pahu-test1.odoo.com`). Gefixt: `purchase.py`
+   schreibt `invoice_date` (heute) auf die per `action_create_invoice` erzeugten Bills,
+   bevor `post_invoices` aufgerufen wird — der manuelle Fallback-Pfad setzte es schon immer
+   korrekt.
+
+Alle drei live-unsicheren Methodennamen bestätigt: `purchase.order.button_confirm` (nicht
+`action_confirm` nötig — Odoo-Core-Name, stabil, im Gegensatz zu `sale.order`s
+`action_confirm`; dual-try trotzdem implementiert als billige Absicherung),
+`purchase.order.action_create_invoice` (öffentlich, liefert die Bill über die Reverse-Link
+`invoice_ids`), `stock.quant.action_apply_inventory`. `stock.quant.company_id`/`in_date`
+sind laut `fields_get` als `readonly` markiert, runden aber trotzdem korrekt beim `create()`
+durch (kein `ir.attachment.datas`-artiger Silent-Drop — live verifiziert).
+
+176/176 Unit- + 70/70 Live-Integration-Schritte grün, inkl. 19 neuer S8-Schritte über
+`test_purchase_unit.py`/`test_inventory_unit.py`/`test_purchase.py`/`test_inventory.py` plus
+einer neuen `is_storable`-Assertion in `test_mrp_batch_unit.py`. GUI-Anbindung bewusst auf S9
+verschoben (siehe Plan — `gui.py`s `WANTED_MODULES` kennt `purchase`/`stock` noch nicht,
+S9-Implementierer muss das beim HTML-Frontend-Umbau nachziehen, nicht nur die
+Test-Infrastruktur-`_WANTED`-Liste).
+
+**Bekannter, nicht in diesem Sprint gefixter Backlog-Punkt:** `mrp.py:282,334` verwendet
+denselben fehlerhaften `ctx.company_ids[0]`-als-`res.company`-ID-Zugriff für
+`mrp.workcenter.company_id` und `get_manufacturing_picking_type_id` — durch breites
+try/except maskiert (kein Crash, nur eine leise Log-Zeile), potenziell seit Einführung
+bereits fehlerhaft. Nicht Teil des S8-Scopes; als möglicher Folge-Task vorgemerkt.
+
+Nächster Sprint: S9 — HTML-Frontend (löst `gui.py`/CustomTkinter ab), siehe §4/§5 Roadmap in
 `IMPLEMENTIERUNGSPLAN.md`.
 
 **Prozess-Hinweis (2026-08-04):** Dieser Abschnitt lag zeitweise eine ganze Session hinter dem

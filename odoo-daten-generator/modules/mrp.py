@@ -181,7 +181,7 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
             comp_list_price = round(random.uniform(80, lp * 0.6), 2)
             comp_standard_price = round(comp_list_price * random.uniform(0.4, 0.7), 2)
             component_vals_list.append({
-                "name": cname, "sale_ok": False, "purchase_ok": True,
+                "name": cname, "sale_ok": False, "purchase_ok": True, "is_storable": True,
                 "list_price": comp_list_price, "standard_price": comp_standard_price, "tracking": "none",
             })
             component_meta.append({"main_pid": pid, "name": cname, "standard_price": comp_standard_price})
@@ -210,7 +210,7 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
                 raw_list = round(max(15, comp["standard_price"] * random.uniform(0.4, 0.9)), 2)
                 raw_std = round(raw_list * random.uniform(0.5, 0.85), 2)
                 raw_vals_list.append({
-                    "name": raw_name, "sale_ok": False, "purchase_ok": True,
+                    "name": raw_name, "sale_ok": False, "purchase_ok": True, "is_storable": True,
                     "list_price": raw_list, "standard_price": raw_std, "tracking": "none",
                 })
                 raw_meta.append({"comp": comp})

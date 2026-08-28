@@ -88,6 +88,31 @@ def run():
         results.append(("create_mrp_data: products/components/BOMs via create_batch, not per-record create()", False, str(e)))
 
     # ------------------------------------------------------------------
+    # R3 (S8): components/raw materials must be is_storable=True so they can
+    # hold real stock.quant on-hand — call_args_list order confirmed above:
+    # [0]=main products, [1]=components, [2]=raw materials, [3]=BOMs.
+    # ------------------------------------------------------------------
+    try:
+        client = _mock_client()
+        ctx = _make_ctx({
+            "num_products": 3, "components_per_bom": 2, "sub_boms_per_product": 1,
+            "num_workcenters": 0, "num_manufacturing_orders": 0, "create_quality_points": False,
+        })
+        ctx.feature_flags = {"mrp_routings": False}
+        with patch("modules.mrp.odoo_actions.create_product"):
+            mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+        component_vals = client.create_batch.call_args_list[1].args[1]
+        assert component_vals and all(v.get("is_storable") is True for v in component_vals), component_vals
+        raw_vals = client.create_batch.call_args_list[2].args[1]
+        assert raw_vals and all(v.get("is_storable") is True for v in raw_vals), raw_vals
+        results.append((
+            "create_mrp_data: components + raw materials are is_storable=True (R3)",
+            True, f"components={len(component_vals)}, raw={len(raw_vals)}",
+        ))
+    except AssertionError as e:
+        results.append(("create_mrp_data: components + raw materials are is_storable=True (R3)", False, str(e)))
+
+    # ------------------------------------------------------------------
     # D3: with sub_boms_per_product=0, still exactly 4 create_batch calls
     # (raw-material and would-be-empty batches are client-level no-ops, not
     # skipped mrp.py-level calls) and no sub-BOMs/raw materials created.
@@ -102,6 +127,10 @@ def run():
             mrp.create_mrp_data(client, gemini=None, ctx=ctx)
         assert client.create_batch.call_count == 4, client.create_batch.call_count
         assert len(ctx.component_ids) == 6, ctx.component_ids  # 2 products x 3 components, no raw materials
+        # raw_vals_list is empty here (sub_boms_per_product=0) — only check the
+        # components batch; all(...) over an empty raw list would pass vacuously.
+        component_vals = client.create_batch.call_args_list[1].args[1]
+        assert component_vals and all(v.get("is_storable") is True for v in component_vals), component_vals
         results.append((
             "create_mrp_data: sub_boms_per_product=0 -> no raw materials, still 4 calls",
             True, f"components={len(ctx.component_ids)}",

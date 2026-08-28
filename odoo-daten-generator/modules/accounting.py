@@ -4,33 +4,11 @@ import logging
 import datetime
 import random
 
-import data_factory
+import odoo_actions
 from config import RunContext
 from fallback_data import FALLBACK_SUPPLIERS
-from odoo_repository import resolve_country_ids
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Low-level accounting helpers (previously in odoo_actions.py)
-# ---------------------------------------------------------------------------
-
-def post_invoices(client, move_ids):
-    logger.info(f"-> Posting invoices: {move_ids}")
-    try:
-        client.call_method('account.move', 'action_post', ids=move_ids)
-        return True
-    except Exception as e:
-        logger.warning(f"[post_invoices] Batch post failed ({e}), retrying individually...")
-        success_count = 0
-        for mid in move_ids:
-            try:
-                client.call_method('account.move', 'action_post', ids=[mid])
-                success_count += 1
-            except Exception as e2:
-                logger.warning(f"[post_invoices] Failed to post move {mid}: {e2}")
-        return success_count > 0
 
 
 def create_customer_invoice(client, partner_id, line_product_ids):
@@ -85,7 +63,7 @@ def create_invoices_from_orders(client, order_ids):
                             f"fehlgeschlagen ({e}) — Fallback auf manuellen Aufbau.")
             failed_order_ids.append(oid)
     if invoice_ids:
-        post_invoices(client, invoice_ids)
+        odoo_actions.post_invoices(client, invoice_ids)
     if failed_order_ids:
         invoice_ids.extend(_create_invoices_from_orders_manual(client, failed_order_ids))
     return invoice_ids
@@ -138,7 +116,7 @@ def _create_invoices_from_orders_manual(client, order_ids):
             continue
     created_invoice_ids = client.create_batch('account.move', invoice_vals_list)
     if created_invoice_ids:
-        post_invoices(client, created_invoice_ids)
+        odoo_actions.post_invoices(client, created_invoice_ids)
     return created_invoice_ids
 
 
@@ -177,7 +155,7 @@ def create_vendor_bill(client, supplier_id, product_ids, description_prefix="Ven
     logger.info(f"-> Creating Vendor Bill for supplier {supplier_id}")
     values = _vendor_bill_vals(client, supplier_id, product_ids, description_prefix)
     bill_id = client.create('account.move', values)
-    post_invoices(client, [bill_id])
+    odoo_actions.post_invoices(client, [bill_id])
     return bill_id
 
 
@@ -348,22 +326,6 @@ def create_bank_transactions_for_all_invoices(client, invoice_ids, bill_ids):
     return created_line_ids
 
 
-def _create_suppliers(client, names):
-    """Creates supplier res.partner records with a full address (via
-    data_factory.build_company), not just a bare name."""
-    country_map = resolve_country_ids(client, ["DE", "AT", "CH"])
-    supplier_ids = []
-    for sname in names:
-        vals = data_factory.build_company(sname)
-        country_code = vals.pop('country_code')
-        if country_code in country_map:
-            vals['country_id'] = country_map[country_code]
-        vals['supplier_rank'] = 1
-        sid = client.create('res.partner', vals)
-        supplier_ids.append(sid)
-    return supplier_ids
-
-
 # ---------------------------------------------------------------------------
 # Module entry point
 # ---------------------------------------------------------------------------
@@ -402,7 +364,7 @@ def create_accounting_data(client, gemini, ctx: RunContext) -> None:
                 })
             invoice_ids = client.create_batch('account.move', invoice_vals_list)
             if invoice_ids:
-                post_invoices(client, invoice_ids)
+                odoo_actions.post_invoices(client, invoice_ids)
             ctx.invoice_ids.extend(invoice_ids)
 
     # Vendor bills — draw from component_ids (purchased parts) or fall back to product_ids
@@ -415,7 +377,8 @@ def create_accounting_data(client, gemini, ctx: RunContext) -> None:
         supplier_names = ctx.name_banks.get('supplier_names', []) or FALLBACK_SUPPLIERS
         num_suppliers = min(3, len(supplier_names))
         chosen_supplier_names = random.sample(supplier_names, k=num_suppliers)
-        supplier_ids = _create_suppliers(client, chosen_supplier_names)
+        supplier_ids = odoo_actions.create_suppliers(client, chosen_supplier_names)
+        ctx.supplier_ids.extend(supplier_ids)
         bill_vals_list = []
         for i in range(num_bills):
             supplier_id = supplier_ids[i % len(supplier_ids)]
@@ -429,7 +392,7 @@ def create_accounting_data(client, gemini, ctx: RunContext) -> None:
         bill_ids = client.create_batch('account.move', bill_vals_list)
         ctx.bill_ids.extend(bill_ids)
         if bill_ids:
-            post_invoices(client, bill_ids)
+            odoo_actions.post_invoices(client, bill_ids)
 
     # Bank transactions (if requested)
     if ctx.module_selections.create_bank_transactions:

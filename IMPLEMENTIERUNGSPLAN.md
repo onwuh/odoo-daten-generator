@@ -387,15 +387,48 @@ LLM-Maxime gilt auch hier: LLM liefert nur Textbausteine (Positionstexte, CV-Sti
 
 **Neue Dateien:** `pdf_factory.py` (Rendering), `modules/documents.py` (Pipeline-Schritt, läuft **nach** accounting/recruiting — 🔒 Pipeline-Reihenfolge, Architekten-Freigabe). GUI: Checkbox je Stufe im jeweiligen Modul-Panel.
 
-### R2 🟡 Purchase-Modul
+### R2 ✅ Erledigt (2026-08-28, als Sprint S8) — Purchase-Modul
 
-Heute entstehen Vendor Bills ohne Bestellhistorie. Mit `purchase`:
-Lieferanten → `purchase.order` (Komponenten aus `ctx.component_ids`) → `button_confirm`¹ → Wareneingang → Rechnung aus PO. Damit wird der P2P-Prozess demonstrierbar und B4 (Rechnungssammlung je Lauf) natürlicher.
-¹ Methodennamen vor Implementierung via odoo-fields MCP verifizieren (CLAUDE.md-Regel; bei sale ist es `action_confirm`).
+Vendor Bills entstanden vorher ohne Bestellhistorie. Neu (`modules/purchase.py`):
+Lieferanten (geteilter Pool über `RunContext.supplier_ids` mit `accounting.py`) →
+`purchase.order` (Komponenten aus `ctx.component_ids`) → `button_confirm`¹ →
+`action_create_invoice`¹ (Fallback: manueller `account.move`-Nachbau, gleiches
+Per-Order-Isolationsmuster wie R8s `create_invoices_from_orders`) → `odoo_actions.
+post_invoices`. Kein Wareneingangs-Validierungsschritt (`stock.picking`) diesen Sprint —
+eine bestätigte PO erscheint bereits nativ als offener Wareneingang in Odoos Inventory-App,
+ausreichend für Demo-Wert.
+¹ Live gegen `demo-pahu-test1.odoo.com` bestätigt: `button_confirm` (stabiler, versionsunabhängiger
+Odoo-Core-Name, anders als `sale.order`s `action_confirm`), `action_create_invoice` (öffentlich,
+Bill über `invoice_ids`-Reverse-Link lesbar). Live-Fund: `action_create_invoice` lässt
+`invoice_date` unbelegt — `action_post` scheitert ohne expliziten Write davor (siehe
+CLAUDE.md „Verified field gotchas").
 
-### R3 🟡 Lager/Inventory
+### R3 ✅ Erledigt (2026-08-28, als Sprint S8) — Lager/Inventory
 
-Für `storables` und MRP-Komponenten Anfangsbestände (`stock.quant` via `action_apply_inventory` oder Inventurbeleg) — sonst scheitern Fertigungsaufträge und Lieferungen an Fehlbeständen und die MO-Demo bleibt leer.
+Neu (`modules/inventory.py`): für `storables`/MRP-Komponenten (`modules/mrp.py` setzt
+`is_storable=True` auf Komponenten/Rohteile seit diesem Sprint — vorher nicht lagerfähig)
+`stock.quant` mit `inventory_quantity` gesät, `action_apply_inventory`¹ angewendet.
+Unabhängig von R2 (keine geteilten Felder, kein Doppelzählungsrisiko).
+¹ Live bestätigt. `stock.quant.company_id`/`in_date` sind laut `fields_get` `readonly`,
+runden aber beim `create()` trotzdem korrekt durch (kein `ir.attachment.datas`-artiger
+Silent-Drop).
+
+**Beide gemeinsam — Plan-Review-Fund vor Implementierung:** der 2026-08-04-Erstentwurf sah
+`ModuleSelections.stock_avg_qty: int` vor; da `orchestrator.py`s Modul-Gate
+`ModuleSelections.get(module_code)` reines `getattr` ist und `module_code="stock"` lautet,
+hätte das Feld nie gegriffen — R3 wäre auf jedem Lauf still übersprungen worden. Gefixt
+durch dict-Form (`stock: dict = {"avg_qty": int}`), analog `mrp`/`documents`.
+
+**Live-Fund während der Umsetzung (von keinem der beiden Pläne vorhergesehen):**
+`RunContext.company_ids` enthält trotz des Namens `res.partner`-IDs, nie eine echte
+`res.company`-ID (siehe CLAUDE.md „Verified field gotchas" für Details) — `ctx.company_ids[0]`
+als `company_id` hätte `get_default_warehouse` für beide neuen Module immer `None` liefern
+lassen. Neuer `odoo_actions.get_main_company_id()`-Helper behebt es; `mrp.py` hat denselben
+fehlerhaften Zugriff bereits länger (durch try/except maskiert), nicht in diesem Sprint
+gefixt (siehe CLAUDE.md „Current Sprint").
+
+Details, Plan-Review-Verlauf (zwei Durchläufe, gleiches Verfahren wie S5-S7) und Testzahlen:
+`CLAUDE.md` „Current Sprint" S8-Block.
 
 ### R4 ⚪ Weitere Kandidaten (Reihenfolge nach Nachfrage)
 
@@ -695,7 +728,7 @@ Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-
 | S5 Tier 2 (zurückgestellt) | `api_versions/*.json`, Client-Adapter (🔒) | Erst mit einem echten, belegten Rename zwischen zwei Live-Versionen — siehe R5 |
 | **S6 — PDF (R1/P1+P2)** ✅ | `pdf_factory`, `modules/documents`, GUI-Optionen, `RunContext.applicant_ids` (Voraussetzungs-Fix in `recruiting.py`) (2026-08-04) | Erster Roadmap-Ausbau, größter Demo-Effekt — siehe CLAUDE.md „Current Sprint" für Peer-Review-Ergebnis und den live gefundenen `ir.attachment`-Feldnamen-Bug |
 | **S7 — Prozessketten-Kontinuität (R8)** ✅ | Universelles Service-Produkt-Tagging, billable-lines-first Zeiterfassung, Wizard-basierte Fakturierung, `orchestrator.py`-Reorder 🔒 (2026-08-05) | Umnummeriert von "S7 = Purchase+Inventory" — Prozessketten-Kontinuität ist Voraussetzung, nicht parallel; siehe R8-Statusblock oben für Details, Peer-Review-Verlauf (2× fremder Opus-Agent, Plan+Repo-Kontext) und den Hero→Universal-Kurswechsel |
-| **S8 — Purchase + Inventory** | R2, R3 | War ursprünglich S7; Draft-Plan existiert bereits (`continue-implementation-with-the-woolly-toast.md`), vor Umsetzung gegen aktuellen Code-Stand re-verifizieren |
+| **S8 — Purchase + Inventory (R2, R3)** ✅ | `modules/purchase.py`, `modules/inventory.py` (neu), `odoo_actions.py`-Erweiterung, `orchestrator.py`-Anhang 🔒 (2026-08-28) | War ursprünglich S7; siehe R2/R3-Statusblöcke oben für Details, zwei Peer-Review-Durchläufe (Plan-Agent + fremder Cold-Review-Agent, gleiches Verfahren wie S5-S7) und live gefundene Bugs (`ctx.company_ids`-Namenskollision, `action_create_invoice`s fehlendes `invoice_date`) |
 
 **Pro Arbeitspaket verbindlich** (aus CLAUDE.md Testing Design Patterns):
 - Empty-Pool-Guards (P1) für jede neue `random.choice/sample`-Stelle
