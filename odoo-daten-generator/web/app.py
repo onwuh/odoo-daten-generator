@@ -65,7 +65,19 @@ def profile() -> str:
     return (os.environ.get("ODOO_GENERATOR_PROFILE") or "local").lower()
 
 
-def cookie_secure() -> bool:
+def cookie_secure(request: Optional[Request] = None) -> bool:
+    """Whether the session cookie gets the Secure flag.
+
+    Derived from the actual request scheme first, and only then from
+    configuration. That ordering matters: put the app behind a TLS tunnel
+    (`cloudflared`, a reverse proxy) while .env still says `local`, and a purely
+    config-driven answer would ship the session cookie without Secure over a
+    connection the browser considers https. uvicorn's `--proxy-headers` makes
+    `request.url.scheme` reflect what the client actually used, so the transport
+    decides and the setting can only turn it *on*, never off.
+    """
+    if request is not None and request.url.scheme == "https":
+        return True
     raw = os.environ.get("ODOO_GENERATOR_COOKIE_SECURE")
     if raw is not None:
         return raw.lower() in ("1", "true", "yes")
@@ -156,7 +168,7 @@ async def _security_headers(request: Request, call_next):
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
-    if cookie_secure():
+    if cookie_secure(request):
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
 
@@ -232,7 +244,7 @@ async def api_auth(request: Request, response: Response) -> Dict[str, Any]:
     session = sessions.create()
     response.set_cookie(
         SESSION_COOKIE, session.id,
-        httponly=True, samesite="strict", secure=cookie_secure(), path="/",
+        httponly=True, samesite="strict", secure=cookie_secure(request), path="/",
     )
     return {"ok": True, "csrf_token": session.csrf_token, **session.public_dict()}
 

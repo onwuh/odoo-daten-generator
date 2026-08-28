@@ -498,6 +498,46 @@ def run():
         results.append(("Beta-Defaults: ODOO_GENERATOR_CONFIG_DEFAULTS=off schaltet ab", False, str(e)))
 
     # ------------------------------------------------------------------
+    # The Secure flag follows the transport, not the configuration. Behind a TLS
+    # tunnel with .env still saying "local", a config-only answer would ship the
+    # session cookie unprotected over a connection the browser calls https.
+    # ------------------------------------------------------------------
+    try:
+        from unittest.mock import Mock
+
+        def _req(scheme):
+            r = Mock()
+            r.url = Mock(scheme=scheme)
+            return r
+
+        with patch.dict(os.environ, {"ODOO_GENERATOR_PROFILE": "local"}):
+            os.environ.pop("ODOO_GENERATOR_COOKIE_SECURE", None)
+            assert web_app.cookie_secure(_req("https")) is True, "https ohne Secure"
+            assert web_app.cookie_secure(_req("http")) is False, "http mit Secure"
+            assert web_app.cookie_secure(None) is False
+        with patch.dict(os.environ, {"ODOO_GENERATOR_PROFILE": "server"}):
+            os.environ.pop("ODOO_GENERATOR_COOKIE_SECURE", None)
+            assert web_app.cookie_secure(_req("http")) is True, "server-Profil ignoriert"
+        # The setting may turn it on, never off.
+        with patch.dict(os.environ, {"ODOO_GENERATOR_COOKIE_SECURE": "false"}):
+            assert web_app.cookie_secure(_req("https")) is True, "Konfiguration hebelt https aus"
+        results.append(("Cookie: Secure folgt dem Transport, Konfiguration nur additiv", True, ""))
+    except Exception as e:
+        results.append(("Cookie: Secure folgt dem Transport, Konfiguration nur additiv", False, str(e)))
+
+    try:
+        # Real round-trip through the app, both schemes.
+        with TestClient(web_app.app, base_url="https://testserver") as client:
+            r = client.post("/api/auth", json={"access_code": "unit-test-code"}, headers=_HEADERS)
+            assert "secure" in r.headers.get("set-cookie", "").lower(), r.headers.get("set-cookie")
+        with TestClient(web_app.app, base_url="http://testserver") as client:
+            r = client.post("/api/auth", json={"access_code": "unit-test-code"}, headers=_HEADERS)
+            assert "secure" not in r.headers.get("set-cookie", "").lower(), r.headers.get("set-cookie")
+        results.append(("Cookie: https setzt Secure, http nicht (echter Durchlauf)", True, ""))
+    except Exception as e:
+        results.append(("Cookie: https setzt Secure, http nicht (echter Durchlauf)", False, str(e)))
+
+    # ------------------------------------------------------------------
     # Security headers: CSP with no inline scripts, plus the usual set
     # ------------------------------------------------------------------
     try:

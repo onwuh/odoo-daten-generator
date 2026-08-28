@@ -48,6 +48,33 @@ TLS, access code and inbound reachability — guards, queue, workers and the
 pipeline are identical, so moving from a laptop to the target host is a config
 change rather than a migration. See `.env.example` for every setting.
 
+### Letting colleagues in (Cloudflare quick tunnel)
+
+```bash
+docker compose --profile tunnel up -d --build
+docker compose logs tunnel | grep trycloudflare
+```
+
+The second command prints a random `https://<random>.trycloudflare.com` address —
+share that. Real TLS, no router changes, no Cloudflare account, and colleagues
+install nothing. The address changes every time the tunnel restarts.
+
+Without `--profile tunnel` nothing is exposed; `docker compose up` stays bound to
+loopback as before.
+
+Two things worth knowing before you send the link:
+
+- The address is public. Unguessable, but the shared access code is the only
+  thing in front of it — use a real one.
+- With beta defaults on, every colleague who leaves the credential fields blank
+  runs against *your* target with *your* Odoo key. Add
+  `ODOO_GENERATOR_CONFIG_DEFAULTS=off` to `.env` if each of them should bring
+  their own instance.
+
+Running uvicorn directly instead of Compose, add `--proxy-headers
+--forwarded-allow-ips '*'` so the app sees the real scheme and marks the session
+cookie `Secure`.
+
 ## What you supply
 
 Per session, in memory only, discarded on expiry (a janitor sweeps abandoned

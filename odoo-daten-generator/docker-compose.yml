@@ -42,5 +42,32 @@ services:
       retries: 3
       start_period: 20s
 
+  # Optional public HTTPS entry point for a colleague test. Behind a compose
+  # profile so `docker compose up` never exposes anything by accident:
+  #
+  #     docker compose --profile tunnel up -d
+  #     docker compose logs tunnel | grep trycloudflare
+  #
+  # The quick tunnel needs no Cloudflare account. It prints a random
+  # https://<random>.trycloudflare.com address that changes on every restart —
+  # unguessable, but public: the shared access code is the only thing in front
+  # of it, so use a real one.
+  #
+  # The generator serves plain http inside the compose network; cloudflared
+  # terminates TLS at the edge. The app's CMD already passes --proxy-headers, so
+  # request.url.scheme reads "https" and the session cookie gets its Secure flag
+  # without any further configuration.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    depends_on:
+      - generator
+    command: tunnel --no-autoupdate --url http://generator:8000
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
 volumes:
   generator-data:

@@ -65,6 +65,18 @@ itself is untouched: S9 replaces the caller, not `orchestrator.py`.
   already prevented the combination; via the API it produced a run where every
   module hit its Pattern-5 skip path.
 
+#### Added (sharing)
+- Optional `tunnel` service in `docker-compose.yml`, behind a compose profile:
+  `docker compose --profile tunnel up -d` publishes a Cloudflare quick tunnel and
+  logs a random `https://<random>.trycloudflare.com` address. Real TLS, no router
+  changes, no Cloudflare account, nothing for colleagues to install. Plain
+  `docker compose up` exposes nothing.
+- The session cookie's `Secure` flag now follows `request.url.scheme` first and
+  configuration second. Put the app behind a TLS tunnel while `.env` still says
+  `local` and a config-only answer would ship the cookie unprotected over a
+  connection the browser treats as https. Configuration can still turn it on,
+  never off.
+
 #### Fixed
 - A failed seed-cache write no longer aborts the run. The cache saves an LLM call
   on a repeat run and nothing else, so an unwritable directory now degrades to
