@@ -308,7 +308,16 @@ War: `QueueWriter` bog global `sys.stdout` um. Behoben (2026-08-03/04): `logging
 
 War: `create_batch` (`odoo_client.py`) wurde nur von `master_data._create_products` genutzt, alle anderen Stellen N+1. Behoben (2026-08-03/04): 18 `create_batch`-Call-Sites über `modules/master_data.py`, `crm.py`, `project.py`, `mrp.py`, `accounting.py`, `hr.py`, `recruiting.py` verteilt — inkl. `mrp.bom`-BOM-Lines via `bom_line_ids: [(0,0,...)]` inline im Create, und `accounting`-Vendor-Bills via einmaligem `action_post`-Batch statt `post_invoices` pro Bill. Getestet in `test_master_data_unit.py`, `test_crm_batch_unit.py`, `test_project_batch_unit.py`, `test_mrp_batch_unit.py`, `test_accounting_batch_unit.py`, `test_hr_batch_unit.py`, `test_recruiting_batch_unit.py` (je Pattern 5 + Call-Count-Assertion).
 
-### D4 🟡 `gui.py` aufteilen
+### D4 ✅ Erledigt (2026-08-28, als Teil von Sprint S9) — `gui.py` aufteilen
+
+**Anders gelöst als unten skizziert:** Statt `gui.py` in ein `gui/`-Paket zu zerlegen,
+wurde die Datei mit S9 **gelöscht**. Die wiederverwendbaren Teile liegen jetzt
+framework-frei neben den Modulen: `connect_service.py` (Screen-2-Checkliste, inkl.
+`feature_flags` und der Abfrage vorhandener Stammdaten) und `run_config.py`
+(Payload→`DemoCriteria`/`ModuleSelections`-Abbildung, `WANTED_MODULES`, `MODULE_LABELS`,
+Fortschritts-Reihenfolge, Pre-Flight-Zahlen). Der Widget-Zustand in Closures, den die
+Zielstruktur unten entwirren sollte, existiert damit nicht mehr. Ursprünglicher Entwurf zur
+Nachvollziehbarkeit:
 
 1136 Zeilen, vier Screens, Formular-Zustand in Closures. Ziel-Struktur:
 
@@ -333,7 +342,17 @@ Die dreifach duplizierte Slider+Prozentlabel-Konstruktion (`v_act_past`, `v_act_
 
 Parameter heißt in allen Modulsignaturen `gemini`, Provider ist primär Groq; `RunContext.gemini_model_name` ist ungenutztes Erbe. Umbenennen (`llm`, `llm_model_name`), rein mechanisch.
 
-### D7 🟡 Lauf-Markierung & Aufräum-Funktion
+### D7 ✅ Erledigt (2026-08-28, als Teil von Sprint S9) — Lauf-Markierung & Aufräum-Funktion
+
+Umgesetzt in `run_journal.py` als die unten selbst empfohlene, modellunabhängige Variante:
+`RunJournal` schreibt nach jedem Create ein `seeds/runs/<run_id>.json` mit allen
+`(model, id)`-Paaren (eager persistiert — der Sinn ist, einen Prozess zu überleben, der
+mitten in der Pipeline stirbt), `JournalingClient` ist eine dünne `OdooJson2Client`-Unterklasse,
+die `create`/`create_batch` überschreibt (🔒 bleibt unberührt), und `delete_run()` arbeitet
+das Journal rückwärts ab. **Prinzipbedingt Best-Effort:** Odoo verweigert das Löschen
+gebuchter Belege, ihrer Partner/Produkte und fakturierter Zeiterfassungen; `delete_run`
+storniert vorher, überspringt Wizard-Datensätze und meldet jede Verweigerung pro Modell.
+Ursprüngliches Konzept:
 
 Generierte Daten sind nicht von echten Daten unterscheidbar. Für Demo-Systeme ist "alles vom letzten Lauf löschen" die meistgewünschte Funktion.
 
@@ -556,6 +575,86 @@ Ein Nutzer kann damit ein neues Release ohne Programmierung bedienen: Datei kopi
 
 **Tests:** Unit — Mapping-Auflösung (extends-Kette, `null`-Drop, Reverse-Mapping bei `search_read`); Integration — ein Lauf durch den Adapter mit Identitäts-Mapping (19.2→19.2) muss byte-gleiche Payloads erzeugen wie heute (Regressionsschutz).
 
+### R9 ✅ Erledigt (2026-08-28, als Sprint S9) — Webserver-Deployment statt Desktop-Wizard
+
+**Hinzugefügt:** 2026-08-28, als eigenständiges Roadmap-Item nachgetragen — S9 wurde
+umgesetzt, bevor `IMPLEMENTIERUNGSPLAN.md` überhaupt eine Zeile dazu hatte (Nachtrag ist
+Teil des Sprints selbst).
+
+Ziel: Das Werkzeug läuft als Webanwendung, `gui.py` (CustomTkinter) entfällt vollständig —
+nicht parallel weitergepflegt. Ausgangspunkt war ein vom Nutzer gelieferter HTML-Entwurf
+(`demodatenkonsole.html`, 1716 Zeilen), der die API-Oberfläche festlegte; das Backend wurde
+daraus abgeleitet, nicht unabhängig entworfen.
+
+**Umfang (eine Auslieferung):** Kern-Extraktion (**D4**), FastAPI-App, geteilter Zugangscode,
+sitzungsgebundene Zugangsdaten (nur Arbeitsspeicher), Job-Queue mit Lauf-Journal (**D7**),
+SSE-Fortschritt, Guard A + Guard B, CSP/CSRF, lauf-gebundenes Logging, Cache-Pfad und
+-Atomarität, Abhängigkeits-Pinning, Docker-Compose mit `local`/`server`-Profil sowie die
+S8-Carry-overs (`purchase`/`stock` in `WANTED_MODULES`, `feature_flags` im Connect-Ergebnis).
+
+**Bewusst nicht enthalten:** Datensatz-Vorschau und -Bearbeitung samt Backend-Gerüst. Der
+erste Entwurf hatte einen Zwei-Phasen-Lauf (PLAN → prüfen → COMMIT) auf einem
+aufzeichnenden Client als Rückgrat. Die Peer-Review deckte auf, dass dessen Lesepolitik
+**still** fehlschlägt: ein Modul, das schreibt und dann zurückliest, bekommt `[]` — also
+genau den Pattern-5-Skip-Pfad, den jedes Modul implementiert. Nachgewiesene Kaskaden:
+`mrp.py:20-30 get_product_template_id` → `None` → alle Hauptprodukte übersprungen →
+`ctx.component_ids` leer → `purchase.py:142` überspringt das ganze Modul und
+`accounting.py:371` tauscht still seinen Produkt-Pool; `inventory.py:50-58` fehlt der
+`or candidate_ids`-Fallback, den `sale.py:59` hat; `documents.py` bezieht 100 % seiner
+Eingabe aus Rückleseoperationen. Die Reparatur hätte einen Write-Through-Lesecache plus
+Plan/Live-Aufspaltungen in 7–8 Modul-Dateien bedeutet.
+
+**Warum der Schnitt richtig war** (die Begründung wird erfahrungsgemäß erneut vorgeschlagen):
+Odoo ist selbst der bessere Datensatz-Browser; Ziel ist ohnehin eine Wegwerf-`demo-*`-DB,
+in der ein schlechter Lauf einen erneuten Lauf kostet; und seit S7/R8 entstehen die
+interessantesten Datensätze (Rechnungen, automatisch erzeugte Projekte/Aufgaben, gelieferte
+Mengen) **nativ in Odoo** — eine Vorschau hätte die einfache Hälfte gezeigt und für die
+schwierige nach Odoo verwiesen. Der Sicherheitsfall („schreibe ich in die falsche
+Datenbank?") ist vollständig durch Guard A plus die Pre-Flight-Zusammenfassung abgedeckt.
+
+**Zwei unabhängige URL-Guards, gleiches Regex, verschiedene Zwecke, beide Pflicht:**
+- **Guard A (falsches Ziel):** nur `^demo-[a-z0-9-]+\.odoo\.com$`. Das
+  API-Key-Rechtemodell ersetzt das **nicht** — ein Schlüssel trägt die Rechte seines
+  Erstellers, und Berater haben Schreibrechte auf Kundenproduktivsysteme.
+- **Guard B (SSRF):** der Server stellt die Anfrage selbst, aus dem Heimnetz des Betreibers.
+  Zusätzlich: nur https, keine eingebetteten Zugangsdaten, kein Port-Override, **keine
+  Weiterleitungen** (drei `session.post`-Aufrufstellen in `odoo_client.py` — `requests.Session`
+  hat **kein** `allow_redirects`-Attribut, ein Session-weites Setzen wäre ein stiller No-op)
+  und Redaktion des Fehlerkörpers an **beiden** Kopien (Log **und** `self.errors`, das die
+  Lauf-Zusammenfassungs-API speist).
+
+**LLM-/Kundendaten-Invariante — korrigiert:** die frühere Behauptung „genau ein Pfad schickt
+Inhalte der Zieldatenbank an ein LLM" war **falsch**. `crm.py:187 _fetch_partner_names` und
+`documents.py:129/141` reichen ebenfalls gelesene Werte in Prompts. Die Compliance-Absicht
+bleibt (diese Datensätze hat *derselbe Lauf* erzeugt, anders als die Branchen-Vorbefüllung,
+die vorhandene Kundendaten las), aber die korrekte Formulierung lautet: *„kein Wert aus
+einem Datensatz, den dieser Lauf nicht selbst erzeugt hat, erreicht einen Prompt."* Das
+braucht Provenienz-Verfolgung und ist **kein** billiger CI-Check —
+`determine_industry_from_company_name` wurde entfernt, die Invariante selbst bleibt offen.
+
+**Live gefundene Punkte (nicht vom Plan vorhergesehen):**
+1. Groq hat `llama-3.3-70b-versatile` außer Dienst gestellt — der Repo-Default liefert 404.
+   Neuer Default `qwen/qwen3.8-27b` (`openai/gpt-oss-120b` bricht die JSON-Antworten ab).
+2. Odoo SaaS stellt manchen Fehlermeldungen unsichtbare Zeichen voran (Zero-Width-Joiner,
+   Variation Selectors, Tag-Zeichen — eine Tracing-Wasserzeichnung), die die eigentliche
+   Meldung im Log unlesbar machen. `odoo_client._printable` filtert sie.
+3. Odoos JSON/2-Fehlerobjekt ist `{"name","message","arguments","timestamp","context","debug"}` —
+   `debug` enthält einen vollständigen serverseitigen Traceback mit Dateipfaden. Die
+   Redaktion übernimmt ausschließlich `message`.
+4. `call_method` läuft eine Payload-Format-Fallback-Kette ab, sodass die schließlich
+   geworfene Ausnahme die **letzte, uninformativste** ist („422 Client Error") statt der
+   ersten („You can not delete a confirmed sales order"). `run_journal.delete_run` liest
+   deshalb den ersten neu aufgezeichneten Fehler aus `client.errors`.
+5. Das D7-Aufräumen ist prinzipbedingt Best-Effort: Odoo verweigert das Löschen gebuchter
+   Belege, ihrer Partner und Produkte, bereits fakturierter Zeiterfassungen und alles
+   Weitere unter seinem Prüfpfad. `delete_run` storniert vorher (`action_cancel`/
+   `button_draft`+`button_cancel`), überspringt Wizard-Datensätze und meldet jede
+   Verweigerung pro Modell, statt abzubrechen.
+
+**Offen / bewusst außerhalb:** Provenienz-Invariante (siehe oben), Odoo-Modul-Paketierung,
+Mehrbenutzer-Konten/SSO (vetoiert), unternehmensseitiger LLM-Schlüssel (nur Naht vorgesehen,
+nichts gebaut), S5 Tier 2.
+
 ### R6 🟡 Multi-Country Customer/Supplier Generation
 
 **Hinzugefügt:** 2026-08-03, während S3-Review (Architekten-Feedback zu A1).
@@ -729,6 +828,7 @@ Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-
 | **S6 — PDF (R1/P1+P2)** ✅ | `pdf_factory`, `modules/documents`, GUI-Optionen, `RunContext.applicant_ids` (Voraussetzungs-Fix in `recruiting.py`) (2026-08-04) | Erster Roadmap-Ausbau, größter Demo-Effekt — siehe CLAUDE.md „Current Sprint" für Peer-Review-Ergebnis und den live gefundenen `ir.attachment`-Feldnamen-Bug |
 | **S7 — Prozessketten-Kontinuität (R8)** ✅ | Universelles Service-Produkt-Tagging, billable-lines-first Zeiterfassung, Wizard-basierte Fakturierung, `orchestrator.py`-Reorder 🔒 (2026-08-05) | Umnummeriert von "S7 = Purchase+Inventory" — Prozessketten-Kontinuität ist Voraussetzung, nicht parallel; siehe R8-Statusblock oben für Details, Peer-Review-Verlauf (2× fremder Opus-Agent, Plan+Repo-Kontext) und den Hero→Universal-Kurswechsel |
 | **S8 — Purchase + Inventory (R2, R3)** ✅ | `modules/purchase.py`, `modules/inventory.py` (neu), `odoo_actions.py`-Erweiterung, `orchestrator.py`-Anhang 🔒 (2026-08-28) | War ursprünglich S7; siehe R2/R3-Statusblöcke oben für Details, zwei Peer-Review-Durchläufe (Plan-Agent + fremder Cold-Review-Agent, gleiches Verfahren wie S5-S7) und live gefundene Bugs (`ctx.company_ids`-Namenskollision, `action_create_invoice`s fehlendes `invoice_date`) |
+| **S9 — Webserver-Deployment (R9)** ✅ | `web/` (FastAPI, Guards, Session, Queue, SSE), `connect_service.py`/`run_config.py` (D4), `run_journal.py` (D7), `static/` (index/app.js/app.css), Docker-Compose, `gui.py` gelöscht (2026-08-28) | Ersetzt den Aufrufer, nicht die Pipeline — `orchestrator.py` bleibt unberührt (kein `mode`-Parameter, 🔒 nicht angefasst). Siehe R9-Statusblock oben für den gestrichenen Vorschau-Umfang, die korrigierte LLM-Invariante und die fünf live gefundenen Punkte |
 
 **Pro Arbeitspaket verbindlich** (aus CLAUDE.md Testing Design Patterns):
 - Empty-Pool-Guards (P1) für jede neue `random.choice/sample`-Stelle

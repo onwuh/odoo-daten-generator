@@ -1,0 +1,8 @@
+.git
+.venv
+__pycache__
+*.pyc
+config.ini
+tests/test_config.ini
+seeds/cache
+seeds/runs

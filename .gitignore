@@ -7,3 +7,6 @@ seeds/cache/
 config.ini
 test_config.ini
 .claude/scheduled_tasks.lock
+**/seeds/runs/
+.env
+**/seeds/cache/

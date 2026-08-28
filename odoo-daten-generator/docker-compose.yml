@@ -1,0 +1,40 @@
+# Local-first and deployment-target-agnostic: the same compose file runs on the
+# operator's Mac and on the Raspberry Pi 5. Only .env differs between them.
+services:
+  generator:
+    build: .
+    image: odoo-demodaten-generator:latest
+    restart: unless-stopped
+    env_file: .env
+    # Local default binds to loopback only, so a laptop instance is not on the
+    # network at all. The server profile sets ODOO_GENERATOR_BIND=0.0.0.0 and
+    # puts a TLS-terminating reverse proxy in front.
+    ports:
+      - "${ODOO_GENERATOR_BIND:-127.0.0.1}:${ODOO_GENERATOR_PORT:-8000}:8000"
+    volumes:
+      # The only writable path. Holds the LLM seed cache and the D7 run journals.
+      - generator-data:/data
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # A runaway run must not starve the operator's other private services on the
+    # same box. Work is I/O-bound, so these are generous for the expected load.
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1g
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  generator-data:

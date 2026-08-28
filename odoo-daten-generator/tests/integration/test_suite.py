@@ -18,6 +18,7 @@ if _ROOT not in sys.path:
 
 from odoo_client import OdooJson2Client
 import odoo_actions
+import run_config
 from logging_setup import configure_logging
 
 configure_logging()
@@ -36,6 +37,7 @@ from tests.integration import (
     test_purchase,
     test_inventory,
     test_documents,
+    test_run_journal,
 )
 
 
@@ -69,6 +71,7 @@ _MODULES = [
     ("purchase",    test_purchase.run),
     ("inventory",   test_inventory.run),
     ("documents",   test_documents.run),
+    ("run_journal",  test_run_journal.run),
 ]
 
 
@@ -155,9 +158,11 @@ def main():
     client = OdooJson2Client(url, db, api_key)
     ctx = TestContext()
 
-    _WANTED = ["crm", "sale", "account", "hr", "project", "hr_timesheet", "mrp", "hr_recruitment",
-               "purchase", "stock"]
-    ctx.installed_modules = odoo_actions.get_installed_modules(client, _WANTED)
+    # Single source of truth, shared with the web layer: a module missing from
+    # this list never enters ctx.installed_modules and is skipped forever. The
+    # test harness keeping its own copy is how purchase/stock stayed unreachable
+    # from real runs through all of S8.
+    ctx.installed_modules = odoo_actions.get_installed_modules(client, run_config.WANTED_MODULES)
     print(f"[modules] Installed: {', '.join(sorted(ctx.installed_modules)) or '–'}")
 
     ctx.feature_flags = odoo_actions.get_enabled_features(client, ctx.installed_modules)

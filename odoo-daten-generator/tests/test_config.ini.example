@@ -1,4 +1,4 @@
 [odoo]
-url     = https://your-test-instance.odoo.com/
+url     = https://demo-your-test-instance.odoo.com/
 db      = your-test-db
 api_key = your_test_api_key

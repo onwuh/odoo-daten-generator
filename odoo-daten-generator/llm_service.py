@@ -17,7 +17,9 @@ Key features:
 import logging
 import hashlib
 import json
+import os
 import re
+import tempfile
 import time
 import concurrent.futures
 from pathlib import Path
@@ -25,7 +27,12 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-_CACHE_DIR = Path(__file__).parent / "seeds" / "cache"
+# Seed cache location. Env-overridable because the container profile runs with a
+# read-only root filesystem: the package-relative default is unwritable there and
+# every run would die on its first cache write. ODOO_GENERATOR_CACHE_DIR points at
+# the mounted volume in that profile.
+_CACHE_DIR = Path(os.environ.get("ODOO_GENERATOR_CACHE_DIR")
+                  or (Path(__file__).parent / "seeds" / "cache"))
 _PROMPT_VERSION = "v3"  # bump when prompt wording changes to bust stale cache entries
 
 
@@ -164,9 +171,27 @@ class LLMService:
         return None
 
     def _cache_save(self, key: str, data: Any) -> None:
+        """Write the cache entry atomically.
+
+        Concurrent runs share one cache directory and can build the same slug at
+        the same time. A plain open("w") truncates first, so a second writer can
+        leave a reader with a half-written (or empty) file that then fails to
+        parse forever. Write to a temp file in the same directory, then
+        os.replace() — atomic on POSIX and Windows alike.
+        """
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        with (_CACHE_DIR / f"{key}.json").open("w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        target = _CACHE_DIR / f"{key}.json"
+        fd, tmp_path = tempfile.mkstemp(dir=str(_CACHE_DIR), prefix=f".{key}.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, target)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def _cached_llm_call(self, cache_key: str, build_fn) -> Any:
         """Check cache, else call build_fn() and save on a truthy result.
@@ -186,20 +211,22 @@ class LLMService:
     # Public API
     # ------------------------------------------------------------------
 
-    def determine_industry_from_company_name(self, company_name: str) -> Optional[str]:
-        prompt = f"""
-Based on the company name "{company_name}", determine the most likely industry/sector.
-Return ONLY a single word or short phrase (2-3 words max) describing the industry in German.
-Examples: "IT", "Fertigung", "Handel", "Dienstleistung", "Medizin", "Bildung", "IT-Dienstleistung"
-Return ONLY the industry name, no explanation, no JSON, no quotes, just the text.
-"""
-        logger.info(f"Frage LLM ({self.provider}/{self.model_name}) nach Branche für '{company_name}'...")
-        text = self._call(prompt, timeout=30)
-        if not text:
-            return None
-        industry = text.strip().strip('"').strip("'")
-        logger.info(f"✅ Erkannte Branche: {industry}")
-        return industry
+    # NOTE: determine_industry_from_company_name() was removed in S9. It read the
+    # company name out of the *target* database and embedded it verbatim in a
+    # prompt — the only path that sent pre-existing customer content to a third
+    # party. The industry field remains, user-supplied and freely editable, and
+    # the convenience pre-fill is not worth reopening that path.
+    #
+    # The remaining prompts that carry Odoo-read values (crm.py's partner names,
+    # documents.py's applicant names and skills) read only records *this run just
+    # created*. The compliance statement is therefore "no value read from a record
+    # not created by this run reaches a prompt" — narrower than the invariant
+    # first claimed, and enforceable only with provenance tracking, which is
+    # deliberately out of S9's scope.
+
+    def ping(self, timeout: int = 30) -> bool:
+        """Cheap reachability check for the connect screen (D8)."""
+        return bool(self._call("Antworte nur mit dem Wort: OK", timeout=timeout))
 
     def fetch_creative_atoms(self, criteria: Dict[str, Any], language: str = "German") -> Optional[Dict[str, Any]]:
         """Generate ONLY atomic product-name/description tokens for master data.

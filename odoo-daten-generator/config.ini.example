@@ -1,13 +1,14 @@
 [odoo]
-url = https://your-instance.odoo.com
+url = https://demo-your-instance.odoo.com
 db = your-database-name
-username = admin@example.com
 api_key = YOUR_ODOO_API_KEY_HERE
 
 [llm]
-# Groq API key (primary LLM — get one at console.groq.com)
+# Groq API key (primary LLM — get one at console.groq.com).
+# NOTE: Groq retires models without notice — llama-3.3-70b-versatile 404s as of
+# 2026-08-28. Check https://console.groq.com/docs/models if a run fails on connect.
 api_key = gsk_YOUR_GROQ_API_KEY_HERE
-model = llama-3.3-70b-versatile
+model = qwen/qwen3.8-27b
 
 [gemini]
 # Google Gemini API key (fallback LLM — only needed if Groq is unavailable)
