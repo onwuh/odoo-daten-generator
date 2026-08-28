@@ -18,10 +18,17 @@ pip install -r odoo-daten-generator/requirements.txt
 ```
 
 ```bash
-cd odoo-daten-generator && ODOO_GENERATOR_ACCESS_CODE=choose-a-code python3 -m uvicorn web.app:app --host 127.0.0.1 --port 8000
+cd odoo-daten-generator && ODOO_GENERATOR_ACCESS_CODE=choose-a-code python3 -m uvicorn web.app:app --host localhost --port 8000
 ```
 
-Then open <http://127.0.0.1:8000>. Without `ODOO_GENERATOR_ACCESS_CODE` every
+Then open <http://localhost:8000>.
+
+`--host localhost` rather than `--host 127.0.0.1`: on macOS `localhost` resolves
+to both `::1` and `127.0.0.1`, and Safari tries IPv6 first. Bound to IPv4 only,
+the browser gets a refused connection and gives up while `curl` silently falls
+back to IPv4 — so the server looks healthy from the shell and dead in the
+browser. `localhost` binds both loopback families and stays off the network.
+Without `ODOO_GENERATOR_ACCESS_CODE` every
 login is refused — the app never falls open.
 
 ## Running it in Docker

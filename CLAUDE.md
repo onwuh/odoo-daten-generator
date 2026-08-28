@@ -7,8 +7,12 @@ This file provides guidance to Claude Code when working with this repository.
 Web application since S9 (`gui.py` is deleted, not kept alongside):
 
 ```bash
-cd odoo-daten-generator && ODOO_GENERATOR_ACCESS_CODE=choose-a-code python3 -m uvicorn web.app:app --host 127.0.0.1 --port 8000
+cd odoo-daten-generator && ODOO_GENERATOR_ACCESS_CODE=choose-a-code python3 -m uvicorn web.app:app --host localhost --port 8000
 ```
+
+`--host localhost`, not `--host 127.0.0.1`: `localhost` resolves to both `::1` and
+`127.0.0.1`, and browsers try IPv6 first. An IPv4-only bind therefore looks
+healthy to `curl` (which silently falls back) and dead to Safari.
 
 Or in Docker (`cp .env.example .env` first, fill in the access code):
 
