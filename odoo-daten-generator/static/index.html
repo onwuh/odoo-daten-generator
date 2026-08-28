@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demodaten-Konsole</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="app-shell">
+  <nav class="rail">
+    <div class="brand">
+      <div class="brand-mark">O</div>
+      <div class="brand-text">
+        <strong>Demodaten-Konsole</strong>
+        <span>Odoo Demodaten-Generator</span>
+      </div>
+    </div>
+
+    <button class="nav-item active" data-view="connect"><span class="num">01</span> Verbindung</button>
+    <button class="nav-item" data-view="config"><span class="num">02</span> Konfiguration</button>
+    <button class="nav-item" data-view="preflight"><span class="num">03</span> Prüfen</button>
+    <button class="nav-item" data-view="run"><span class="num">04</span> Generierung</button>
+
+    <div class="rail-spacer"></div>
+    <div class="rail-foot">
+      <div class="foot-row"><span class="dot" id="foot-odoo-dot"></span> <span id="foot-odoo-text">Odoo: nicht verbunden</span></div>
+      <div class="foot-row"><span class="dot" id="foot-llm-dot"></span> <span id="foot-llm-text">LLM: nicht verbunden</span></div>
+    </div>
+  </nav>
+
+  <div class="main">
+    <div class="status-strip">
+      <span class="chip" id="chip-company"><span class="dot"></span> <span id="chip-company-text">noch nicht verbunden</span></span>
+      <span class="chip is-hidden" id="chip-version"></span>
+      <span class="chip is-hidden" id="chip-lang"></span>
+      <span class="fill"></span>
+      <span class="server-tag" id="server-tag">kein Ziel</span>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- VIEW 1 — VERBINDUNG                                          -->
+    <!-- ============================================================ -->
+    <section class="view active" id="view-connect">
+      <div class="view-scroll">
+        <div class="view-head">
+          <h1>Verbindung</h1>
+          <p>Zugangsdaten für die Ziel-Odoo-Instanz und den LLM-Anbieter. „Verbinden“ prüft Erreichbarkeit,
+             installierte Module, Odoo-Version und vorhandene Stammdaten — jederzeit erneut auslösbar.</p>
+        </div>
+
+        <div class="panel" id="panel-login">
+          <h2>Zugang</h2>
+          <div class="field-row">
+            <label for="f-access">Zugangscode</label>
+            <input id="f-access" type="password" autocomplete="off">
+          </div>
+          <div class="btn-row">
+            <button class="btn" id="btn-login">Anmelden</button>
+            <span id="login-hint" class="inline-hint"></span>
+          </div>
+        </div>
+
+        <div class="note settled" id="note-security">
+          <div><b>Sicherheitsregeln dieser Instanz:</b>
+            <ul class="note-list">
+              <li>Nur <code class="f">demo-*.odoo.com</code> als Ziel — der Server prüft das unabhängig vom Browser.</li>
+              <li>Zugangsdaten bleiben ausschließlich im Arbeitsspeicher der Sitzung: keine Datei, keine Datenbank, kein Log.</li>
+              <li>An den LLM-Anbieter geht nur, was dieser Lauf selbst erfindet — mit einer
+                Ausnahme: werden vorhandene Daten einbezogen, enthält der Chatter-Prompt den
+                Namen des Kunden und des zuständigen Benutzers. Dafür wird in Schritt&nbsp;02
+                ausdrücklich gefragt.</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="panel is-hidden" id="panel-connect">
+          <h2>Odoo-Verbindung</h2>
+          <div class="field-row">
+            <label for="f-url">Odoo URL</label>
+            <div class="field-col">
+              <input id="f-url" type="url" placeholder="https://demo-kunde.odoo.com" autocomplete="off">
+              <div class="field-hint">Nur <code class="f">demo-*.odoo.com</code> — Schutz vor versehentlichem Schreiben in ein Produktivsystem. Die Prüfung hier ist nur schnelles Feedback; der Server validiert unabhängig erneut.</div>
+              <div class="field-error" id="f-url-error">Diese URL ist keine demo-*.odoo.com-Instanz. Aus Sicherheitsgründen blockiert.</div>
+            </div>
+          </div>
+          <div class="field-row"><label for="f-db">Datenbank</label><input id="f-db" type="text" autocomplete="off"></div>
+          <div class="field-row"><label for="f-key">Odoo API-Schlüssel</label><input id="f-key" type="password" autocomplete="off"></div>
+
+          <div class="divider-label">LLM-Verbindung</div>
+          <div class="field-row"><label for="f-llmkey">LLM API-Schlüssel</label><input id="f-llmkey" type="password" autocomplete="off"></div>
+          <div class="field-row"><label for="f-llmmodel">LLM Modell</label><input id="f-llmmodel" type="text" value="qwen/qwen3.8-27b" autocomplete="off"></div>
+
+          <div class="note is-hidden" id="defaults-note"></div>
+
+          <div class="btn-row">
+            <button class="btn" id="btn-connect">Verbinden →</button>
+            <span id="connect-hint" class="inline-hint"></span>
+          </div>
+        </div>
+
+        <div class="panel is-hidden" id="panel-checklist">
+          <h2>Umgebungsstatus</h2>
+          <div class="checklist" id="checklist"></div>
+          <div class="mt-14">
+            <button class="btn" id="btn-to-config" data-goto="config">Weiter zur Konfiguration →</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- VIEW 2 — KONFIGURATION                                       -->
+    <!-- ============================================================ -->
+    <section class="view" id="view-config">
+      <div class="view-scroll">
+        <div class="view-head">
+          <h1>Konfiguration</h1>
+          <p>Umfang und Modulauswahl für den Lauf. Nicht installierte Module bleiben sichtbar, aber deaktiviert.</p>
+        </div>
+
+        <div class="panel">
+          <h2>Modus</h2>
+          <div class="segmented" id="mode-segmented">
+            <button type="button" class="active" data-mode="master">Nur Stammdaten</button>
+            <button type="button" data-mode="both">Stammdaten + Bewegungsdaten</button>
+          </div>
+
+          <div class="mt-14">
+            <label class="check-line"><input type="checkbox" id="chk-use-existing"> Vorhandene Daten einbeziehen <span class="sub" id="existing-sub">(noch nicht geprüft)</span></label>
+
+            <div class="note consent is-hidden" id="consent-block">
+              <div>
+                <b>Damit werden Kundendaten an den LLM-Anbieter übermittelt.</b>
+                <p id="consent-detail"></p>
+                <div class="btn-row">
+                  <button type="button" class="btn" id="btn-consent-yes">Zustimmen</button>
+                  <button type="button" class="btn ghost" id="btn-consent-no">Ablehnen</button>
+                  <span class="inline-hint" id="consent-state"></span>
+                </div>
+              </div>
+            </div>
+
+            <label class="check-line"><input type="checkbox" id="chk-skip-master"> Keine neuen Stammdaten anlegen <span class="sub">(nur vorhandene verwenden)</span></label>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Branche</h2>
+          <input id="f-industry" type="text" value="IT-Dienstleistung" class="wide-input" autocomplete="off">
+          <div class="field-hint">Frei wählbar. Wird nicht aus der Zieldatenbank abgeleitet.</div>
+        </div>
+
+        <div id="master-data-block">
+          <div class="panel">
+            <h2>Kundendaten</h2>
+            <div class="stepper-grid" id="stepper-kunden"></div>
+          </div>
+          <div class="panel">
+            <h2>Produkte</h2>
+            <div class="stepper-grid" id="stepper-produkte"></div>
+          </div>
+        </div>
+
+        <div id="module-section" class="is-hidden">
+          <div class="view-head mt-6">
+            <h2 class="section-caption">Module (nur bei Bewegungsdaten)</h2>
+          </div>
+          <div class="module-grid" id="module-grid"></div>
+        </div>
+      </div>
+
+      <div class="config-footer">
+        <span class="summary" id="config-summary">0 Module aktiv · Modus: Nur Stammdaten</span>
+        <button class="btn" id="btn-to-preflight">Prüfen →</button>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- VIEW 3 — PRÜFEN (Pre-Flight)                                 -->
+    <!-- ============================================================ -->
+    <section class="view" id="view-preflight">
+      <div class="view-scroll">
+        <div class="view-head">
+          <h1>Prüfen &amp; Starten</h1>
+          <p>Letzte Kontrolle vor dem Schreiben: Ziel, aktive Module und die Anzahl der Datensätze, die dieser Lauf
+             anlegt. Danach schreibt der Lauf direkt nach Odoo.</p>
+        </div>
+
+        <div class="panel">
+          <h2>Ziel</h2>
+          <div class="kv-grid" id="preflight-target"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Aktive Module</h2>
+          <div class="chip-row" id="preflight-modules"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Datensätze dieses Laufs</h2>
+          <div class="kv-grid" id="preflight-records"></div>
+          <div class="note mt-14">
+            <div><b>Odoo legt zusätzlich selbst an:</b> je bestätigtem Dienstleistungsauftrag ein Projekt mit Aufgabe,
+              Rechnungen über den Rechnungsassistenten, Eingangsrechnungen aus bestätigten Bestellungen und die
+              Lagerbuchungen der Bestandskorrektur. Diese Datensätze sind oben nicht mitgezählt.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="config-footer preflight-footer">
+        <div class="preflight">
+          <span class="preflight-item"><span class="k">Ziel</span><span class="v" id="preflight-host">–</span></span>
+          <span class="preflight-item"><span class="k">Module</span><span class="v" id="preflight-modcount">–</span></span>
+          <span class="preflight-item"><span class="k">Datensätze gesamt</span><span class="v" id="preflight-total">–</span></span>
+        </div>
+        <button class="btn ghost" data-goto="config">← Anpassen</button>
+        <button class="btn" id="btn-start-run">Lauf starten →</button>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- VIEW 4 — GENERIERUNG                                         -->
+    <!-- ============================================================ -->
+    <section class="view" id="view-run">
+      <div class="view-scroll">
+        <div class="view-head">
+          <h1>Generierung</h1>
+          <p>Schreibt die Daten nach Odoo. Fortschritt je Modul links, Live-Protokoll rechts. Ein Lauf dauert
+             typischerweise 2–5 Minuten; das Fenster darf offen bleiben oder neu geladen werden.</p>
+        </div>
+
+        <div class="gen-layout">
+          <div class="panel m-0">
+            <h2>Module</h2>
+            <div id="progress-list"></div>
+          </div>
+
+          <div>
+            <div class="console" id="console"></div>
+          </div>
+        </div>
+
+        <div class="summary-bar">
+          <div class="stat"><div class="k">Status</div><div class="v" id="stat-status">–</div></div>
+          <div class="stat"><div class="k">LLM-Anfragen</div><div class="v" id="stat-calls">0</div></div>
+          <div class="stat"><div class="k">Token</div><div class="v" id="stat-tokens">0</div></div>
+          <div class="stat"><div class="k">API-Fehler</div><div class="v" id="stat-errors">0</div></div>
+          <div class="stat"><div class="k">Erstellte Datensätze</div><div class="v" id="stat-records">0</div></div>
+        </div>
+
+        <div class="panel is-hidden" id="panel-run-errors">
+          <h2>API-Fehler</h2>
+          <div id="run-errors"></div>
+        </div>
+
+        <div class="gen-actions">
+          <button class="btn ghost" data-goto="config">← Konfiguration anpassen</button>
+          <button class="btn ghost is-hidden" id="btn-cleanup">Diesen Lauf löschen</button>
+          <button class="btn" data-goto="connect">Neu starten</button>
+        </div>
+        <div class="inline-hint" id="cleanup-hint"></div>
+      </div>
+    </section>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

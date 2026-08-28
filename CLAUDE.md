@@ -4,9 +4,16 @@ This file provides guidance to Claude Code when working with this repository.
 
 ## Running the tool
 
+Web application since S9 (`gui.py` is deleted, not kept alongside):
+
 ```bash
-cd odoo-daten-generator
-python3 gui.py
+cd odoo-daten-generator && ODOO_GENERATOR_ACCESS_CODE=choose-a-code python3 -m uvicorn web.app:app --host 127.0.0.1 --port 8000
+```
+
+Or in Docker (`cp .env.example .env` first, fill in the access code):
+
+```bash
+cd odoo-daten-generator && docker compose up -d --build
 ```
 
 ## Setup
@@ -30,13 +37,22 @@ API keys via environment variables:
 ## Architecture
 
 Generates AI-powered demo data and writes it to Odoo via JSON 2 REST API.
-Single entry point: `gui.py` (CustomTkinter wizard, 4 screens).
+Single entry point: `web/app.py` (FastAPI; the browser UI in `static/` is a
+4-view console — Verbindung, Konfiguration, Prüfen, Generierung).
 
 **Core Modules** (all inside `odoo-daten-generator/`):
 
 | File | Responsibility |
 |---|---|
-| `gui.py` | 4-screen wizard, background worker thread, log queue |
+| `web/app.py` | FastAPI routes, CSP/CSRF, static frontend, SSE endpoint |
+| `web/security.py` | Guard A (demo-host allowlist) + Guard B (SSRF) |
+| `web/session.py` | Shared-access-code auth; credentials memory-only, per session |
+| `web/jobs.py` | Worker pool, admission control, run records, progress callbacks |
+| `web/sse.py` | Per-run append-only event stream (log/module/status/end) |
+| `connect_service.py` | Connection probe checklist (D4, ex-`gui.py` screen 2) |
+| `run_config.py` | Request payload → `DemoCriteria`/`ModuleSelections`; `WANTED_MODULES` |
+| `run_journal.py` | D7 run markers (`seeds/runs/<run_id>.json`) + best-effort cleanup |
+| `static/` | `index.html` / `app.js` / `app.css` — split apart because CSP forbids inline |
 | `config.py` | Dataclasses: DemoCriteria, ModuleSelections, RunContext |
 | `llm_service.py` | LLMService: Groq (primary) + Gemini (fallback), seed caching |
 | `odoo_client.py` | Low-level HTTP wrapper, JSON2 API, payload-format fallbacks |
@@ -117,6 +133,13 @@ tasks claim the timesheet budget first).
 - `account.move.line.sale_line_ids` (m2m → `sale.order.line`) is **readonly** — cannot be set on `account.move`/`account.move.line` `create()`. The writable reverse side is `sale.order.line.invoice_lines` (m2m → `account.move.line`) — but as of Sprint S7/R8, invoicing goes through the `sale.advance.payment.inv` wizard instead, which sets this link server-side natively; no manual write needed either way.
 - Invoicing a `sale.order` the way Odoo's own "Create Invoice" button does: create a `sale.advance.payment.inv` record (`advance_payment_method='delivered'`, `sale_order_ids=[(6,0,[order_id])]`), then `call_method('sale.advance.payment.inv', 'create_invoices', ids=[wizard_id])` — this public method (no leading underscore) is callable via JSON2 even though it wraps the private `sale.order._create_invoices()`. Read back the created invoice(s) via `sale.order.invoice_ids` (m2m → `account.move`) afterward — the method's own return value is an `ir.actions.act_window` dict, not usable directly. A single order with nothing currently invoiceable (e.g. a delivery-policy line with `qty_delivered=0`) makes the call raise for that order; call the wizard **per order**, not once for a whole batch, so one such order doesn't drag every other invoiceable order in the batch into a fallback with it — live-confirmed a multi-order batch does NOT raise as a whole when only some orders are empty, but a solo empty-order call does.
 - `RunContext.company_ids` (`config.py`) is misleadingly named: despite "company", it holds **`res.partner`** IDs — customer/company contacts `master_data.py` creates via `client.create_batch('res.partner', ...)` — **never** a real `res.company` ID. `sale.py` already uses `ctx.company_ids[i]` correctly as a `sale.order.partner_id`; `mrp.py:282,334` does not (it passes `ctx.company_ids[0]` as `company_id` to `mrp.workcenter`/`get_manufacturing_picking_type_id`, silently degraded behind broad try/except — likely a live, pre-existing bug, not fixed as of S8). Wherever an actual `res.company` ID is needed (e.g. `stock.warehouse`/`purchase.order`/`stock.quant` `company_id`), use `odoo_actions.get_main_company_id(client)` instead (added in S8) — never `ctx.company_ids[0]`.
+- Odoo's JSON/2 **error object** is `{"name", "message", "arguments", "timestamp", "context", "debug"}` — `debug` carries a full server-side traceback with `/home/odoo/src/...` paths. `odoo_client._redact_error_body` takes only `message`; nothing else crosses into the log or `self.errors`.
+- Odoo SaaS prefixes some error messages with runs of **invisible characters** (zero-width joiners, variation selectors `U+FE00–FE0F`, tag characters `U+E0000–E007F` — a tracing watermark). They make the real message unreadable in a log; `odoo_client._printable` strips them (category `Cf` alone is not enough — variation selectors are `Mn`).
+- `requests.Session` has **no** `allow_redirects` attribute (`__attrs__` carries `max_redirects` only), so a session-level assignment is a silent no-op — it must be a per-request kwarg at every `session.post` call site. Also note `raise_for_status()` ignores 3xx: an unfollowed redirect falls through to `response.json()` as an opaque JSONDecodeError unless explicitly rejected (`odoo_client._reject_redirect`).
+- `client.call_method` walks a payload-format fallback chain, so the exception that finally propagates is the **last, least informative** attempt (`422 Client Error`), not the first (`You can not delete a confirmed sales order`). When the real reason matters, read it out of `client.errors` from a mark taken before the call — see `run_journal._first_new_error`.
+- Odoo refuses `unlink` on a lot of what a full run creates: posted `account.move` and every `res.partner`/`product.product` it references ("restricted audit trail"), confirmed `sale.order` ("must first cancel it"), invoiced `account.analytic.line`, `stock.quant` (no delete group for the API user), `project.task.type` still referenced by tasks. Cancel first where Odoo names it (`sale.order.action_cancel`, `account.move.button_draft`+`button_cancel`); expect the rest to stay.
+- **Groq retires models without notice.** `llama-3.3-70b-versatile` 404s as of 2026-08-28; the repo default is now `qwen/qwen3.8-27b`. `openai/gpt-oss-120b` pings fine but truncates the JSON responses `fetch_name_suggestions` needs, so a working ping is not proof a model is usable.
+- The live SaaS instance **rate-limits with HTTP 429**: sustained write rate is about **1 req/s**, with a token bucket absorbing a burst on top (~150 requests in ~15s measured 2026-08-28), answered by a bare HTML 429 with no `Retry-After`. This is *the* reason the codebase batches everywhere — `create_batch`, D3, test Pattern 8. **Never answer a 429 by retrying inside a loop that should have been one batched call.** `odoo_client._send` adds a bounded exponential backoff (5 attempts, `Retry-After` honoured when sent) as the safety net for the calls batching cannot remove; without it every module after the ceiling fails with `429 Client Error` in a way that reads like a code defect. Space heavy runs out before blaming the code.
 - `purchase.order.action_create_invoice` creates the vendor bill with `invoice_date` unset (`False`) — it's the vendor's own external date, Odoo sets no default. `account.move.action_post` then raises `UserError: "Das Datum der Rechnung/Erstattung ist erforderlich..."` (invoice date required). Write `invoice_date` (e.g. `datetime.date.today().isoformat()`) on the bill before posting — the manual `account.move` rebuild fallback already sets it, only the `action_create_invoice` path needs the extra write.
 
 ## Debugging
@@ -315,8 +338,74 @@ denselben fehlerhaften `ctx.company_ids[0]`-als-`res.company`-ID-Zugriff für
 try/except maskiert (kein Crash, nur eine leise Log-Zeile), potenziell seit Einführung
 bereits fehlerhaft. Nicht Teil des S8-Scopes; als möglicher Folge-Task vorgemerkt.
 
-Nächster Sprint: S9 — HTML-Frontend (löst `gui.py`/CustomTkinter ab), siehe §4/§5 Roadmap in
-`IMPLEMENTIERUNGSPLAN.md`.
+Sprint S9 (2026-08-28) — **abgeschlossen**, Webserver-Deployment (neues Roadmap-Item **R9**,
+zusammen mit **D4** und **D7**). `gui.py` ist gelöscht, nicht parallel weitergepflegt. Der
+Ausgangspunkt war ein vom Nutzer geliefertes HTML-Mockup (`demodatenkonsole.html`), das die
+API-Oberfläche festlegte; das Backend wurde daraus abgeleitet. **S9 ersetzt den Aufrufer,
+nicht die Pipeline** — `orchestrator.py` wurde nicht angefasst (kein `mode`-Parameter, 🔒
+unberührt), weil `orchestrator.run()` seit D1 bereits GUI-frei ist und
+`ModuleSelections`/`RunContext` reine Dataclasses ohne GUI-Kopplung sind.
+
+Neu: `web/` (FastAPI-App, Guards A+B, Session-Store, Worker-Queue mit Admission Control,
+SSE-Broker), `connect_service.py` + `run_config.py` (D4-Extraktion, framework-frei),
+`run_journal.py` (D7), `static/index.html`+`app.js`+`app.css`, `Dockerfile`/
+`docker-compose.yml`/`.env.example`. Geändert: `logging_setup.py` (lauf-gebundenes Logging
+über `contextvars` + `RunIdFilter` — jedes Modul loggt über `getLogger(__name__)`, Läufe
+sind also **nicht** über den Logger-Namen trennbar, und `configure_logging()` hängt beim
+Import von `orchestrator.py` genau einen Handler an den **Root**-Logger),
+`odoo_client.py` 🔒 (Weiterleitungen an allen drei `session.post`-Stellen abgelehnt,
+Fehlerkörper an **beiden** Kopien redigiert — Log **und** `self.errors`, das die
+Lauf-Zusammenfassungs-API speist), `llm_service.py` (Cache-Pfad per Env, atomarer
+Cache-Write, neues öffentliches `ping()`), `requirements.txt` (gepinnt, `customtkinter`
+entfernt), `config.ini.example` (vestigiales `username` entfernt).
+
+**Bewusst gestrichen (Produktentscheidung nach Peer-Review):** Datensatz-Vorschau und
+-Bearbeitung samt Backend-Gerüst — vollständige Begründung im R9-Statusblock von
+`IMPLEMENTIERUNGSPLAN.md` §4. Sie wird erfahrungsgemäß erneut vorgeschlagen; die Kurzfassung
+lautet: Odoo ist der bessere Datensatz-Browser, das Ziel ist eine Wegwerf-`demo-*`-DB, und
+seit S7/R8 entstehen die interessantesten Datensätze nativ in Odoo und wären in einer
+Vorschau **nie** sichtbar gewesen.
+
+**S8-Carry-overs geschlossen:** `WANTED_MODULES` (jetzt in `run_config.py`, geteilt mit
+`tests/integration/test_suite.py` statt dupliziert) enthält `purchase` und `stock`;
+`/api/connect` liefert `feature_flags` — ohne sie wären alle MRP-Arbeitszentren,
+BOM-Vorgänge und Qualitätsprüfpunkte still nie wieder erzeugt worden (B1-Fehlerklasse).
+
+**LLM-Datenfluss — vollständig nachgezogen (2026-08-28, nach Nutzerfrage).** Jede
+`fetch_*`-Aufrufstelle der neun Module wurde daraufhin geprüft, ob ein aus Odoo *gelesener*
+Wert in einen Prompt gelangt. Ergebnis: **genau ein Prompt**, `modules/crm.py`s
+Chatter-Prompt, und dort zwei Felder — `customer` (ein `res.partner`-Name) und `salesperson`
+(ein `res.users`-Name). Alles andere ist unkritisch und soll nicht erneut untersucht werden:
+`mrp.fetch_all_bom_components` baut auf `ctx.name_banks` (LLM-erzeugt),
+`project.fetch_all_project_stages` auf gerade selbst angelegten Projektnamen,
+`recruiting.fetch_job_summaries_batch` auf LLM-Stellentiteln,
+`documents.fetch_cv_bullet_points_batch` auf Bewerbern **dieses** Laufs. Vorhandene Produkte
+werden ausschließlich als IDs verwendet, nie als Text.
+
+Kritisch wird der Chatter-Prompt erst mit `use_existing`: dann ist `customer` ein *echter
+bestehender* Kontakt statt eines vom Lauf erfundenen. Der `salesperson`-Name stammt
+**immer** aus `res.users` der Zielinstanz, unabhängig von der Option.
+
+Umgesetzt: eine ausdrückliche Einwilligung in Screen 02. Ohne Antwort weisen sowohl der
+Browser als auch `POST /api/runs` den Lauf ab. Ablehnen ist **kein** reiner UI-Zustand —
+`ModuleSelections.crm_chatter["use_db_names"]` wird `False` und `crm.py` sendet dann
+„Kunde"/„Verkäufer" statt der echten Namen. Die frühere Behauptung „genau ein Pfad, nämlich
+die Branchen-Vorbefüllung" war falsch; `determine_industry_from_company_name` ist trotzdem
+entfernt, weil sie als Einzige *vorhandene* Kundendaten ungefragt las.
+
+Die allgemeine Invariante („kein Wert aus einem Datensatz, den dieser Lauf nicht selbst
+erzeugt hat, erreicht einen Prompt") bleibt als automatischer Check offen — sie bräuchte
+Provenienz-Verfolgung. Praktisch ist sie jetzt durch die Einwilligung plus die obige
+Aufstellung abgedeckt.
+
+237/237 Unit-Schritte grün (von 176), inkl. 4 neuer Testdateien
+(`test_web_security_unit.py`, `test_web_api_unit.py`, `test_run_config_unit.py`,
+`test_run_journal_unit.py`) plus neu geschriebenem `test_logging_setup.py` (die alte
+Idempotenz-Prüfung zählte Root-Handler und testete damit genau das ersetzte Design).
+Live-Integration um `tests/integration/test_run_journal.py` erweitert.
+
+Nächster Sprint: offen. Backlog-Kandidaten: R6 (Multi-Country), R7 (JSON-Demo-Plan),
+S5 Tier 2, Provenienz-Invariante (§R9), `mrp.py`s `ctx.company_ids`-Bug.
 
 **Prozess-Hinweis (2026-08-04):** Dieser Abschnitt lag zeitweise eine ganze Session hinter dem
 tatsächlichen Code-Stand zurück — D1/D2/D3/B11/B14/B15 waren bereits implementiert und getestet,

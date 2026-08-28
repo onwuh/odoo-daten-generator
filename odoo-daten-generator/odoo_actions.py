@@ -1,4 +1,4 @@
-"""Shared Odoo action helpers used by entry points (connect.py, gui.py) and
+"""Shared Odoo action helpers used by entry points (connect_service.py, web/) and
 multiple domain modules.
 
 Domain-specific helpers live in their respective modules:

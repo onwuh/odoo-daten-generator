@@ -25,6 +25,7 @@ class _FakeResponse:
         self.status_code = status_code
         self._json_data = json_data if json_data is not None else {}
         self.text = text
+        self.headers = {"Content-Type": "application/json"}
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -40,7 +41,11 @@ def _make_client_with_fake_post():
     client = OdooJson2Client("https://example.test", "db", "key")
     sent = []
 
-    def fake_post(url, json=None, timeout=None):
+    def fake_post(url, json=None, timeout=None, allow_redirects=None):
+        # Guard B: every POST must opt out of redirects. Asserting it here means
+        # a call site added later without the kwarg fails this test rather than
+        # quietly re-opening the SSRF hop.
+        assert allow_redirects is False, f"allow_redirects={allow_redirects!r} statt False"
         payload = json or {}
         sent.append((url, payload))
         # "fallback shape" = the empty payload3 sends: {} or just {"context": ...}

@@ -301,13 +301,25 @@ def _post_chatter_messages(client, gemini, ctx: RunContext, opp_data):
     style = chatter_cfg.get('style', 'mixed')
     messages_per_opp = chatter_cfg.get('messages_per_opp', 4)
 
+    # This prompt is the ONE place where values read out of the target database
+    # reach an LLM: 'customer' is a res.partner name and 'salesperson' a res.users
+    # name. When the run creates its own master data both are LLM-invented, but
+    # with "vorhandene Daten einbeziehen" the customer is a real existing contact,
+    # and the salesperson is a real user of the instance either way.
+    #
+    # use_db_names is the user's answer to the consent prompt in the UI. Declined
+    # (or absent) means generic placeholders go out instead of the real names —
+    # the chatter still reads naturally, it just addresses "Kunde"/"Verkäufer".
+    use_db_names = bool(chatter_cfg.get('use_db_names'))
+
     # One participant pair per opportunity — not a single sample reused for the
     # whole batch (B9), so each opp's messages address its actual customer/rep.
     opportunities = [
         {
             'title': o['name'],
-            'customer': o.get('partner_name') or 'Kunde',
-            'salesperson': (o.get('salesperson') or {}).get('name') or 'Verkäufer',
+            'customer': (o.get('partner_name') if use_db_names else None) or 'Kunde',
+            'salesperson': ((o.get('salesperson') or {}).get('name')
+                            if use_db_names else None) or 'Verkäufer',
         }
         for o in opp_data
     ]

@@ -263,7 +263,7 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
     # --- SECTION A: Work Centers ---
     workcenter_name_to_id: dict = {}
     wc_data: dict = {}
-    # B15: default aligned with gui.py's routings_on default — a missing
+    # B15: default aligned with the UI's routings_on default — a missing
     # mrp_routings flag must not mean "off in the GUI, on in the module".
     mrp_routings_ok = ctx.feature_flags.get('mrp_routings', False)
     if mrp_routings_ok and num_workcenters > 0:

@@ -93,6 +93,50 @@ def run():
     except AssertionError as e:
         results.append(("create_crm_data: empty company_ids -> no create_batch call (Pattern 5)", False, str(e)))
 
+    # ------------------------------------------------------------------
+    # Consent gate: the chatter prompt is the ONE place a value read out of the
+    # target database reaches an LLM. Without consent it must carry placeholders.
+    # ------------------------------------------------------------------
+    for label, use_db_names, expect_real in [("ohne Zustimmung", False, False),
+                                             ("mit Zustimmung", True, True)]:
+        try:
+            captured = {}
+
+            class _LLM:
+                def fetch_crm_chatter_messages(self, opportunities, industry, language,
+                                               style=None, messages_per_opp=None):
+                    captured["opps"] = opportunities
+                    return {}
+
+            ctx = _make_ctx(num_opps=1, num_leads=0)
+            ctx.module_selections.crm_chatter = {
+                "enabled": True, "style": "mixed", "messages_per_opp": 2,
+                "use_db_names": use_db_names,
+            }
+            opp_data = [{
+                "id": 1, "name": "Angebot A",
+                "partner_name": "Echte Kunden GmbH",
+                "salesperson": {"name": "Echter Mitarbeiter"},
+            }]
+            crm._post_chatter_messages(MagicMock(), _LLM(), ctx, opp_data)
+
+            sent = captured.get("opps", [{}])[0]
+            if expect_real:
+                assert sent.get("customer") == "Echte Kunden GmbH", sent
+                assert sent.get("salesperson") == "Echter Mitarbeiter", sent
+            else:
+                assert sent.get("customer") == "Kunde", sent
+                assert sent.get("salesperson") == "Verkäufer", sent
+                blob = str(sent)
+                assert "Echte Kunden GmbH" not in blob, blob
+                assert "Echter Mitarbeiter" not in blob, blob
+            # The opportunity title itself is LLM-generated, never DB-read, so it
+            # is unaffected either way.
+            assert sent.get("title") == "Angebot A", sent
+            results.append((f"chatter-Prompt {label}: Namen korrekt gefiltert", True, str(sent.get("customer"))))
+        except Exception as e:
+            results.append((f"chatter-Prompt {label}: Namen korrekt gefiltert", False, str(e)))
+
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results
 

@@ -1,5 +1,24 @@
-openai
-google-genai
-requests
-customtkinter
-fpdf2>=2.7
+# Pinned, not floating: the server redeploys on every container rebuild, and an
+# unpinned dependency turns that into an unreviewed upgrade. Bump deliberately.
+#
+# customtkinter is gone with gui.py (S9) — the desktop wizard is retired, not
+# kept alongside. fpdf2 stays: S6's PDF generation still runs during every run.
+
+# --- LLM providers ---
+openai==2.32.0            # Groq speaks the OpenAI-compatible API (primary)
+google-genai==1.73.1      # Gemini (fallback)
+
+# --- Odoo JSON/2 client ---
+requests==2.33.1
+
+# --- PDF generation (S6) ---
+fpdf2==2.8.7
+
+# --- Web layer (S9) ---
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn[standard]==0.52.4
+sse-starlette==3.4.8
+
+# --- Test-only (FastAPI TestClient) ---
+httpx==0.28.1
