@@ -57,6 +57,14 @@ PROGRESS_KEY_MAP = {"Stammdaten": "stammdaten"}
 VALID_MODES = ("master", "both")
 VALID_CHATTER_STYLES = ("notes_only", "mixed", "full_email")
 
+# Consent for letting values read out of the target database reach an LLM prompt.
+# Exactly one prompt is affected (modules/crm.py's chatter): the customer name and
+# the salesperson name. Everything else the pipeline sends is LLM-invented or was
+# created by this run; existing products are used as IDs only, never as text.
+CONSENT_GRANTED = "granted"
+CONSENT_DENIED = "denied"
+VALID_CONSENT = (CONSENT_GRANTED, CONSENT_DENIED)
+
 DEFAULT_INDUSTRY = "IT-Dienstleistung"
 
 
@@ -112,6 +120,24 @@ def _enabled(block: Dict[str, Any]) -> bool:
 # Payload → dataclasses
 # ---------------------------------------------------------------------------
 
+def validate_consent(payload: Dict[str, Any]) -> Optional[str]:
+    """Check the existing-data consent answer.
+
+    Including existing records means the chatter prompt can carry a real
+    customer's name, so the answer must be an explicit yes or no — an unanswered
+    question is refused rather than silently treated as either.
+    """
+    consent = payload.get("existing_data_consent")
+    if consent is not None and consent not in VALID_CONSENT:
+        raise ConfigError(f"Unbekannte Einwilligung '{consent}'.")
+    if _as_bool(payload.get("use_existing")) and consent != CONSENT_GRANTED:
+        raise ConfigError(
+            "Vorhandene Daten einbeziehen erfordert eine Entscheidung: Ohne Zustimmung "
+            "können Namen aus der Zieldatenbank nicht an den LLM-Anbieter gehen. "
+            "Bitte zustimmen oder die Option abwählen.")
+    return consent
+
+
 def build_criteria(payload: Dict[str, Any]) -> DemoCriteria:
     mode = payload.get("mode", "master")
     if mode not in VALID_MODES:
@@ -160,6 +186,8 @@ def build_selections(payload: Dict[str, Any]) -> Tuple[ModuleSelections, Set[str
                 "style": style,
                 "messages_per_opp": _as_int(chatter.get("messages_per_opp"),
                                             "crm.chatter.messages_per_opp", 1, 50, default=4),
+                # Real customer/salesperson names only with explicit consent.
+                "use_db_names": payload.get("existing_data_consent") == CONSENT_GRANTED,
             }
         activities = _as_dict(crm.get("activities"), "crm.activities")
         if _enabled(activities):
@@ -278,6 +306,7 @@ def build_context(payload: Dict[str, Any], *, language_name: str, language_code:
     every MRP work center, BOM operation and quality point (mrp.py:268/:347) and
     CRM leads. The connect endpoint must supply the probed flags.
     """
+    validate_consent(payload)
     criteria = build_criteria(payload)
     selections, selected = build_selections(payload)
 

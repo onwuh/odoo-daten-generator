@@ -352,7 +352,10 @@ def run():
             payload = dict(_PAYLOAD, skip_master_data=True, use_existing=False)
             response = client.post("/api/runs", headers=_auth_headers(csrf), json=payload)
             assert response.status_code == 400, response.status_code
-            ok_payload = dict(_PAYLOAD, skip_master_data=True, use_existing=True)
+            # use_existing implies the consent question, so the accepted case
+            # must answer it too.
+            ok_payload = dict(_PAYLOAD, skip_master_data=True, use_existing=True,
+                              existing_data_consent="granted")
             with patch("web.jobs.JournalingClient"), patch("web.jobs.LLMService"), \
                  patch("orchestrator.run"):
                 allowed = client.post("/api/runs", headers=_auth_headers(csrf), json=ok_payload)
@@ -361,6 +364,138 @@ def run():
         results.append(("Lauf: skip_master_data ohne use_existing wird abgelehnt", True, ""))
     except Exception as e:
         results.append(("Lauf: skip_master_data ohne use_existing wird abgelehnt", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # Consent is enforced by the API, not only by the browser
+    # ------------------------------------------------------------------
+    try:
+        with TestClient(web_app.app) as client:
+            csrf = _login(client)
+            _connect(client, csrf)
+            undecided = dict(_PAYLOAD, use_existing=True)
+            response = client.post("/api/runs", headers=_auth_headers(csrf), json=undecided)
+            assert response.status_code == 400, response.status_code
+            assert "Zustimmung" in response.json()["detail"], response.text
+
+            denied = dict(_PAYLOAD, use_existing=True, existing_data_consent="denied")
+            assert client.post("/api/runs", headers=_auth_headers(csrf),
+                               json=denied).status_code == 400
+
+            granted = dict(_PAYLOAD, use_existing=True, existing_data_consent="granted")
+            with patch("web.jobs.JournalingClient"), patch("web.jobs.LLMService"), \
+                 patch("orchestrator.run"):
+                allowed = client.post("/api/runs", headers=_auth_headers(csrf), json=granted)
+                assert allowed.status_code == 202, allowed.text
+                time.sleep(0.3)
+        results.append(("Einwilligung: API verlangt sie unabhängig vom Browser", True, ""))
+    except Exception as e:
+        results.append(("Einwilligung: API verlangt sie unabhängig vom Browser", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # BETA operator defaults: blank fields fall back to config.ini, and the
+    # metadata endpoint never carries a key
+    # ------------------------------------------------------------------
+    try:
+        import server_config
+        fake = {"url": "https://demo-operator.odoo.com", "db": "demo-operator",
+                "odoo_key": "operator-odoo-secret", "llm_key": "gsk_operator-llm-secret",
+                "llm_model": "qwen/qwen3.8-27b"}
+        with TestClient(web_app.app) as client:
+            csrf = _login(client)
+            with patch.object(server_config, "defaults", return_value=fake), \
+                 patch.object(connect_service, "probe",
+                              return_value=(_fake_connect_result(), MagicMock(), MagicMock())) as probe:
+                # Every field blank — the server fills them in.
+                response = client.post("/api/connect", headers=_auth_headers(csrf), json={
+                    "url": "", "db": "", "odoo_key": "", "llm_key": "", "llm_model": "",
+                })
+                assert response.status_code == 200, response.text
+                kwargs = probe.call_args.kwargs
+                assert kwargs["base_url"] == "https://demo-operator.odoo.com", kwargs
+                assert kwargs["database"] == "demo-operator", kwargs
+                assert kwargs["odoo_key"] == "operator-odoo-secret", kwargs
+                assert kwargs["llm_key"] == "gsk_operator-llm-secret", kwargs
+                # No secret is ever echoed back.
+                assert "operator-odoo-secret" not in response.text
+                assert "operator-llm-secret" not in response.text
+        results.append(("Beta-Defaults: leere Felder werden serverseitig gefüllt", True, ""))
+    except Exception as e:
+        results.append(("Beta-Defaults: leere Felder werden serverseitig gefüllt", False, str(e)))
+
+    try:
+        with TestClient(web_app.app) as client:
+            csrf = _login(client)
+            with patch.object(server_config, "defaults", return_value=fake), \
+                 patch.object(connect_service, "probe",
+                              return_value=(_fake_connect_result(), MagicMock(), MagicMock())) as probe:
+                # A supplied value wins over the default.
+                client.post("/api/connect", headers=_auth_headers(csrf), json={
+                    "url": "https://demo-eigene.odoo.com", "db": "demo-eigene",
+                    "odoo_key": "meine-eigene", "llm_key": "gsk_meine", "llm_model": "eigenes-modell",
+                })
+                kwargs = probe.call_args.kwargs
+                assert kwargs["base_url"] == "https://demo-eigene.odoo.com", kwargs
+                assert kwargs["odoo_key"] == "meine-eigene", kwargs
+                assert kwargs["llm_model"] == "eigenes-modell", kwargs
+        results.append(("Beta-Defaults: eigene Eingabe überschreibt die Voreinstellung", True, ""))
+    except Exception as e:
+        results.append(("Beta-Defaults: eigene Eingabe überschreibt die Voreinstellung", False, str(e)))
+
+    try:
+        # Guard A still applies to a configured default — the fallback widens who
+        # may use the key, never which hosts it may reach.
+        bad = dict(fake, url="https://kunde-produktiv.odoo.com")
+        with TestClient(web_app.app) as client:
+            csrf = _login(client)
+            with patch.object(server_config, "defaults", return_value=bad), \
+                 patch.object(connect_service, "probe") as probe:
+                response = client.post("/api/connect", headers=_auth_headers(csrf), json={})
+                assert response.status_code == 400, response.status_code
+                probe.assert_not_called()
+        results.append(("Beta-Defaults: Guard A gilt auch für die Server-URL", True, ""))
+    except Exception as e:
+        results.append(("Beta-Defaults: Guard A gilt auch für die Server-URL", False, str(e)))
+
+    try:
+        with TestClient(web_app.app) as client:
+            csrf = _login(client)
+            with patch.object(server_config, "defaults", return_value=fake):
+                response = client.get("/api/defaults")
+                assert response.status_code == 200, response.text
+                data = response.json()
+                assert data["has_odoo_key"] is True and data["has_llm_key"] is True, data
+                assert data["url"] == fake["url"] and data["db"] == fake["db"], data
+                assert "operator-odoo-secret" not in response.text, "Schlüssel im Ergebnis!"
+                assert "operator-llm-secret" not in response.text, "Schlüssel im Ergebnis!"
+                assert "odoo_key" not in data and "llm_key" not in data, sorted(data)
+        # Unauthenticated callers get nothing — the demo hostname it carries is
+        # prospect-identifying.
+        with TestClient(web_app.app) as anon:
+            assert anon.get("/api/defaults").status_code == 401
+        results.append(("Beta-Defaults: /api/defaults meldet nur ob, nie welcher Schlüssel", True, ""))
+    except Exception as e:
+        results.append(("Beta-Defaults: /api/defaults meldet nur ob, nie welcher Schlüssel", False, str(e)))
+
+    try:
+        # The kill switch restores bring-your-own-credentials behaviour.
+        with patch.dict(os.environ, {"ODOO_GENERATOR_CONFIG_DEFAULTS": "off"}):
+            assert server_config.enabled() is False
+            assert server_config.defaults() == {}
+            assert server_config.apply("odoo_key", "") is None
+            assert server_config.public_defaults()["has_odoo_key"] is False
+        with TestClient(web_app.app) as client:
+            csrf = _login(client)
+            with patch.dict(os.environ, {"ODOO_GENERATOR_CONFIG_DEFAULTS": "off"}), \
+                 patch.object(connect_service, "probe") as probe:
+                response = client.post("/api/connect", headers=_auth_headers(csrf), json={
+                    "url": "https://demo-x.odoo.com", "db": "demo-x",
+                    "odoo_key": "", "llm_key": "", "llm_model": "",
+                })
+                assert response.status_code == 400, response.status_code
+                probe.assert_not_called()
+        results.append(("Beta-Defaults: ODOO_GENERATOR_CONFIG_DEFAULTS=off schaltet ab", True, ""))
+    except Exception as e:
+        results.append(("Beta-Defaults: ODOO_GENERATOR_CONFIG_DEFAULTS=off schaltet ab", False, str(e)))
 
     # ------------------------------------------------------------------
     # Security headers: CSP with no inline scripts, plus the usual set

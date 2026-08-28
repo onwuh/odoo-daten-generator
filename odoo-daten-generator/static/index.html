@@ -66,7 +66,10 @@
             <ul class="note-list">
               <li>Nur <code class="f">demo-*.odoo.com</code> als Ziel — der Server prüft das unabhängig vom Browser.</li>
               <li>Zugangsdaten bleiben ausschließlich im Arbeitsspeicher der Sitzung: keine Datei, keine Datenbank, kein Log.</li>
-              <li>Kein Inhalt aus der Zieldatenbank wird an den LLM-Anbieter geschickt.</li>
+              <li>An den LLM-Anbieter geht nur, was dieser Lauf selbst erfindet — mit einer
+                Ausnahme: werden vorhandene Daten einbezogen, enthält der Chatter-Prompt den
+                Namen des Kunden und des zuständigen Benutzers. Dafür wird in Schritt&nbsp;02
+                ausdrücklich gefragt.</li>
             </ul>
           </div>
         </div>
@@ -87,6 +90,8 @@
           <div class="divider-label">LLM-Verbindung</div>
           <div class="field-row"><label for="f-llmkey">LLM API-Schlüssel</label><input id="f-llmkey" type="password" autocomplete="off"></div>
           <div class="field-row"><label for="f-llmmodel">LLM Modell</label><input id="f-llmmodel" type="text" value="qwen/qwen3.8-27b" autocomplete="off"></div>
+
+          <div class="note is-hidden" id="defaults-note"></div>
 
           <div class="btn-row">
             <button class="btn" id="btn-connect">Verbinden →</button>
@@ -122,7 +127,20 @@
           </div>
 
           <div class="mt-14">
-            <label class="check-line"><input type="checkbox" id="chk-use-existing" checked> Vorhandene Daten einbeziehen <span class="sub" id="existing-sub">(noch nicht geprüft)</span></label>
+            <label class="check-line"><input type="checkbox" id="chk-use-existing"> Vorhandene Daten einbeziehen <span class="sub" id="existing-sub">(noch nicht geprüft)</span></label>
+
+            <div class="note consent is-hidden" id="consent-block">
+              <div>
+                <b>Damit werden Kundendaten an den LLM-Anbieter übermittelt.</b>
+                <p id="consent-detail"></p>
+                <div class="btn-row">
+                  <button type="button" class="btn" id="btn-consent-yes">Zustimmen</button>
+                  <button type="button" class="btn ghost" id="btn-consent-no">Ablehnen</button>
+                  <span class="inline-hint" id="consent-state"></span>
+                </div>
+              </div>
+            </div>
+
             <label class="check-line"><input type="checkbox" id="chk-skip-master"> Keine neuen Stammdaten anlegen <span class="sub">(nur vorhandene verwenden)</span></label>
           </div>
         </div>

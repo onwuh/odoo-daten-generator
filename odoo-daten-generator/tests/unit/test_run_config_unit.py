@@ -21,6 +21,7 @@ _FULL = {
     "mode": "both",
     "industry": "Maschinenbau",
     "use_existing": True,
+    "existing_data_consent": "granted",
     "skip_master_data": False,
     "master_data": {"num_companies": 2, "num_delivery_contacts": 1, "num_invoice_contacts": 1,
                     "num_other_contacts": 0, "num_services": 4, "num_consumables": 2,
@@ -96,7 +97,8 @@ def run():
         ctx, selected = _build(_FULL)
         sel = ctx.module_selections
         assert sel.crm == 6 and sel.leads == 2
-        assert sel.crm_chatter == {"enabled": True, "style": "full_email", "messages_per_opp": 5}
+        assert sel.crm_chatter == {"enabled": True, "style": "full_email",
+                                   "messages_per_opp": 5, "use_db_names": True}, sel.crm_chatter
         assert sel.crm_activities == {"enabled": True, "past_pct": 40, "today_pct": 30}
         assert sel.sale == 7 and sel.sale_confirm_pct == 80
         assert sel.account == 5 and sel.account_bills == 3 and sel.create_bank_transactions is True
@@ -198,6 +200,54 @@ def run():
         results.append(("skip_master_data / use_existing werden übernommen", True, ""))
     except Exception as e:
         results.append(("skip_master_data / use_existing werden übernommen", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # Existing-data consent: the one setting that lets a value read out of the
+    # target database reach an LLM prompt (crm.py's chatter customer/salesperson)
+    # ------------------------------------------------------------------
+    try:
+        base = dict(_FULL, use_existing=True)
+        base.pop("existing_data_consent", None)
+        for label, consent in [("ohne Antwort", None), ("abgelehnt", "denied")]:
+            payload = dict(base)
+            if consent is not None:
+                payload["existing_data_consent"] = consent
+            try:
+                _build(payload)
+                raise AssertionError(f"akzeptiert: {label}")
+            except run_config.ConfigError:
+                pass
+        results.append(("Einwilligung: use_existing ohne Zustimmung wird abgelehnt", True, ""))
+    except Exception as e:
+        results.append(("Einwilligung: use_existing ohne Zustimmung wird abgelehnt", False, str(e)))
+
+    try:
+        granted = dict(_FULL, use_existing=True, existing_data_consent="granted")
+        ctx, _ = _build(granted)
+        assert ctx.module_selections.crm_chatter["use_db_names"] is True, ctx.module_selections.crm_chatter
+        assert ctx.company_ids == [101, 102], ctx.company_ids
+
+        # Without existing data the question does not arise, and the chatter
+        # prompt still gets generic placeholders rather than real names.
+        without = dict(_FULL, use_existing=False)
+        without.pop("existing_data_consent", None)
+        ctx2, _ = _build(without)
+        assert ctx2.module_selections.crm_chatter["use_db_names"] is False, ctx2.module_selections.crm_chatter
+        assert ctx2.company_ids == [], ctx2.company_ids
+        results.append(("Einwilligung: Zustimmung gibt DB-Namen frei, sonst nicht", True, ""))
+    except Exception as e:
+        results.append(("Einwilligung: Zustimmung gibt DB-Namen frei, sonst nicht", False, str(e)))
+
+    try:
+        bogus = dict(_FULL, use_existing=True, existing_data_consent="vielleicht")
+        try:
+            _build(bogus)
+            raise AssertionError("unbekannter Wert akzeptiert")
+        except run_config.ConfigError:
+            pass
+        results.append(("Einwilligung: unbekannter Wert wird abgelehnt", True, ""))
+    except Exception as e:
+        results.append(("Einwilligung: unbekannter Wert wird abgelehnt", False, str(e)))
 
     # ------------------------------------------------------------------
     # Untrusted input: bad types and out-of-range values are refused, not coerced

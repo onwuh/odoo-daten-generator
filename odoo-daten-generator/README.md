@@ -43,13 +43,26 @@ change rather than a migration. See `.env.example` for every setting.
 
 ## What you supply
 
-Nothing is stored server-side. Per session, in memory only, discarded on expiry:
+Per session, in memory only, discarded on expiry (a janitor sweeps abandoned
+sessions rather than waiting for someone to touch them again):
 
 - the target Odoo URL, database and API key,
 - your own LLM API key and model name.
 
-The server holds no credentials of its own, which is what makes self-hosting it
-defensible.
+### Beta: server-side defaults
+
+During the beta a blank field falls back to the value in `config.ini` (or the
+environment: `ODOO_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY`), so a tester can
+click Verbinden without pasting anything. Typing your own value always wins for
+that session.
+
+This does mean the server holds credentials of its own, and the shared access
+code becomes the only thing in front of them — the opposite of the design that
+made self-hosting defensible. Guard A still applies to the configured URL, so the
+reach is limited to a throwaway `demo-*.odoo.com` instance. Turn it off with
+`ODOO_GENERATOR_CONFIG_DEFAULTS=off` when the beta ends.
+
+`GET /api/defaults` reports only *whether* a key default exists, never the key.
 
 ## Guard rails
 
@@ -62,8 +75,15 @@ defensible.
   embedded credentials in the URL, no port override, redirects refused rather
   than followed, and HTTP error bodies reduced to their structured Odoo message
   before they reach a log or the run summary.
-- **No content from the target database reaches the LLM.** The industry field is
-  yours to type; it is no longer inferred from the company name.
+- **What reaches the LLM is what this run invented — with one asked-for
+  exception.** The industry field is yours to type; it is no longer inferred from
+  the company name. Products, amounts, dates and every other field are assembled
+  in code and never sent. The exception is the CRM chatter prompt, which carries
+  the customer's name and the salesperson's name so the messages address the right
+  people. With the run creating its own master data those names are LLM-invented
+  anyway; with "Vorhandene Daten einbeziehen" the customer is a real existing
+  contact, so the UI asks before that happens. Declining sends "Kunde" and
+  "Verkäufer" instead — it is a real switch, not a UI state.
 
 ## A run
 

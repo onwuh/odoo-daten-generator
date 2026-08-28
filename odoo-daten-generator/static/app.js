@@ -15,6 +15,8 @@
   var state = {
     csrf: null,
     connect: null,
+    defaults: null,
+    consent: null,          // null | "granted" | "denied"
     runId: null,
     source: null,
     moduleRows: {},
@@ -511,10 +513,74 @@
     updateConfigSummary();
   });
 
+  // ------------------------------------------------- existing-data consent
+  // Including existing records is the one setting that lets a value read out of
+  // the target database reach an LLM prompt: modules/crm.py's chatter prompt
+  // carries the customer's name and the salesperson's name. Everything else the
+  // pipeline sends is LLM-invented or was created by this run, and existing
+  // products are used as IDs only, never as text.
+  //
+  // Declining is not just a UI state — it is passed to the server, which then
+  // sends "Kunde"/"Verkäufer" instead of the real names.
+  var CONSENT_TEXT =
+    "„Vorhandene Daten einbeziehen“ verwendet Kontakte und Produkte, die bereits in der "
+    + "Zieldatenbank stehen. Für die Chatter-Konversationen wird dabei der Name des "
+    + "Kunden und der des zuständigen Benutzers an den LLM-Anbieter übermittelt, damit "
+    + "die Nachrichten die richtigen Personen ansprechen. Produkte, Beträge und alle "
+    + "übrigen Felder werden ausschließlich im Code verarbeitet und nie gesendet.\n\n"
+    + "Bei Ablehnung wird die Option abgewählt: der Lauf legt eigene Stammdaten an und "
+    + "die Konversationen sprechen neutral von „Kunde“ und „Verkäufer“.";
+
+  function updateConsentUi() {
+    var wanted = checked("chk-use-existing");
+    setHidden("consent-block", !wanted || state.consent === "granted");
+    setText("consent-detail", CONSENT_TEXT);
+    var label = $("consent-state");
+    if (state.consent === "granted") {
+      label.className = "inline-hint consent-yes";
+      setText("consent-state", "Zugestimmt — kann jederzeit wieder abgewählt werden.");
+    } else if (state.consent === "denied") {
+      label.className = "inline-hint consent-no";
+      setText("consent-state", "Abgelehnt.");
+    } else {
+      label.className = "inline-hint";
+      setText("consent-state", "");
+    }
+  }
+
+  $("chk-use-existing").addEventListener("change", function () {
+    // Any change re-opens the question; a stale yes must not survive a toggle.
+    state.consent = null;
+    updateConsentUi();
+    updateConfigSummary();
+  });
+
+  $("btn-consent-yes").addEventListener("click", function () {
+    state.consent = "granted";
+    updateConsentUi();
+  });
+
+  $("btn-consent-no").addEventListener("click", function () {
+    state.consent = "denied";
+    $("chk-use-existing").checked = false;
+    // Declining also releases "keine neuen Stammdaten", which forces the option
+    // back on — otherwise the two settings would fight each other.
+    $("chk-skip-master").checked = false;
+    setHidden("master-data-block", false);
+    updateConsentUi();
+    updateConfigSummary();
+  });
+
   $("chk-skip-master").addEventListener("change", function () {
     var skip = checked("chk-skip-master");
     setHidden("master-data-block", skip);
-    if (skip) $("chk-use-existing").checked = true;
+    if (skip) {
+      // Skipping master data is only meaningful with existing records, so it
+      // implies the option — and therefore the same question.
+      if (!checked("chk-use-existing")) state.consent = null;
+      $("chk-use-existing").checked = true;
+    }
+    updateConsentUi();
     updateConfigSummary();
   });
 
@@ -536,6 +602,7 @@
       mode: currentMode(),
       industry: ($("f-industry").value || "").trim(),
       use_existing: checked("chk-use-existing"),
+      existing_data_consent: state.consent,
       skip_master_data: checked("chk-skip-master"),
       master_data: {
         num_companies: intVal("s-unternehmen", 3),
@@ -568,12 +635,41 @@
         setText("login-hint", "Angemeldet.");
         setHidden("panel-login", true);
         setHidden("panel-connect", false);
+        loadDefaults();
       })
       .catch(function (err) {
         setText("login-hint", err.message);
       })
       .finally(function () { button.disabled = false; });
   });
+
+  // ------------------------------------------------ operator defaults (BETA)
+  // A blank field is filled server-side from config.ini. The API reports only
+  // whether a key default exists — never the key — so this pre-fills the two
+  // non-secret fields and labels the rest.
+  function applyDefaults(d) {
+    state.defaults = d;
+    if (!d || !d.enabled) return;
+    var note = $("defaults-note");
+    if (d.url && !$("f-url").value) {
+      $("f-url").value = d.url.replace(/\/+$/, "");
+      validateUrlField();
+    }
+    if (d.db && !$("f-db").value) $("f-db").value = d.db;
+    if (d.llm_model) $("f-llmmodel").value = d.llm_model;
+    if (d.has_odoo_key) $("f-key").placeholder = "leer lassen → Schlüssel vom Server";
+    if (d.has_llm_key) $("f-llmkey").placeholder = "leer lassen → Schlüssel vom Server";
+    if (d.has_odoo_key || d.has_llm_key) {
+      setText("defaults-note",
+        "Beta: Leere Felder werden mit den auf dem Server hinterlegten Werten gefüllt. "
+        + "Eigene Werte eintragen überschreibt sie für diese Sitzung.");
+      setHidden(note, false);
+    }
+  }
+
+  function loadDefaults() {
+    return api("/api/defaults").then(applyDefaults).catch(function () { /* optional */ });
+  }
 
   // --------------------------------------------------- Guard A (client half)
   // UX only. The server enforces this independently and is the only authority;
@@ -582,7 +678,11 @@
   var DEMO_URL_RE = /^https:\/\/demo-[a-z0-9-]+\.odoo\.com\/?$/i;
   var urlField = $("f-url");
   function validateUrlField() {
-    var ok = DEMO_URL_RE.test((urlField.value || "").trim());
+    var raw = (urlField.value || "").trim();
+    // Blank is allowed only because the server may hold a default; it validates
+    // the resolved URL with the same rule either way.
+    var blankAllowed = raw === "" && state.defaults && state.defaults.url;
+    var ok = blankAllowed || DEMO_URL_RE.test(raw);
     urlField.classList.toggle("invalid", !ok);
     setHidden("f-url-error", ok);
     $("btn-connect").disabled = !ok;
@@ -658,11 +758,25 @@
     setText("foot-llm-text", "LLM: " + (data.llm_provider || "nicht verbunden"));
     setText("existing-sub",
       "(" + (data.existing_companies || 0) + " Kunden, " + (data.existing_products || 0) + " Produkte gefunden)");
+    state.consent = null;
+    updateConsentUi();
     renderModuleGrid(data.installed_modules || []);
   }
 
   // -------------------------------------------------------------- preflight
+  function consentSatisfied() {
+    if (!checked("chk-use-existing") || state.consent === "granted") return true;
+    setHidden("consent-block", false);
+    $("consent-block").scrollIntoView({ block: "center" });
+    var label = $("consent-state");
+    label.className = "inline-hint consent-no";
+    setText("consent-state",
+      "Bitte zuerst zustimmen oder ablehnen — ohne Entscheidung geht es nicht weiter.");
+    return false;
+  }
+
   $("btn-to-preflight").addEventListener("click", function () {
+    if (!consentSatisfied()) return;
     api("/api/preflight", { method: "POST", body: buildPayload() })
       .then(function (data) {
         var target = $("preflight-target");
@@ -729,6 +843,7 @@
   }
 
   $("btn-start-run").addEventListener("click", function () {
+    if (!consentSatisfied()) { showView("config"); return; }
     var button = this;
     button.disabled = true;
     api("/api/runs", { method: "POST", body: buildPayload() })
@@ -836,9 +951,11 @@
   // ------------------------------------------------------------------ init
   renderMasterSteppers();
   renderModuleGrid([]);
+  updateConsentUi();
   api("/api/session").then(function (data) {
     state.csrf = data.csrf_token;
     setHidden("panel-login", true);
     setHidden("panel-connect", false);
+    loadDefaults();
   }).catch(function () { /* not logged in yet — the login panel stays */ });
 })();

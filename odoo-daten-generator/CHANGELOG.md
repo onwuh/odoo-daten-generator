@@ -74,6 +74,26 @@ itself is untouched: S9 replaces the caller, not `orchestrator.py`.
   so `.view-scroll`'s `overflow-y: auto` has something to scroll instead of the
   whole document growing (rail and footer included).
 
+#### Added (beta)
+- Operator-supplied connection defaults (`server_config.py`): a blank connect
+  field falls back to `config.ini` or the environment, so a beta tester can
+  connect without pasting four values. A typed value always wins.
+  `GET /api/defaults` reports whether a key default exists, never the key, and
+  Guard A validates the configured URL exactly like a typed one. Disable with
+  `ODOO_GENERATOR_CONFIG_DEFAULTS=off` — the server holds its own credentials
+  while this is on, which inverts the "server holds no secrets" premise.
+
+#### Added (consent)
+- Explicit consent before existing database records are included. "Vorhandene
+  Daten einbeziehen" now opens an inline Zustimmen/Ablehnen prompt; proceeding
+  without an answer is refused by the browser *and* by `POST /api/runs`.
+  Declining is not merely a UI state: `crm.py`'s chatter prompt then receives
+  "Kunde"/"Verkäufer" instead of the real `res.partner` and `res.users` names.
+  That prompt is the only place a value read out of the target database reaches
+  an LLM — verified by tracing every `fetch_*` call site; `mrp`, `project`,
+  `recruiting` and `documents` all build their prompts from LLM-generated or
+  run-created values, and existing products are used as IDs only, never as text.
+
 #### Removed
 - `gui.py` and the whole CustomTkinter wizard.
 - `LLMService.determine_industry_from_company_name` — it read the company name

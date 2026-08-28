@@ -371,12 +371,32 @@ Vorschau **nie** sichtbar gewesen.
 `/api/connect` liefert `feature_flags` — ohne sie wären alle MRP-Arbeitszentren,
 BOM-Vorgänge und Qualitätsprüfpunkte still nie wieder erzeugt worden (B1-Fehlerklasse).
 
-**Korrektur einer früheren Compliance-Behauptung:** „genau ein Pfad schickt Inhalte der
-Zieldatenbank an ein LLM" war falsch — `crm.py:187` und `documents.py:129/141` tun es
-ebenfalls. Die Absicht bleibt (diese Datensätze hat *derselbe Lauf* erzeugt), die korrekte
-Invariante lautet „kein Wert aus einem Datensatz, den dieser Lauf nicht selbst erzeugt hat,
-erreicht einen Prompt" — braucht Provenienz-Verfolgung, bewusst außerhalb von S9.
-`determine_industry_from_company_name` wurde entfernt.
+**LLM-Datenfluss — vollständig nachgezogen (2026-08-28, nach Nutzerfrage).** Jede
+`fetch_*`-Aufrufstelle der neun Module wurde daraufhin geprüft, ob ein aus Odoo *gelesener*
+Wert in einen Prompt gelangt. Ergebnis: **genau ein Prompt**, `modules/crm.py`s
+Chatter-Prompt, und dort zwei Felder — `customer` (ein `res.partner`-Name) und `salesperson`
+(ein `res.users`-Name). Alles andere ist unkritisch und soll nicht erneut untersucht werden:
+`mrp.fetch_all_bom_components` baut auf `ctx.name_banks` (LLM-erzeugt),
+`project.fetch_all_project_stages` auf gerade selbst angelegten Projektnamen,
+`recruiting.fetch_job_summaries_batch` auf LLM-Stellentiteln,
+`documents.fetch_cv_bullet_points_batch` auf Bewerbern **dieses** Laufs. Vorhandene Produkte
+werden ausschließlich als IDs verwendet, nie als Text.
+
+Kritisch wird der Chatter-Prompt erst mit `use_existing`: dann ist `customer` ein *echter
+bestehender* Kontakt statt eines vom Lauf erfundenen. Der `salesperson`-Name stammt
+**immer** aus `res.users` der Zielinstanz, unabhängig von der Option.
+
+Umgesetzt: eine ausdrückliche Einwilligung in Screen 02. Ohne Antwort weisen sowohl der
+Browser als auch `POST /api/runs` den Lauf ab. Ablehnen ist **kein** reiner UI-Zustand —
+`ModuleSelections.crm_chatter["use_db_names"]` wird `False` und `crm.py` sendet dann
+„Kunde"/„Verkäufer" statt der echten Namen. Die frühere Behauptung „genau ein Pfad, nämlich
+die Branchen-Vorbefüllung" war falsch; `determine_industry_from_company_name` ist trotzdem
+entfernt, weil sie als Einzige *vorhandene* Kundendaten ungefragt las.
+
+Die allgemeine Invariante („kein Wert aus einem Datensatz, den dieser Lauf nicht selbst
+erzeugt hat, erreicht einen Prompt") bleibt als automatischer Check offen — sie bräuchte
+Provenienz-Verfolgung. Praktisch ist sie jetzt durch die Einwilligung plus die obige
+Aufstellung abgedeckt.
 
 237/237 Unit-Schritte grün (von 176), inkl. 4 neuer Testdateien
 (`test_web_security_unit.py`, `test_web_api_unit.py`, `test_run_config_unit.py`,

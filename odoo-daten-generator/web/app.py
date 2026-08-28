@@ -24,6 +24,7 @@ from sse_starlette.sse import EventSourceResponse
 
 import connect_service
 import run_config
+import server_config
 from logging_setup import configure_logging
 from odoo_client import OdooJson2Client
 from run_journal import RunJournal, delete_run, prune_journals, retention_days
@@ -109,6 +110,14 @@ async def _lifespan(_app: FastAPI):
     logger.info(f"[web] Profil={profile()} Worker={jobs.workers} "
                 f"Cookie-Secure={cookie_secure()} "
                 f"Journal-Aufbewahrung={retention_days()}d")
+    if server_config.enabled():
+        pub = server_config.public_defaults()
+        if pub["has_odoo_key"] or pub["has_llm_key"]:
+            logger.warning(
+                "[web] BETA: Server-Voreinstellungen aktiv — leere Felder werden aus "
+                "config.ini gefüllt. Damit hält der Server eigene Zugangsdaten, und der "
+                "Zugangscode ist das Einzige, was davor steht. "
+                "Abschalten: ODOO_GENERATOR_CONFIG_DEFAULTS=off")
     if not os.environ.get("ODOO_GENERATOR_ACCESS_CODE"):
         logger.warning("[web] ODOO_GENERATOR_ACCESS_CODE ist nicht gesetzt — "
                        "jede Anmeldung wird abgelehnt.")
@@ -230,24 +239,40 @@ def api_session(session=Depends(get_session)) -> Dict[str, Any]:
 # Connect
 # ---------------------------------------------------------------------------
 
+@app.get("/api/defaults")
+def api_defaults(session=Depends(get_session)) -> Dict[str, Any]:
+    """Non-secret connection defaults so the UI can pre-fill and label the form.
+
+    Reports *whether* a key default exists, never the key. Behind the access code
+    because the demo hostname it carries is prospect-identifying.
+    """
+    return server_config.public_defaults()
+
+
 @app.post("/api/connect")
 async def api_connect(request: Request, session=Depends(get_session_csrf)) -> Dict[str, Any]:
     body = await request.json()
+
+    # BETA: a blank field falls back to the operator's config.ini/environment.
+    # Guard A still runs on the resolved URL, so a misconfigured default is
+    # rejected exactly like a user-typed one — the fallback widens who may use
+    # the key, never which hosts it may reach. See server_config for the
+    # trade-off and the kill switch.
+    resolved_url = server_config.apply("url", body.get("url"))
+    resolved_db = server_config.apply("db", body.get("db"))
     try:
-        # Guard A (wrong target) and Guard B (SSRF) both run here, before a single
-        # request leaves the server. The frontend mirrors Guard A for fast
-        # feedback; this is the only authority.
-        base_url = security.validate_target_url(body.get("url"))
-        database = security.validate_database_name(body.get("db"))
+        base_url = security.validate_target_url(resolved_url)
+        database = security.validate_database_name(resolved_db)
     except security.TargetUrlError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
-    odoo_key = (body.get("odoo_key") or "").strip()
-    llm_key = (body.get("llm_key") or "").strip()
-    llm_model = (body.get("llm_model") or "").strip()
+    odoo_key = server_config.apply("odoo_key", body.get("odoo_key"))
+    llm_key = server_config.apply("llm_key", body.get("llm_key"))
+    llm_model = server_config.apply("llm_model", body.get("llm_model"))
     if not odoo_key or not llm_key or not llm_model:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail="Odoo-Schlüssel, LLM-Schlüssel und LLM-Modell sind erforderlich.")
+                            detail="Odoo-Schlüssel, LLM-Schlüssel und LLM-Modell sind erforderlich "
+                                   "— der Server hat dafür keine Voreinstellung.")
 
     result, _client, _llm = await asyncio.to_thread(
         connect_service.probe,
