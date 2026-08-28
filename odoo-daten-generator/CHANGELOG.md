@@ -66,6 +66,18 @@ itself is untouched: S9 replaces the caller, not `orchestrator.py`.
   module hit its Pattern-5 skip path.
 
 #### Fixed
+- A failed seed-cache write no longer aborts the run. The cache saves an LLM call
+  on a repeat run and nothing else, so an unwritable directory now degrades to
+  "no caching" with a single warning. Found on the first real local run:
+  `[Errno 30] Read-only file system: '/data'` killed a run that had already paid
+  for its LLM data.
+- `.env.example` no longer carries the container-only `/data/seeds/...` paths.
+  It is the file both profiles copy, so a local `uvicorn web.app:app` inherited
+  a directory that exists only inside the container. `docker-compose.yml` sets
+  those two variables itself now.
+- Startup probes both writable directories and names the offending environment
+  variable. Previously a wrong path surfaced minutes into a run as a bare OSError,
+  and a wrong journal path disabled cleanup with no message at all.
 - Frontend visibility moved from inline `style="display:none"` to an `.is-hidden`
   class. Under `style-src 'self'` the browser ignores parsed style attributes, so
   every panel meant to start hidden rendered — including the Odoo credential form

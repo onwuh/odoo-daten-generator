@@ -35,6 +35,26 @@ _CACHE_DIR = Path(os.environ.get("ODOO_GENERATOR_CACHE_DIR")
                   or (Path(__file__).parent / "seeds" / "cache"))
 _PROMPT_VERSION = "v3"  # bump when prompt wording changes to bust stale cache entries
 
+# Set once the first cache write fails, so the warning is logged once per process
+# rather than on every slug.
+_CACHE_WRITE_FAILED = False
+
+
+def cache_dir_writable() -> Optional[str]:
+    """Probe the seed-cache directory. Returns an error string, or None if fine.
+
+    Called at startup so a misconfigured path is named immediately, instead of
+    surfacing two minutes into a run as a bare OSError.
+    """
+    try:
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        probe = _CACHE_DIR / ".write-probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        return None
+    except OSError as exc:
+        return f"{_CACHE_DIR}: {exc}"
+
 
 _LANG_MAP: Dict[str, str] = {
     'de_DE': 'German', 'en_US': 'English', 'fr_FR': 'French',
@@ -171,27 +191,42 @@ class LLMService:
         return None
 
     def _cache_save(self, key: str, data: Any) -> None:
-        """Write the cache entry atomically.
+        """Write the cache entry atomically. Never fatal.
 
         Concurrent runs share one cache directory and can build the same slug at
         the same time. A plain open("w") truncates first, so a second writer can
         leave a reader with a half-written (or empty) file that then fails to
         parse forever. Write to a temp file in the same directory, then
         os.replace() — atomic on POSIX and Windows alike.
+
+        The cache is an optimisation: it saves an LLM call on a repeat run and
+        nothing else. An unwritable cache directory (wrong ODOO_GENERATOR_CACHE_DIR,
+        read-only filesystem, full disk) must therefore degrade to "no caching",
+        not abort a run that has already paid for the data it is holding.
         """
-        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        target = _CACHE_DIR / f"{key}.json"
-        fd, tmp_path = tempfile.mkstemp(dir=str(_CACHE_DIR), prefix=f".{key}.", suffix=".tmp")
+        global _CACHE_WRITE_FAILED
+        tmp_path = None
         try:
+            _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            target = _CACHE_DIR / f"{key}.json"
+            fd, tmp_path = tempfile.mkstemp(dir=str(_CACHE_DIR), prefix=f".{key}.", suffix=".tmp")
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             os.replace(tmp_path, target)
-        except Exception:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+        except OSError as exc:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+            if not _CACHE_WRITE_FAILED:
+                # Once per process: the same failure repeats on every slug and
+                # would otherwise bury the log.
+                _CACHE_WRITE_FAILED = True
+                logger.warning(
+                    f"⚠️  Seed-Cache nicht beschreibbar ({_CACHE_DIR}): {exc}. "
+                    "Der Lauf geht ohne Cache weiter — jeder Lauf stellt dann erneut "
+                    "dieselben LLM-Anfragen. Prüfe ODOO_GENERATOR_CACHE_DIR.")
 
     def _cached_llm_call(self, cache_key: str, build_fn) -> Any:
         """Check cache, else call build_fn() and save on a truthy result.

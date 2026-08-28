@@ -6,6 +6,12 @@ services:
     image: odoo-demodaten-generator:latest
     restart: unless-stopped
     env_file: .env
+    environment:
+      # Container-only paths, set here rather than in .env: /data is the mounted
+      # volume and exists only inside the container. Keeping them out of .env is
+      # what stops a local `uvicorn web.app:app` run from inheriting them.
+      ODOO_GENERATOR_CACHE_DIR: /data/seeds/cache
+      ODOO_GENERATOR_RUNS_DIR: /data/seeds/runs
     # Local default binds to loopback only, so a laptop instance is not on the
     # network at all. The server profile sets ODOO_GENERATOR_BIND=0.0.0.0 and
     # puts a TLS-terminating reverse proxy in front.

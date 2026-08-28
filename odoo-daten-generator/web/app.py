@@ -23,11 +23,13 @@ from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
 import connect_service
+import llm_service
 import run_config
 import server_config
 from logging_setup import configure_logging
 from odoo_client import OdooJson2Client
-from run_journal import RunJournal, delete_run, prune_journals, retention_days
+from run_journal import (RunJournal, delete_run, journal_dir_writable,
+                         prune_journals, retention_days)
 from web import security
 from web.jobs import AdmissionRefused, JobQueue
 from web.session import CSRF_HEADER, SESSION_COOKIE, SessionStore, check_access_code
@@ -121,6 +123,19 @@ async def _lifespan(_app: FastAPI):
     if not os.environ.get("ODOO_GENERATOR_ACCESS_CODE"):
         logger.warning("[web] ODOO_GENERATOR_ACCESS_CODE ist nicht gesetzt — "
                        "jede Anmeldung wird abgelehnt.")
+    # Probe the writable paths at startup. Both are configured by environment
+    # variable and both fail late and confusingly when wrong: the cache surfaced
+    # as a bare "[Errno 30] Read-only file system: '/data'" two minutes into a
+    # run, and an unwritable journal directory disables cleanup without saying so.
+    for label, problem, variable in (
+        ("Seed-Cache", llm_service.cache_dir_writable(), "ODOO_GENERATOR_CACHE_DIR"),
+        ("Run-Journal", journal_dir_writable(), "ODOO_GENERATOR_RUNS_DIR"),
+    ):
+        if problem:
+            logger.error(f"[web] {label}-Verzeichnis nicht beschreibbar — {problem}. "
+                         f"Prüfe {variable}. Die Container-Voreinstellung (/data/…) gilt "
+                         f"nur im Container.")
+
     janitor = asyncio.create_task(_janitor())
     try:
         yield

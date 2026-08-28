@@ -188,6 +188,36 @@ def run():
         results.append(("Cleanup: storniert zuerst und meldet den echten Grund", False, str(e)))
 
     # ------------------------------------------------------------------
+    # An unwritable cache directory degrades to "no caching", never aborts a run
+    # ------------------------------------------------------------------
+    try:
+        service = llm_service.LLMService.__new__(llm_service.LLMService)
+        unwritable = Path("/data/does-not-exist-on-this-host/cache")
+        with patch.object(llm_service, "_CACHE_DIR", unwritable), \
+             patch.object(llm_service, "_CACHE_WRITE_FAILED", False):
+            # Must not raise: the run has already paid for this data.
+            service._cache_save("slug", {"names": ["a"]})
+            service._cache_save("slug2", {"names": ["b"]})
+            assert llm_service._CACHE_WRITE_FAILED is True, "Fehler nicht vermerkt"
+            assert llm_service.cache_dir_writable() is not None, "Sonde meldet keinen Fehler"
+        results.append(("Cache: unbeschreibbares Verzeichnis bricht den Lauf nicht ab", True, ""))
+    except Exception as e:
+        results.append(("Cache: unbeschreibbares Verzeichnis bricht den Lauf nicht ab", False, str(e)))
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(llm_service, "_CACHE_DIR", Path(tmp)):
+                assert llm_service.cache_dir_writable() is None
+                assert not list(Path(tmp).glob(".write-probe")), "Sonde nicht aufgeräumt"
+            with patch.dict(os.environ, {"ODOO_GENERATOR_RUNS_DIR": tmp}):
+                assert run_journal.journal_dir_writable() is None
+            with patch.dict(os.environ, {"ODOO_GENERATOR_RUNS_DIR": "/data/nope/runs"}):
+                assert run_journal.journal_dir_writable() is not None
+        results.append(("Startsonde: erkennt beschreibbar und nicht beschreibbar", True, ""))
+    except Exception as e:
+        results.append(("Startsonde: erkennt beschreibbar und nicht beschreibbar", False, str(e)))
+
+    # ------------------------------------------------------------------
     # Retention — a journal names the target host, which is prospect-identifying
     # ------------------------------------------------------------------
     try:

@@ -116,6 +116,23 @@ def retention_days() -> int:
         return 7
 
 
+def journal_dir_writable() -> Optional[str]:
+    """Probe the run-journal directory. Returns an error string, or None if fine.
+
+    A silently unwritable journal is worse than a loud one: the run works, but
+    nothing is recorded, so nothing can be cleaned up afterwards.
+    """
+    directory = default_journal_dir()
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        probe = directory / ".write-probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        return None
+    except OSError as exc:
+        return f"{directory}: {exc}"
+
+
 def prune_journals(directory: Optional[Path] = None, days: Optional[int] = None) -> int:
     """Delete run journals older than the retention window. Returns the count.
 
