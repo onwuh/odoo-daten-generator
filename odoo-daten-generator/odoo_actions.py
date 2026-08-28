@@ -9,6 +9,9 @@ Domain-specific helpers live in their respective modules:
 import logging
 from typing import Any, Dict, List, Optional, Set
 
+import data_factory
+from odoo_repository import resolve_country_ids
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,6 +41,72 @@ def create_employee(client, name: str) -> int:
     """
     logger.info(f"-> Creating Employee: {name}")
     return client.create('hr.employee', {"name": name})
+
+
+def post_invoices(client, move_ids):
+    """Posts account.move records (batch, falling back to per-id on failure)."""
+    logger.info(f"-> Posting invoices: {move_ids}")
+    try:
+        client.call_method('account.move', 'action_post', ids=move_ids)
+        return True
+    except Exception as e:
+        logger.warning(f"[post_invoices] Batch post failed ({e}), retrying individually...")
+        success_count = 0
+        for mid in move_ids:
+            try:
+                client.call_method('account.move', 'action_post', ids=[mid])
+                success_count += 1
+            except Exception as e2:
+                logger.warning(f"[post_invoices] Failed to post move {mid}: {e2}")
+        return success_count > 0
+
+
+def create_suppliers(client, names) -> List[int]:
+    """Creates supplier res.partner records with a full address (via
+    data_factory.build_company), not just a bare name.
+
+    Shared by accounting.py (standalone vendor bills) and purchase.py (POs) so
+    a run with both active draws from the same ctx.supplier_ids pool.
+    """
+    country_map = resolve_country_ids(client, ["DE", "AT", "CH"])
+    supplier_ids = []
+    for sname in names:
+        vals = data_factory.build_company(sname)
+        country_code = vals.pop('country_code')
+        if country_code in country_map:
+            vals['country_id'] = country_map[country_code]
+        vals['supplier_rank'] = 1
+        sid = client.create('res.partner', vals)
+        supplier_ids.append(sid)
+    return supplier_ids
+
+
+def get_default_warehouse(client, company_id) -> Optional[Dict[str, int]]:
+    """Returns the company's stock location + incoming picking type, or None.
+
+    Shared by purchase.py (PO picking_type_id) and inventory.py (quant
+    location_id). Distinct from mrp.py's get_manufacturing_picking_type_id,
+    which searches stock.picking.type directly for the mrp_operation code.
+    """
+    warehouses = client.search_read(
+        'stock.warehouse', [["company_id", "=", company_id]],
+        fields=["lot_stock_id", "in_type_id"], limit=1,
+    )
+    if not warehouses:
+        return None
+    wh = warehouses[0]
+    stock_location_id = wh.get("lot_stock_id")
+    if isinstance(stock_location_id, (list, tuple)):
+        stock_location_id = stock_location_id[0]
+    incoming_picking_type_id = wh.get("in_type_id")
+    if isinstance(incoming_picking_type_id, (list, tuple)):
+        incoming_picking_type_id = incoming_picking_type_id[0]
+    if not stock_location_id or not incoming_picking_type_id:
+        return None
+    return {
+        "stock_location_id": stock_location_id,
+        "incoming_picking_type_id": incoming_picking_type_id,
+    }
 
 
 def get_installed_modules(client, wanted_modules: List[str]) -> Set[str]:
@@ -91,6 +160,28 @@ def get_enabled_features(client, installed_modules=None) -> Dict[str, bool]:
             flags['crm_leads'] = False
 
     return flags
+
+
+def get_main_company_id(client) -> Optional[int]:
+    """Returns the id of the main res.company (tries id=1 first, falls back
+    to the first company found), or None.
+
+    NOT the same as RunContext.company_ids, which despite its name holds
+    res.partner ids (customer/company contacts created by master_data.py,
+    e.g. sale.py uses ctx.company_ids[i] as a sale.order partner_id) — never
+    a real res.company id. Use this helper wherever an actual res.company id
+    is needed (e.g. stock.warehouse/purchase.order/stock.quant company_id).
+    """
+    try:
+        companies = client.search_read('res.company', [["id", "=", 1]], fields=["id"], limit=1)
+        if companies:
+            return companies[0]["id"]
+        companies = client.search_read('res.company', [], fields=["id"], limit=1)
+        if companies:
+            return companies[0]["id"]
+    except Exception as e:
+        logger.warning(f"-> Warning: Could not determine main company id: {e}")
+    return None
 
 
 def get_main_company_name(client) -> Optional[str]:

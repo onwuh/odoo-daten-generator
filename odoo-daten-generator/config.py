@@ -41,6 +41,14 @@ class ModuleSelections:
     documents: dict = field(default_factory=dict)
     # documents shape: {"bill_pdfs_enabled": bool, "cv_pdfs_enabled": bool}
     # empty dict → both stages disabled
+    purchase: int = 0                    # number of purchase orders to create; 0 = skip
+    purchase_confirm_pct: int = 70       # % of created POs to confirm, mirrors sale_confirm_pct
+    stock: dict = field(default_factory=dict)
+    # stock shape: {"avg_qty": int} — dict-gated like mrp/documents, NOT a bare int:
+    # orchestrator.py's module_order key must equal this field's name ("stock") exactly,
+    # since ModuleSelections.get(module_code) is getattr(self, module_code) below and the
+    # gate is `elif not sel: continue` — a scalar int field named e.g. stock_avg_qty paired
+    # with module_code "stock" would look up a nonexistent attribute and always skip silently.
 
     def get(self, key: str, default=None):
         return getattr(self, key, default)
@@ -80,3 +88,6 @@ class RunContext:
     invoice_ids: List[int] = field(default_factory=list)
     bill_ids: List[int] = field(default_factory=list)
     applicant_ids: List[int] = field(default_factory=list)
+    # Vendor partners (supplier_rank>0) created this run — shared between accounting.py's
+    # standalone vendor bills and purchase.py's POs so both draw from the same supplier set.
+    supplier_ids: List[int] = field(default_factory=list)

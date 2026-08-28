@@ -33,6 +33,8 @@ from tests.integration import (
     test_hr,
     test_project,
     test_recruiting,
+    test_purchase,
+    test_inventory,
     test_documents,
 )
 
@@ -64,6 +66,8 @@ _MODULES = [
     ("project",     test_project.run),
     ("accounting",  test_accounting.run),
     ("recruiting",  test_recruiting.run),
+    ("purchase",    test_purchase.run),
+    ("inventory",   test_inventory.run),
     ("documents",   test_documents.run),
 ]
 
@@ -151,7 +155,8 @@ def main():
     client = OdooJson2Client(url, db, api_key)
     ctx = TestContext()
 
-    _WANTED = ["crm", "sale", "account", "hr", "project", "hr_timesheet", "mrp", "hr_recruitment"]
+    _WANTED = ["crm", "sale", "account", "hr", "project", "hr_timesheet", "mrp", "hr_recruitment",
+               "purchase", "stock"]
     ctx.installed_modules = odoo_actions.get_installed_modules(client, _WANTED)
     print(f"[modules] Installed: {', '.join(sorted(ctx.installed_modules)) or '–'}")
 

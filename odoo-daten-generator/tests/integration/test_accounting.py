@@ -6,10 +6,11 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+import odoo_actions
 from modules.accounting import (
-    create_customer_invoice, post_invoices, _introduce_typo,
+    create_customer_invoice, _introduce_typo,
     create_vendor_bill, create_bank_transactions_for_all_invoices,
-    get_or_create_bank_journal, _create_suppliers,
+    get_or_create_bank_journal,
     create_invoices_from_orders, create_accounting_data,
 )
 from modules.sale import create_sale_order, confirm_sale_orders
@@ -64,7 +65,7 @@ def run(client, ctx):
     # Step 2 — Post invoice
     try:
         assert inv_id, "No invoice created in step 1"
-        post_invoices(client, [inv_id])
+        odoo_actions.post_invoices(client, [inv_id])
         rec = client.search_read(
             'account.move',
             [["id", "=", inv_id]],
@@ -144,7 +145,7 @@ def run(client, ctx):
         # Second batch: a fresh invoice — must NOT re-pull the first batch's
         # invoice/bill (that would happen with the old DB-wide "state=posted" query)
         inv2_id = create_customer_invoice(client, partner_id, [product_id])
-        post_invoices(client, [inv2_id])
+        odoo_actions.post_invoices(client, [inv2_id])
         inv2_rec = client.search_read('account.move', [["id", "=", inv2_id]], fields=["amount_total"], limit=1)
         inv2_amount = inv2_rec[0]["amount_total"]
 
@@ -177,7 +178,7 @@ def run(client, ctx):
 
     # Step 6 — A1: suppliers get a full address (street/country_id), not a bare name
     try:
-        supplier_ids = _create_suppliers(client, ["Integration Test Lieferant GmbH"])
+        supplier_ids = odoo_actions.create_suppliers(client, ["Integration Test Lieferant GmbH"])
         assert len(supplier_ids) == 1 and isinstance(supplier_ids[0], int) and supplier_ids[0] > 0
         rec = client.search_read(
             'res.partner', [["id", "=", supplier_ids[0]]],

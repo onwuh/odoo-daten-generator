@@ -71,7 +71,7 @@ def run():
         assert client.create_batch.call_count == 2, client.create_batch.call_count
         batched_models = [call.args[0] for call in client.create_batch.call_args_list]
         assert batched_models == ['account.move', 'account.move'], batched_models
-        # _create_suppliers legitimately still creates res.partner individually
+        # odoo_actions.create_suppliers legitimately still creates res.partner individually
         # (out of D3 scope for this module) — only account.move must never go
         # through per-record create().
         individually_created_models = [call.args[0] for call in client.create.call_args_list]
@@ -231,7 +231,7 @@ def run():
     # ------------------------------------------------------------------
     # B7 (Pattern 3 — Feature-Flag Skip): account_bills=0 with a non-empty
     # purchase_pool and num_invoices>0 skips vendor-bill creation entirely,
-    # including the now-pointless _create_suppliers call — this is a zero
+    # including the now-pointless odoo_actions.create_suppliers call — this is a zero
     # *count* gating a sub-path, not an empty pool, hence Pattern 3.
     # ------------------------------------------------------------------
     try:
@@ -248,10 +248,10 @@ def run():
         batched_models = [call.args[0] for call in client.create_batch.call_args_list]
         assert batched_models == ['account.move'], batched_models
         supplier_creates = [c for c in client.create.call_args_list if c.args[0] == 'res.partner']
-        assert not supplier_creates, f"_create_suppliers should not run when account_bills=0: {supplier_creates}"
-        results.append(("B7: account_bills=0 -> no bills, no _create_suppliers call (Pattern 3)", True, ""))
+        assert not supplier_creates, f"odoo_actions.create_suppliers should not run when account_bills=0: {supplier_creates}"
+        results.append(("B7: account_bills=0 -> no bills, no odoo_actions.create_suppliers call (Pattern 3)", True, ""))
     except AssertionError as e:
-        results.append(("B7: account_bills=0 -> no bills, no _create_suppliers call (Pattern 3)", False, str(e)))
+        results.append(("B7: account_bills=0 -> no bills, no odoo_actions.create_suppliers call (Pattern 3)", False, str(e)))
 
     # ------------------------------------------------------------------
     # B7: account_bills=0 combined with create_bank_transactions=True must
