@@ -31,7 +31,12 @@ itself is untouched: S9 replaces the caller, not `orchestrator.py`.
 - `Dockerfile`, `docker-compose.yml`, `.env.example` — one image, `local` and
   `server` profiles differing only in bind address, TLS, access code and inbound.
 - Web-layer tests in `unit_suite.py` (guards matrix, CSRF, session isolation,
-  admission control, redaction, cache atomicity) and a live `test_run_journal.py`.
+  admission control, redaction, cache atomicity, rate-limit backoff, session and
+  run expiry) and a live `test_run_journal.py`.
+- Janitor task expiring abandoned sessions (and their in-memory credentials),
+  finished run records with their event streams, and run journals past
+  `ODOO_GENERATOR_LOG_RETENTION_DAYS`. Without it "credentials are discarded on
+  expiry" was only true for a session someone touched again.
 
 #### Changed
 - `logging_setup.py` — run-scoped logging via a `contextvars` run id plus a
@@ -52,6 +57,22 @@ itself is untouched: S9 replaces the caller, not `orchestrator.py`.
   unreachable from a real run until now.
 - Default LLM model → `qwen/qwen3.8-27b`. Groq retired
   `llama-3.3-70b-versatile`; the previous default 404s.
+- `odoo_client._send()` retries a 429/503 with bounded exponential backoff. The
+  demo SaaS instance sustains roughly 1 req/s; batching stays the primary
+  mitigation (this is why `create_batch` and test Pattern 8 exist) and the
+  backoff only covers what batching cannot remove.
+- `POST /api/runs` rejects `skip_master_data` without `use_existing`. The browser
+  already prevented the combination; via the API it produced a run where every
+  module hit its Pattern-5 skip path.
+
+#### Fixed
+- Frontend visibility moved from inline `style="display:none"` to an `.is-hidden`
+  class. Under `style-src 'self'` the browser ignores parsed style attributes, so
+  every panel meant to start hidden rendered — including the Odoo credential form
+  before login.
+- `.app-shell` constrained to the viewport and `min-height: 0` added to `.main`,
+  so `.view-scroll`'s `overflow-y: auto` has something to scroll instead of the
+  whole document growing (rail and footer included).
 
 #### Removed
 - `gui.py` and the whole CustomTkinter wizard.

@@ -34,6 +34,15 @@
     return node;
   }
 
+  // Visibility is a class, never an inline style: the CSP is `style-src 'self'`
+  // with no 'unsafe-inline', which makes a parsed style="display:none" attribute
+  // in index.html a no-op — panels that should start hidden would render. Class
+  // toggling is unaffected and works in both directions.
+  function setHidden(node, hidden) {
+    if (typeof node === "string") node = $(node);
+    if (node) node.classList.toggle("is-hidden", !!hidden);
+  }
+
   function setText(id, value) {
     var node = $(id);
     if (node) node.textContent = value === null || value === undefined ? "" : String(value);
@@ -249,8 +258,7 @@
           stepper("crm-leads", "Anzahl Leads", "nur wenn Leads-Feature aktiv", 0, 0, 200),
         ]));
         body.appendChild(checkLine("crm-chatter-toggle", "Chatter-Konversationen erstellen", "", true));
-        var sub = el("div");
-        sub.style.paddingLeft = "22px";
+        var sub = el("div", "sub-block");
         sub.appendChild(el("div", "sub-caption", "Konversationsstil"));
         var radios = el("div", "radio-set");
         [["notes_only", "Nur interne Notizen", false],
@@ -271,8 +279,7 @@
         body.appendChild(sub);
 
         body.appendChild(checkLine("crm-act-toggle", "Aktivitäten erstellen", "", true));
-        var actSub = el("div");
-        actSub.style.paddingLeft = "22px";
+        var actSub = el("div", "sub-block");
         actSub.appendChild(slider("crm-past", "Vergangenheit %", 30, 0, 100));
         actSub.appendChild(slider("crm-today", "Heute %", 20, 0, 100));
         var tag = el("span", "future-tag", "Zukunft: 50%");
@@ -333,8 +340,7 @@
       build: function (body) {
         body.appendChild(grid([stepper("hr-count", "Anzahl Mitarbeiter", "", 10, 0, 200)]));
         body.appendChild(checkLine("hr-to-toggle", "Urlaubsdaten erstellen", "", true));
-        var sub = el("div");
-        sub.style.paddingLeft = "22px";
+        var sub = el("div", "sub-block");
         sub.appendChild(grid([stepper("hr-to-entries", "Urlaubsanträge pro Mitarbeiter", "", 2, 1, 20)]));
         sub.appendChild(slider("hr-avglen", "Ø Urlaubsdauer (Tage)", 5, 1, 30, ""));
         sub.appendChild(slider("hr-pf", "Vergangenheit ← → Zukunft", 30, 0, 100));
@@ -412,7 +418,7 @@
           stepper("rec-skilltypes", "Anzahl Kompetenzarten", "", 3, 0, 20),
           stepper("rec-skillsper", "Kompetenzen pro Kompetenzart", "", 4, 0, 20),
         ]);
-        sub.style.paddingLeft = "22px";
+        sub.classList.add("sub-block");
         body.appendChild(sub);
       },
       collect: function () {
@@ -501,13 +507,13 @@
     Array.prototype.forEach.call(modeSeg.children, function (c) {
       c.classList.toggle("active", c === b);
     });
-    $("module-section").style.display = b.dataset.mode === "both" ? "" : "none";
+    setHidden("module-section", b.dataset.mode !== "both");
     updateConfigSummary();
   });
 
   $("chk-skip-master").addEventListener("change", function () {
     var skip = checked("chk-skip-master");
-    $("master-data-block").style.display = skip ? "none" : "";
+    setHidden("master-data-block", skip);
     if (skip) $("chk-use-existing").checked = true;
     updateConfigSummary();
   });
@@ -560,8 +566,8 @@
         state.csrf = data.csrf_token;
         $("f-access").value = "";
         setText("login-hint", "Angemeldet.");
-        $("panel-login").style.display = "none";
-        $("panel-connect").style.display = "";
+        setHidden("panel-login", true);
+        setHidden("panel-connect", false);
       })
       .catch(function (err) {
         setText("login-hint", err.message);
@@ -578,7 +584,7 @@
   function validateUrlField() {
     var ok = DEMO_URL_RE.test((urlField.value || "").trim());
     urlField.classList.toggle("invalid", !ok);
-    $("f-url-error").style.display = ok ? "none" : "";
+    setHidden("f-url-error", ok);
     $("btn-connect").disabled = !ok;
     return ok;
   }
@@ -604,7 +610,7 @@
     var button = this;
     button.disabled = true;
     setText("connect-hint", "Verbindung wird geprüft…");
-    $("panel-checklist").style.display = "";
+    setHidden("panel-checklist", false);
     clear($("checklist"));
 
     api("/api/connect", {
@@ -637,14 +643,14 @@
     setText("chip-company-text", data.company_name || "unbekannt");
     var version = $("chip-version");
     if (data.odoo_version) {
-      version.style.display = "";
+      setHidden(version, false);
       version.textContent = data.odoo_version;
     } else {
-      version.style.display = "none";
+      setHidden(version, true);
     }
     var lang = $("chip-lang");
     if (data.language_code) {
-      lang.style.display = "";
+      setHidden(lang, false);
       lang.textContent = data.language_code;
     }
     setText("server-tag", (urlField.value || "").replace(/^https:\/\//, ""));
@@ -731,8 +737,8 @@
         clear($("console"));
         renderProgressList(data.modules || []);
         setText("stat-status", "in Warteschlange");
-        $("panel-run-errors").style.display = "none";
-        $("btn-cleanup").style.display = "none";
+        setHidden("panel-run-errors", true);
+        setHidden("btn-cleanup", true);
         setText("cleanup-hint", "");
         showView("run");
         subscribe(data.run_id);
@@ -802,11 +808,11 @@
           "[" + (idx + 1) + "] " + (err.status_code || "?") + " " +
           (err.error_message || "") + " " + (err.error_body || "")));
       });
-      $("panel-run-errors").style.display = "";
+      setHidden("panel-run-errors", false);
     }
 
     if (data.status === "done" || data.status === "failed") {
-      $("btn-cleanup").style.display = data.journal_records ? "" : "none";
+      setHidden("btn-cleanup", !data.journal_records);
     }
   }
 
@@ -832,7 +838,7 @@
   renderModuleGrid([]);
   api("/api/session").then(function (data) {
     state.csrf = data.csrf_token;
-    $("panel-login").style.display = "none";
-    $("panel-connect").style.display = "";
+    setHidden("panel-login", true);
+    setHidden("panel-connect", false);
   }).catch(function () { /* not logged in yet — the login panel stays */ });
 })();

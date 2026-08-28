@@ -32,8 +32,8 @@
   <div class="main">
     <div class="status-strip">
       <span class="chip" id="chip-company"><span class="dot"></span> <span id="chip-company-text">noch nicht verbunden</span></span>
-      <span class="chip" id="chip-version" style="display:none"></span>
-      <span class="chip" id="chip-lang" style="display:none"></span>
+      <span class="chip is-hidden" id="chip-version"></span>
+      <span class="chip is-hidden" id="chip-lang"></span>
       <span class="fill"></span>
       <span class="server-tag" id="server-tag">kein Ziel</span>
     </div>
@@ -55,7 +55,7 @@
             <label for="f-access">Zugangscode</label>
             <input id="f-access" type="password" autocomplete="off">
           </div>
-          <div style="margin-top:14px; display:flex; gap:10px;">
+          <div class="btn-row">
             <button class="btn" id="btn-login">Anmelden</button>
             <span id="login-hint" class="inline-hint"></span>
           </div>
@@ -63,7 +63,7 @@
 
         <div class="note settled" id="note-security">
           <div><b>Sicherheitsregeln dieser Instanz:</b>
-            <ul style="font-size:12.5px; color:var(--ink-dim);">
+            <ul class="note-list">
               <li>Nur <code class="f">demo-*.odoo.com</code> als Ziel — der Server prüft das unabhängig vom Browser.</li>
               <li>Zugangsdaten bleiben ausschließlich im Arbeitsspeicher der Sitzung: keine Datei, keine Datenbank, kein Log.</li>
               <li>Kein Inhalt aus der Zieldatenbank wird an den LLM-Anbieter geschickt.</li>
@@ -71,7 +71,7 @@
           </div>
         </div>
 
-        <div class="panel" id="panel-connect" style="display:none;">
+        <div class="panel is-hidden" id="panel-connect">
           <h2>Odoo-Verbindung</h2>
           <div class="field-row">
             <label for="f-url">Odoo URL</label>
@@ -88,16 +88,16 @@
           <div class="field-row"><label for="f-llmkey">LLM API-Schlüssel</label><input id="f-llmkey" type="password" autocomplete="off"></div>
           <div class="field-row"><label for="f-llmmodel">LLM Modell</label><input id="f-llmmodel" type="text" value="qwen/qwen3.8-27b" autocomplete="off"></div>
 
-          <div style="margin-top:16px; display:flex; gap:10px;">
+          <div class="btn-row">
             <button class="btn" id="btn-connect">Verbinden →</button>
             <span id="connect-hint" class="inline-hint"></span>
           </div>
         </div>
 
-        <div class="panel" id="panel-checklist" style="display:none;">
+        <div class="panel is-hidden" id="panel-checklist">
           <h2>Umgebungsstatus</h2>
           <div class="checklist" id="checklist"></div>
-          <div style="margin-top:14px;">
+          <div class="mt-14">
             <button class="btn" id="btn-to-config" data-goto="config">Weiter zur Konfiguration →</button>
           </div>
         </div>
@@ -121,7 +121,7 @@
             <button type="button" data-mode="both">Stammdaten + Bewegungsdaten</button>
           </div>
 
-          <div style="margin-top:14px;">
+          <div class="mt-14">
             <label class="check-line"><input type="checkbox" id="chk-use-existing" checked> Vorhandene Daten einbeziehen <span class="sub" id="existing-sub">(noch nicht geprüft)</span></label>
             <label class="check-line"><input type="checkbox" id="chk-skip-master"> Keine neuen Stammdaten anlegen <span class="sub">(nur vorhandene verwenden)</span></label>
           </div>
@@ -144,8 +144,8 @@
           </div>
         </div>
 
-        <div id="module-section" style="display:none;">
-          <div class="view-head" style="margin-top:6px;">
+        <div id="module-section" class="is-hidden">
+          <div class="view-head mt-6">
             <h2 class="section-caption">Module (nur bei Bewegungsdaten)</h2>
           </div>
           <div class="module-grid" id="module-grid"></div>
@@ -182,7 +182,7 @@
         <div class="panel">
           <h2>Datensätze dieses Laufs</h2>
           <div class="kv-grid" id="preflight-records"></div>
-          <div class="note" style="margin-top:14px;">
+          <div class="note mt-14">
             <div><b>Odoo legt zusätzlich selbst an:</b> je bestätigtem Dienstleistungsauftrag ein Projekt mit Aufgabe,
               Rechnungen über den Rechnungsassistenten, Eingangsrechnungen aus bestätigten Bestellungen und die
               Lagerbuchungen der Bestandskorrektur. Diese Datensätze sind oben nicht mitgezählt.</div>
@@ -213,7 +213,7 @@
         </div>
 
         <div class="gen-layout">
-          <div class="panel" style="margin:0;">
+          <div class="panel m-0">
             <h2>Module</h2>
             <div id="progress-list"></div>
           </div>
@@ -231,14 +231,14 @@
           <div class="stat"><div class="k">Erstellte Datensätze</div><div class="v" id="stat-records">0</div></div>
         </div>
 
-        <div class="panel" id="panel-run-errors" style="display:none;">
+        <div class="panel is-hidden" id="panel-run-errors">
           <h2>API-Fehler</h2>
           <div id="run-errors"></div>
         </div>
 
         <div class="gen-actions">
           <button class="btn ghost" data-goto="config">← Konfiguration anpassen</button>
-          <button class="btn ghost" id="btn-cleanup" style="display:none;">Diesen Lauf löschen</button>
+          <button class="btn ghost is-hidden" id="btn-cleanup">Diesen Lauf löschen</button>
           <button class="btn" data-goto="connect">Neu starten</button>
         </div>
         <div class="inline-hint" id="cleanup-hint"></div>

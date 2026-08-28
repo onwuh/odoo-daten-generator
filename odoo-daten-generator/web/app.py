@@ -26,7 +26,7 @@ import connect_service
 import run_config
 from logging_setup import configure_logging
 from odoo_client import OdooJson2Client
-from run_journal import RunJournal, delete_run
+from run_journal import RunJournal, delete_run, prune_journals, retention_days
 from web import security
 from web.jobs import AdmissionRefused, JobQueue
 from web.session import CSRF_HEADER, SESSION_COOKIE, SessionStore, check_access_code
@@ -74,17 +74,49 @@ sessions = SessionStore()
 broker = EventBroker()
 jobs = JobQueue(broker)
 
+# How often the janitor runs, and how long a finished run stays queryable.
+SWEEP_INTERVAL_SECONDS = 300
+FINISHED_RUN_TTL_SECONDS = 3600
+
+
+async def _janitor() -> None:
+    """Expire abandoned sessions, finished runs and stale run journals.
+
+    None of this is cosmetic. Session credentials are only dropped on the next
+    touch of that session, so without a periodic sweep an abandoned session keeps
+    its Odoo and LLM keys in memory for the life of the process — which
+    contradicts the "discarded on expiry" promise the UI makes. Run records and
+    their event streams are likewise never released on their own.
+    """
+    while True:
+        try:
+            await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
+            expired = sessions.sweep()
+            pruned = jobs.prune(FINISHED_RUN_TTL_SECONDS)
+            journals = await asyncio.to_thread(prune_journals)
+            if expired or pruned or journals:
+                logger.info(f"[web] Aufräumen: {expired} Sitzung(en), {pruned} Lauf/Läufe, "
+                            f"{journals} Journal(e) entfernt")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # a janitor must never take the app down
+            logger.warning(f"[web] Aufräumen fehlgeschlagen: {exc}")
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     jobs.start()
     logger.info(f"[web] Profil={profile()} Worker={jobs.workers} "
-                f"Cookie-Secure={cookie_secure()}")
+                f"Cookie-Secure={cookie_secure()} "
+                f"Journal-Aufbewahrung={retention_days()}d")
     if not os.environ.get("ODOO_GENERATOR_ACCESS_CODE"):
         logger.warning("[web] ODOO_GENERATOR_ACCESS_CODE ist nicht gesetzt — "
                        "jede Anmeldung wird abgelehnt.")
+    janitor = asyncio.create_task(_janitor())
     try:
         yield
     finally:
+        janitor.cancel()
         jobs.stop()
 
 
@@ -252,6 +284,15 @@ async def api_connect(request: Request, session=Depends(get_session_csrf)) -> Di
 async def api_create_run(request: Request, session=Depends(get_session_csrf)) -> JSONResponse:
     _connected(session)
     body = await request.json()
+    if body.get("skip_master_data") and not body.get("use_existing"):
+        # The browser forces use_existing on when skip_master_data is ticked; a
+        # direct API call could ask for neither new master data nor existing IDs,
+        # which leaves every module with an empty pool and Pattern-5-skips the
+        # whole run. Exactly the silent-disable class this sprint set out to close.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="'skip_master_data' ohne 'use_existing' ergibt einen Lauf ohne "
+                   "Stammdaten — jedes Modul würde übersprungen.")
     try:
         record = jobs.submit(session=session, payload=body)
     except run_config.ConfigError as exc:

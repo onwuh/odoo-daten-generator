@@ -21,6 +21,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -105,6 +106,40 @@ class RunJournal:
             journal._target = data.get("target")
             journal.entries = [(r["model"], int(r["id"])) for r in data.get("records", [])]
         return journal
+
+
+def retention_days() -> int:
+    """How long run journals are kept. 0 disables pruning."""
+    try:
+        return max(0, int(os.environ.get("ODOO_GENERATOR_LOG_RETENTION_DAYS", "") or 7))
+    except ValueError:
+        return 7
+
+
+def prune_journals(directory: Optional[Path] = None, days: Optional[int] = None) -> int:
+    """Delete run journals older than the retention window. Returns the count.
+
+    A journal records the target host, and `demo-<prospect>.odoo.com` is
+    prospect-identifying. Retention is the control for that — there is no code
+    fix for a hostname that has to be in the file for cleanup to work — so the
+    window has to actually be enforced rather than merely documented.
+    """
+    directory = Path(directory) if directory else default_journal_dir()
+    window = retention_days() if days is None else days
+    if window <= 0 or not directory.exists():
+        return 0
+    cutoff = time.time() - window * 86400
+    removed = 0
+    for path in directory.glob("*.json"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+                removed += 1
+        except OSError as exc:
+            logger.warning(f"Run-Journal {path.name} nicht löschbar: {exc}")
+    if removed:
+        logger.info(f"{removed} Run-Journal(e) älter als {window} Tage entfernt.")
+    return removed
 
 
 class JournalingClient(OdooJson2Client):

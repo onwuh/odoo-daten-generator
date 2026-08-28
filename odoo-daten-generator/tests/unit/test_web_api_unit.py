@@ -303,6 +303,66 @@ def run():
         results.append(("Redaktion: Lauf-Zusammenfassung führt keinen rohen Körper", False, str(e)))
 
     # ------------------------------------------------------------------
+    # Expiry actually happens: credentials are dropped by a sweep, not merely
+    # on the next touch of the session
+    # ------------------------------------------------------------------
+    try:
+        from web.session import SessionStore
+        store = SessionStore(ttl_seconds=0)
+        session = store.create()
+        session.odoo_key = "secret-odoo"
+        session.llm_key = "secret-llm"
+        assert store.count() == 1
+        time.sleep(0.01)
+        assert store.sweep() == 1, "abgelaufene Sitzung nicht weggeräumt"
+        assert store.count() == 0
+        assert session.odoo_key is None and session.llm_key is None, \
+            "Zugangsdaten nach dem Wegräumen noch im Objekt"
+        results.append(("Sitzungen: sweep() entfernt Sitzung und löscht Zugangsdaten", True, ""))
+    except Exception as e:
+        results.append(("Sitzungen: sweep() entfernt Sitzung und löscht Zugangsdaten", False, str(e)))
+
+    try:
+        # Finished runs and their event streams must be released too, or both
+        # dicts grow for the life of the process.
+        broker = EventBroker()
+        queue_obj = JobQueue(broker, workers=1)
+        with patch("web.jobs.JournalingClient"), patch("web.jobs.LLMService"), \
+             patch("orchestrator.run"), patch("web.jobs.per_session_limit", return_value=5):
+            queue_obj.start()
+            record = queue_obj.submit(session=_fake_session("s-prune"), payload=_PAYLOAD)
+            deadline = time.time() + 5
+            while record.status != STATUS_DONE and time.time() < deadline:
+                time.sleep(0.05)
+            queue_obj.stop()
+        assert broker.get(record.run_id) is not None, "Stream vor dem Aufräumen weg"
+        assert queue_obj.prune(max_age_seconds=0) == 1
+        assert queue_obj.get(record.run_id) is None, "Lauf-Datensatz nicht entfernt"
+        assert broker.get(record.run_id) is None, "Ereignisstrom nicht entfernt"
+        results.append(("Läufe: prune() gibt Datensatz und Ereignisstrom frei", True, ""))
+    except Exception as e:
+        results.append(("Läufe: prune() gibt Datensatz und Ereignisstrom frei", False, str(e)))
+
+    try:
+        # The browser forces use_existing on when skip_master_data is ticked; the
+        # API must not accept the combination that skips every module silently.
+        with TestClient(web_app.app) as client:
+            csrf = _login(client)
+            _connect(client, csrf)
+            payload = dict(_PAYLOAD, skip_master_data=True, use_existing=False)
+            response = client.post("/api/runs", headers=_auth_headers(csrf), json=payload)
+            assert response.status_code == 400, response.status_code
+            ok_payload = dict(_PAYLOAD, skip_master_data=True, use_existing=True)
+            with patch("web.jobs.JournalingClient"), patch("web.jobs.LLMService"), \
+                 patch("orchestrator.run"):
+                allowed = client.post("/api/runs", headers=_auth_headers(csrf), json=ok_payload)
+                assert allowed.status_code == 202, allowed.text
+                time.sleep(0.3)
+        results.append(("Lauf: skip_master_data ohne use_existing wird abgelehnt", True, ""))
+    except Exception as e:
+        results.append(("Lauf: skip_master_data ohne use_existing wird abgelehnt", False, str(e)))
+
+    # ------------------------------------------------------------------
     # Security headers: CSP with no inline scripts, plus the usual set
     # ------------------------------------------------------------------
     try:

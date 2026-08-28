@@ -102,7 +102,13 @@
   .app-shell {
     display: grid;
     grid-template-columns: 232px 1fr;
-    min-height: 100vh;
+    /* height, not min-height: the mockup used min-height, which let a long view
+       grow the page so the whole document scrolled — rail and config footer
+       included — and left .view-scroll's overflow-y:auto with nothing to do.
+       Constraining the shell to the viewport makes .view-scroll the scroller,
+       which is what the rest of this layout is built for. */
+    height: 100vh;
+    overflow: hidden;
   }
 
   /* ---------- Sidebar ---------- */
@@ -175,7 +181,11 @@
   .dot.bad { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
 
   /* ---------- Main ---------- */
-  .main { min-width: 0; display: flex; flex-direction: column; }
+  /* min-height: 0 is load-bearing, not tidiness: a grid item defaults to
+     min-height:auto, so without it .main cannot shrink below its content and the
+     overflow-y:auto on .view-scroll below never has anything to scroll — the
+     content is simply clipped by the shell instead. */
+  .main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 
   .status-strip {
     display: flex; align-items: center; gap: 10px;
@@ -708,3 +718,15 @@
 }
 
 input.invalid { border-color: var(--bad); }
+
+/* Visibility is a class, not an inline style: the CSP is `style-src 'self'`
+   without 'unsafe-inline', which makes a parsed style="display:none" attribute
+   in the markup a no-op. Panels that must start hidden carry .is-hidden. */
+.is-hidden { display: none !important; }
+
+.btn-row { margin-top: 16px; display: flex; gap: 10px; }
+.mt-6 { margin-top: 6px; }
+.mt-14 { margin-top: 14px; }
+.m-0 { margin: 0; }
+.note-list { font-size: 12.5px; color: var(--ink-dim); }
+.sub-block { padding-left: 22px; }

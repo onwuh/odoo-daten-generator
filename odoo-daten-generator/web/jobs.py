@@ -200,6 +200,26 @@ class JobQueue:
         with self._lock:
             return [r for r in self._runs.values() if r.session_id == session_id]
 
+    def prune(self, max_age_seconds: float = 3600.0) -> int:
+        """Drop finished run records (and their event streams) past max_age.
+
+        Without this both dicts grow for the life of the process: `_runs` is
+        never pruned and `_execute` closes a stream but never forgets it, so up
+        to MAX_EVENTS events per run stay resident. Invisible on a laptop,
+        an unbounded leak on a long-lived server process.
+        """
+        cutoff = time.time() - max_age_seconds
+        with self._lock:
+            stale = [rid for rid, rec in self._runs.items()
+                     if rec.status in (STATUS_DONE, STATUS_FAILED)
+                     and (rec.finished_at or rec.created_at) < cutoff]
+            for run_id in stale:
+                self._runs.pop(run_id, None)
+                self._jobs.pop(run_id, None)
+        for run_id in stale:
+            self.broker.forget(run_id)
+        return len(stale)
+
     # -- internals ------------------------------------------------------
     def _publish(self, run_id: str, event_type: str, data: Any) -> None:
         stream = self.broker.get(run_id)

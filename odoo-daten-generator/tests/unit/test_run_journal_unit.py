@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -185,6 +186,44 @@ def run():
         results.append(("Cleanup: storniert zuerst und meldet den echten Grund", True, ""))
     except Exception as e:
         results.append(("Cleanup: storniert zuerst und meldet den echten Grund", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # Retention — a journal names the target host, which is prospect-identifying
+    # ------------------------------------------------------------------
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            old_file = Path(tmp) / "demo-old.json"
+            new_file = Path(tmp) / "demo-new.json"
+            old_file.write_text('{"run_id": "demo-old", "records": []}', encoding="utf-8")
+            new_file.write_text('{"run_id": "demo-new", "records": []}', encoding="utf-8")
+            ancient = time.time() - 30 * 86400
+            os.utime(old_file, (ancient, ancient))
+
+            removed = run_journal.prune_journals(Path(tmp), days=7)
+            assert removed == 1, removed
+            assert not old_file.exists(), "altes Journal nicht entfernt"
+            assert new_file.exists(), "aktuelles Journal fälschlich entfernt"
+
+            # 0 disables pruning entirely rather than deleting everything.
+            ancient2 = time.time() - 30 * 86400
+            os.utime(new_file, (ancient2, ancient2))
+            assert run_journal.prune_journals(Path(tmp), days=0) == 0
+            assert new_file.exists()
+        results.append(("Aufbewahrung: alte Journale werden entfernt, neue nicht", True, ""))
+    except Exception as e:
+        results.append(("Aufbewahrung: alte Journale werden entfernt, neue nicht", False, str(e)))
+
+    try:
+        with patch.dict(os.environ, {"ODOO_GENERATOR_LOG_RETENTION_DAYS": "3"}):
+            assert run_journal.retention_days() == 3
+        with patch.dict(os.environ, {"ODOO_GENERATOR_LOG_RETENTION_DAYS": "unsinn"}):
+            assert run_journal.retention_days() == 7
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ODOO_GENERATOR_LOG_RETENTION_DAYS", None)
+            assert run_journal.retention_days() == 7
+        results.append(("Aufbewahrung: ODOO_GENERATOR_LOG_RETENTION_DAYS wird gelesen", True, ""))
+    except Exception as e:
+        results.append(("Aufbewahrung: ODOO_GENERATOR_LOG_RETENTION_DAYS wird gelesen", False, str(e)))
 
     # ------------------------------------------------------------------
     # Cache atomicity — concurrent runs share one cache directory
