@@ -97,7 +97,10 @@ def run(client, ctx):
             assert att["mimetype"] == "application/pdf", att
             assert att["type"] == "binary", att
             assert att["raw"], "attachment has no data"
-            decoded = base64.b64decode(att["raw"])
+            # raw comes back as a plain base64 string on 19.4, a
+            # {filename, content, size} dict on V20/19.5+ -- handle both.
+            raw = att["raw"]["content"] if isinstance(att["raw"], dict) else att["raw"]
+            decoded = base64.b64decode(raw)
             assert decoded.startswith(b"%PDF"), "decoded attachment is not a PDF"
         results.append((
             "documents: P1 — bill PDF attachments created + read-back (Pattern 4)",
@@ -126,7 +129,8 @@ def run(client, ctx):
                 assert att["mimetype"] == "application/pdf", att
                 assert att["type"] == "binary", att
                 assert att["raw"], "attachment has no data"
-                decoded = base64.b64decode(att["raw"])
+                raw = att["raw"]["content"] if isinstance(att["raw"], dict) else att["raw"]
+                decoded = base64.b64decode(raw)
                 assert decoded.startswith(b"%PDF"), "decoded attachment is not a PDF"
             results.append((
                 "documents: P2 — CV PDF attachments created + read-back, gemini=None fallback (Pattern 2+4)",
