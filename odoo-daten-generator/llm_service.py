@@ -268,7 +268,7 @@ class LLMService:
 
         Structure (addresses, contacts, prices) is assembled deterministically
         by data_factory.py — the LLM never sees or returns it (LLM-minimalism,
-        IMPLEMENTIERUNGSPLAN.md A1). Company names come from
+        ROADMAP.md A1). Company names come from
         ctx.name_banks['company_names'] (fetch_name_suggestions), not from
         here, to avoid a second LLM call for the same creative concept.
         """

@@ -385,7 +385,7 @@ def _create_applicants(client, ctx, recruiting_data, num_candidates, job_ids, al
         names.append(f"Bewerber {len(names) + 1}")
 
     # Emails/phones are derived deterministically from the name — never
-    # requested from the LLM (IMPLEMENTIERUNGSPLAN.md A2).
+    # requested from the LLM (ROADMAP.md A2).
     emails = [text_utils.email_from_name(n) for n in names]
     phones = [_random_phone_de() for _ in names]
 

@@ -173,6 +173,6 @@ die Code-Ebene, nicht das Plan-Format:
 - **Keine Verknüpfung** zwischen `sale.order`, `crm.lead` und den von `project`-Modul
   erzeugten Projekten — jedes Modul erzeugt unabhängige Bulk-Daten.
 
-Siehe R8 in `IMPLEMENTIERUNGSPLAN.md` — Voraussetzung dafür, dass ein Plan (KI-generiert
+Siehe R8 in `ROADMAP.md` — Voraussetzung dafür, dass ein Plan (KI-generiert
 oder manuell) einen durchgängigen, präsentierbaren Einzel-Ablauf statt nur statistisch
 plausibler Bulk-Daten liefert.

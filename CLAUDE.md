@@ -36,7 +36,7 @@ API keys via environment variables:
 
 ## Planning Documents
 
-- **`IMPLEMENTIERUNGSPLAN.md`** (repo root) — the current implementation framework: LLM-minimalism redesign, prioritized bug list (B1–B16), architecture work (D1–D8), roadmap (R1–R5), sprint order (S1–S7). Read it before starting any implementation work; reference its item IDs in commits and discussions.
+- **`ROADMAP.md`** (repo root, renamed from `IMPLEMENTIERUNGSPLAN.md` 2026-08-29) — the current implementation framework: LLM-minimalism redesign, prioritized bug list (B1–B16), architecture work (D1–D8), roadmap (R1–R20), sprint order (S1–S15, S1–S10 done). Read it before starting any implementation work; reference its item IDs in commits and discussions.
 
 ## Architecture
 
@@ -91,7 +91,7 @@ tasks claim the timesheet budget first).
 - **Leitprinzip (LLM-Minimalismus):** The LLM supplies only *atomic creative tokens* —
   names, street names, text bodies (chatter, job summaries). Never request complete import
   structures (nested records, addresses, emails, phones, prices, dates). All structure and
-  derivable values are assembled deterministically in code. See IMPLEMENTIERUNGSPLAN.md §1.
+  derivable values are assembled deterministically in code. See ROADMAP.md §1.
 - **Primary:** Groq (`llama-3.3-70b-versatile`), OpenAI-compatible endpoint
 - **Fallback:** Google Gemini
 - **Caching:** `seeds/cache/<slug-parts>_<_PROMPT_VERSION>.json` (e.g.
@@ -179,7 +179,7 @@ but do not replace live integration tests.
 
 ## Current Sprint
 <!-- Architect updates this before each Claude Code session -->
-Sprint S4 aus `IMPLEMENTIERUNGSPLAN.md` abgeschlossen (2026-08-03/04): D1 (Fortschritts-Callback
+Sprint S4 aus `ROADMAP.md` abgeschlossen (2026-08-03/04): D1 (Fortschritts-Callback
 in `orchestrator.run()`, kein Monkeypatch mehr), D2 (`logging_setup.py` statt `print`/
 `sys.stdout`-Umleitung), D3 (`create_batch` an 18 Call-Sites über `modules/*.py`), B11
 (`call_method`-Fallback-Guard), B14 (Order↔Opportunity partnerbasiert verknüpft), B15
@@ -192,7 +192,7 @@ Bug war bereits funktional behoben und kein Modul braucht das Feld; nur dokument
 Code-Change). S3 (A1–A3), S2 (B4/B5/B6/B9/B12/B13) und S1 (B1–B3, B16) waren bereits vorher
 erledigt.
 
-Sprint S5 aus `IMPLEMENTIERUNGSPLAN.md` (2026-08-04) — **Tier 1 abgeschlossen, Tier 2
+Sprint S5 aus `ROADMAP.md` (2026-08-04) — **Tier 1 abgeschlossen, Tier 2
 zurückgestellt**, nach Peer-Review eines vorab geschriebenen Plans durch einen fremden
 Opus-Agenten (Kontext nur Plan + Live-Repo, keine Konversationshistorie): `odoo_actions.
 get_server_version()` (Versions-Erkennung, GUI-Statuszeile "Odoo-Version" in Screen 2,
@@ -206,7 +206,7 @@ eine belegte Feld-Entfernung (`hr.leave.allocation.allocation_type`), die keine 
 brauchte. Eine Adapter-Infrastruktur ohne einen einzigen realen Delta-Fall wäre nur gegen
 synthetische Testdaten prüfbar — Tier 2 wird gebaut, sobald eine zweite reale Zielversion
 einen konkreten Rename liefert. Details, Korrekturen und die volle Review-Zusammenfassung:
-`IMPLEMENTIERUNGSPLAN.md` §4 R5-Statusblock. Nebenbefund aus dem ersten Live-Lauf der neuen
+`ROADMAP.md` §4 R5-Statusblock. Nebenbefund aus dem ersten Live-Lauf der neuen
 Warnliste: neuer Bug B17 (`hr.py:33`, `shortcut_behavior` existiert nicht auf saas-19.4) —
 dokumentiert, nicht im S5-Scope gefixt.
 
@@ -266,7 +266,7 @@ Serviceprodukt, keine neuen `RunContext`-Felder, `sale.py`/`config.py` unangetas
 Diff als die Hero-Version). Volle Details, Live-Spike-Ergebnisse und das
 Datenerzeugungs-Audit (auf Nutzer-Anfrage: alle `create`/`create_batch`-Aufrufstellen der 9
 Module gegen native Odoo-Automatiken geprüft, `mrp.py` explizit als kollisionsfrei bestätigt)
-in `IMPLEMENTIERUNGSPLAN.md`s R8-Statusblock (§4). Kern: `service_tracking`/`invoice_policy`/
+in `ROADMAP.md`s R8-Statusblock (§4). Kern: `service_tracking`/`invoice_policy`/
 `service_type` auf allen Serviceprodukten (gated auf `project`+`hr_timesheet` installiert) lässt
 Odoo bei Auftragsbestätigung selbst Projekt+Aufgabe erzeugen; Zeiterfassung gegen diese
 Aufgaben treibt echte Delivered-Qty-Fakturierung über den nativen
@@ -368,7 +368,7 @@ entfernt), `config.ini.example` (vestigiales `username` entfernt).
 
 **Bewusst gestrichen (Produktentscheidung nach Peer-Review):** Datensatz-Vorschau und
 -Bearbeitung samt Backend-Gerüst — vollständige Begründung im R9-Statusblock von
-`IMPLEMENTIERUNGSPLAN.md` §4. Sie wird erfahrungsgemäß erneut vorgeschlagen; die Kurzfassung
+`ROADMAP.md` §4. Sie wird erfahrungsgemäß erneut vorgeschlagen; die Kurzfassung
 lautet: Odoo ist der bessere Datensatz-Browser, das Ziel ist eine Wegwerf-`demo-*`-DB, und
 seit S7/R8 entstehen die interessantesten Datensätze nativ in Odoo und wären in einer
 Vorschau **nie** sichtbar gewesen.
@@ -415,7 +415,7 @@ Sprint S10 (2026-08-29) — **abgeschlossen**, Live-Testphase-Feedback (neues Ro
 **R10**). Plan zweimal peer-reviewed, einmal pro Phase (fremder Opus-Agent, Plan+Live-Repo,
 keine Konversationshistorie — gleiches Verfahren wie S5–S8; Phase A 10 Blocker + 11
 Should-fix, Phase B 6 Blocker + 9 Should-fix, jeweils vor Umsetzung eingearbeitet).
-Vollständiger Statusblock in `IMPLEMENTIERUNGSPLAN.md`s R10-Abschnitt; Kurzfassung hier:
+Vollständiger Statusblock in `ROADMAP.md`s R10-Abschnitt; Kurzfassung hier:
 
 `odoo_client.py` 🔒 — Fehleraufzeichnung wandert von `_post` in einen `_record_failure`-
 Frame-Stack, der die öffentlichen Methoden umschließt: ein `errors`-Eintrag pro gescheiterter
@@ -482,7 +482,7 @@ zeitgleich in einer parallelen Session gemerged: CI-Lint-Infrastruktur (`ruff.to
 
 **Prozess-Hinweis (2026-08-04):** Dieser Abschnitt lag zeitweise eine ganze Session hinter dem
 tatsächlichen Code-Stand zurück — D1/D2/D3/B11/B14/B15 waren bereits implementiert und getestet,
-aber hier noch als "nächster Sprint" gelistet, und `IMPLEMENTIERUNGSPLAN.md` zitierte `gui.py`-
+aber hier noch als "nächster Sprint" gelistet, und `ROADMAP.md` zitierte `gui.py`-
 Zeilennummern, die nicht mehr existierten. Vor dem Vertrauen auf die Sprint-Status-Prosa hier:
 gegen den tatsächlichen Datei-Inhalt/Zeilennummern verifizieren, nicht nur gegen diesen Text.
 

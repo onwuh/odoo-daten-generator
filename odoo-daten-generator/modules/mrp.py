@@ -155,7 +155,7 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
         )
 
     # D3: components created first (batched), then parent/sub BOMs with
-    # bom_line_ids inlined — see IMPLEMENTIERUNGSPLAN.md D3. Sub-BOMs need their
+    # bom_line_ids inlined — see ROADMAP.md D3. Sub-BOMs need their
     # component's product_tmpl_id, which only exists once the component itself
     # has been created, so the ordering below is load-bearing, not cosmetic:
     # main products -> main components -> raw materials (for sub-BOMs) -> all BOMs.

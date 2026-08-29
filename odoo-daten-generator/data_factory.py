@@ -2,7 +2,7 @@
 
 No LLM access, no Odoo client dependency — pure functions, fully unit-testable
 offline. This is the single source of address/pricing assembly logic (see
-IMPLEMENTIERUNGSPLAN.md A1): callers pass in names, this module fills in
+ROADMAP.md A1): callers pass in names, this module fills in
 everything structural (addresses, emails, phones, prices) from static_data.py.
 """
 
