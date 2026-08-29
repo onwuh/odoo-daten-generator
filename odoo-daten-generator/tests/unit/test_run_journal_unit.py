@@ -163,8 +163,10 @@ def run():
         results.append(("Cleanup: Wizard-Datensätze werden übersprungen, nicht gemeldet", False, str(e)))
 
     try:
-        # Odoo refuses to unlink a confirmed order until it is cancelled, and the
-        # meaningful reason is the FIRST recorded error, not the last fallback's.
+        # Odoo refuses to unlink a confirmed order until it is cancelled. Simulates
+        # two errors landing in client.errors between the mark and the read (e.g.
+        # from two different failed calls in the same cleanup pass) to check that
+        # _first_new_error picks the meaningful one, not a later placeholder.
         with tempfile.TemporaryDirectory() as tmp:
             journal = run_journal.RunJournal("demo-cancel", Path(tmp))
             journal.record("sale.order", [55])
