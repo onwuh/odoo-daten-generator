@@ -1,0 +1,11 @@
+name: "CodeQL config"
+
+# Excludes: py/clear-text-logging-sensitive-data
+# This repo logs internal Odoo record ids (employee_id, partner_id, etc.) for
+# debugging — plain integers, not personal data. CodeQL's dict-based taint
+# tracking for records like hr.employee isn't field-sensitive enough to tell
+# an id field apart from a genuinely sensitive field on the same record,
+# which makes this query noisy here. Every other default query stays active.
+query-filters:
+  - exclude:
+      id: py/clear-text-logging-sensitive-data
