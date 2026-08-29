@@ -58,7 +58,7 @@ def create_leave_allocation(client, employee_id, work_entry_type_id, days, date_
 
 
 def create_leave_request(client, employee_id, work_entry_type_id, date_from_str, date_to_str):
-    logger.info(f"-> Creating leave request for emp {employee_id}: {date_from_str} – {date_to_str}")
+    logger.info(f"-> Creating leave request for emp {employee_id}: {date_from_str} – {date_to_str}")  # lgtm[py/clear-text-logging-sensitive-data] employee_id is an internal Odoo integer PK, not personal data
     # request_date_from/to are the date-only fields Odoo uses for overlap checks.
     # If omitted, Odoo defaults them to today, causing spurious overlap errors.
     request_date_from = date_from_str[:10]
@@ -75,7 +75,7 @@ def create_leave_request(client, employee_id, work_entry_type_id, date_from_str,
         })
         return leave_id
     except Exception as e:
-        logger.warning(f"[leave_request] create failed for emp {employee_id}: {e}")
+        logger.warning(f"[leave_request] create failed for emp {employee_id}: {e}")  # lgtm[py/clear-text-logging-sensitive-data] employee_id is an internal Odoo integer PK, not personal data
         return None
 
 
@@ -285,7 +285,7 @@ def create_leave_data(client, ctx: RunContext) -> list:
                     start, end = candidate, candidate_end
                     break
             if start is None:
-                logger.info(f"[timeoff] No non-overlapping past slot for emp {emp_id}, skipping")
+                logger.info(f"[timeoff] No non-overlapping past slot for emp {emp_id}, skipping")  # lgtm[py/clear-text-logging-sensitive-data] emp_id is an internal Odoo integer PK, not personal data
                 continue
             try:
                 leave_id = create_leave_request(
@@ -293,7 +293,7 @@ def create_leave_data(client, ctx: RunContext) -> list:
                     f"{start} 08:00:00", f"{end} 17:00:00",
                 )
             except Exception as e:
-                logger.warning(f"[timeoff] leave creation error emp {emp_id}: {e}")
+                logger.warning(f"[timeoff] leave creation error emp {emp_id}: {e}")  # lgtm[py/clear-text-logging-sensitive-data] emp_id is an internal Odoo integer PK, not personal data
                 leave_id = None
             scheduled[emp_id].append((start, end))
             if leave_id:
@@ -309,7 +309,7 @@ def create_leave_data(client, ctx: RunContext) -> list:
                     start, end = candidate, candidate_end
                     break
             if start is None:
-                logger.info(f"[timeoff] No non-overlapping future slot for emp {emp_id}, skipping")
+                logger.info(f"[timeoff] No non-overlapping future slot for emp {emp_id}, skipping")  # lgtm[py/clear-text-logging-sensitive-data] emp_id is an internal Odoo integer PK, not personal data
                 continue
             try:
                 leave_id = create_leave_request(
@@ -317,7 +317,7 @@ def create_leave_data(client, ctx: RunContext) -> list:
                     f"{start} 08:00:00", f"{end} 17:00:00",
                 )
             except Exception as e:
-                logger.warning(f"[timeoff] leave creation error emp {emp_id}: {e}")
+                logger.warning(f"[timeoff] leave creation error emp {emp_id}: {e}")  # lgtm[py/clear-text-logging-sensitive-data] emp_id is an internal Odoo integer PK, not personal data
                 leave_id = None
             scheduled[emp_id].append((start, end))
             if leave_id:

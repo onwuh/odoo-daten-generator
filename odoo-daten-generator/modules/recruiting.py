@@ -328,7 +328,6 @@ def _create_skills(client, recruiting_data: dict, num_skill_types: int, skills_p
 
     # --- Step 3: batch-create ALL new skills across ALL types in one call ---
     skill_vals_list = []
-    skill_slots = []  # parallel to skill_vals_list: either ("new", None) placeholder or the existing id
     ordered_skill_refs = []  # [("new", idx_into_skill_vals_list) | ("existing", skill_id), ...] in output order
     for entry in type_entries:
         skill_type_id = entry["skill_type_id"]
