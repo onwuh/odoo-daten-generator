@@ -147,6 +147,7 @@ tasks claim the timesheet budget first).
 - **Groq retires models without notice.** `llama-3.3-70b-versatile` 404s as of 2026-08-28; the repo default is now `qwen/qwen3.8-27b`. `openai/gpt-oss-120b` pings fine but truncates the JSON responses `fetch_name_suggestions` needs, so a working ping is not proof a model is usable.
 - The live SaaS instance **rate-limits with HTTP 429**: sustained write rate is about **1 req/s**, with a token bucket absorbing a burst on top (~150 requests in ~15s measured 2026-08-28), answered by a bare HTML 429 with no `Retry-After`. This is *the* reason the codebase batches everywhere — `create_batch`, D3, test Pattern 8. **Never answer a 429 by retrying inside a loop that should have been one batched call.** `odoo_client._send` adds a bounded exponential backoff (5 attempts, `Retry-After` honoured when sent) as the safety net for the calls batching cannot remove; without it every module after the ceiling fails with `429 Client Error` in a way that reads like a code defect. Space heavy runs out before blaming the code.
 - `purchase.order.action_create_invoice` creates the vendor bill with `invoice_date` unset (`False`) — it's the vendor's own external date, Odoo sets no default. `account.move.action_post` then raises `UserError: "Das Datum der Rechnung/Erstattung ist erforderlich..."` (invoice date required). Write `invoice_date` (e.g. `datetime.date.today().isoformat()`) on the bill before posting — the manual `account.move` rebuild fallback already sets it, only the `action_create_invoice` path needs the extra write.
+- The `hr.job.payment_interval` failure carried since S10 Phase A was **misdiagnosed as a field-schema issue**; the real cause is that `hr_recruitment` itself is `state=uninstalled` on `demo-test5` (live-confirmed via `ir.module.module`) — `payment_interval` exists fine in Odoo's own `hr.job` schema, it's just unreachable because the whole recruitment app isn't there, and `hr.applicant` doesn't exist as a model at all on this instance. `orchestrator.py:75` already gated `create_recruiting_data` on `"hr_recruitment" in ctx.installed_modules` before this fix — production code was never actually broken. The bug was two live-integration test files calling the low-level recruiting helpers directly, bypassing that gate: `tests/integration/test_recruiting.py` (steps 1/2/4/7) and `tests/integration/test_documents.py` (its setup's applicant creation + the P2 CV-PDF step) both needed the same `'hr_recruitment' in ctx.installed_modules` skip `test_hr.py` already used for `hr_holidays`/`hr_work_entry` in S10 Phase A — `test_recruiting.py` alone wasn't sufficient, `test_documents.py` has an independent unguarded call site.
 
 ## Debugging
 
@@ -469,8 +470,15 @@ persistiert über `localStorage`, per „?"-Knopf erneut aufrufbar) und PDF-Vari
 Lieferant zweimal ergab dasselbe Layout).
 
 Nächster Sprint: offen. Backlog-Kandidaten: R6 (Multi-Country), R7 (JSON-Demo-Plan),
-S5 Tier 2, Provenienz-Invariante (§R9), F8 (Payload-Form merken, siehe oben), sowie der
-ausgelagerte `hr.job.payment_interval`-Bug.
+S5 Tier 2, Provenienz-Invariante (§R9), F8 (Payload-Form merken, siehe oben).
+
+**`hr.job.payment_interval`-Bug — behoben (2026-08-29).** Ursprüngliche Diagnose
+(Feldschema-Mismatch) war falsch — korrigierte Diagnose und Fix-Umfang siehe „Verified field
+gotchas" oben. 306/306 Unit-, 79/79 Live-Integrationsschritte grün (von 71/76 — die 3
+zusätzlichen Schritte sind `test_documents.py`s P1/P2/Pattern-5-Schritte, die im kaputten
+Zustand durch einen frühen `return` in der Setup-Exception nie gezählt wurden). Separat,
+zeitgleich in einer parallelen Session gemerged: CI-Lint-Infrastruktur (`ruff.toml`,
+`.github/workflows/ci.yml`) — eigener Commit, nicht Teil dieses Fixes.
 
 **Prozess-Hinweis (2026-08-04):** Dieser Abschnitt lag zeitweise eine ganze Session hinter dem
 tatsächlichen Code-Stand zurück — D1/D2/D3/B11/B14/B15 waren bereits implementiert und getestet,

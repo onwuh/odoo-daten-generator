@@ -37,6 +37,13 @@ def run(client, ctx):
     partner_id = ctx.partner_ids[0]
     product_id = ctx.product_ids[0]
 
+    # hr.applicant does not exist without hr_recruitment installed (same
+    # instance-state issue as test_recruiting.py — see its comment for the
+    # live diagnosis). P2 needs real applicants, so it must skip the same
+    # way; P1 (bill PDFs) is independent of hr_recruitment and stays
+    # unconditional.
+    recruitment_installed = 'hr_recruitment' in ctx.installed_modules
+
     # Setup — seed a fresh RunContext with real vendor bills (P1 prerequisite)
     # and real applicants (P2 prerequisite), same pattern test_accounting.py /
     # test_recruiting.py use to exercise their own module end-to-end.
@@ -55,15 +62,21 @@ def run(client, ctx):
     try:
         accounting.create_accounting_data(client, None, rctx)
         assert len(rctx.bill_ids) == 2, f"expected 2 vendor bills, got {len(rctx.bill_ids)}"
-        recruiting.create_recruiting_data(client, None, rctx)
-        assert len(rctx.applicant_ids) == 2, (
-            f"expected 2 applicants tracked on ctx.applicant_ids, got {len(rctx.applicant_ids)} "
-            f"(recruiting.py must extend ctx.applicant_ids, not discard create_batch's return value)"
-        )
-        results.append((
-            "documents: setup — 2 vendor bills + 2 applicants created, ids tracked on ctx",
-            True, f"bill_ids={rctx.bill_ids}, applicant_ids={rctx.applicant_ids}",
-        ))
+        if recruitment_installed:
+            recruiting.create_recruiting_data(client, None, rctx)
+            assert len(rctx.applicant_ids) == 2, (
+                f"expected 2 applicants tracked on ctx.applicant_ids, got {len(rctx.applicant_ids)} "
+                f"(recruiting.py must extend ctx.applicant_ids, not discard create_batch's return value)"
+            )
+            results.append((
+                "documents: setup — 2 vendor bills + 2 applicants created, ids tracked on ctx",
+                True, f"bill_ids={rctx.bill_ids}, applicant_ids={rctx.applicant_ids}",
+            ))
+        else:
+            results.append((
+                "documents: setup — 2 vendor bills created; applicants SKIP — hr_recruitment nicht installiert",
+                True, f"bill_ids={rctx.bill_ids}",
+            ))
     except Exception as e:
         results.append(("documents: setup — 2 vendor bills + 2 applicants created, ids tracked on ctx", False, str(e)))
         return False, results
@@ -94,27 +107,36 @@ def run(client, ctx):
         results.append(("documents: P1 — bill PDF attachments created + read-back (Pattern 4)", False, str(e)))
 
     # Step 2 — P2: CV PDFs attached to hr.applicant, read-back (Pattern 4).
-    try:
-        rctx.module_selections.documents = {"bill_pdfs_enabled": False, "cv_pdfs_enabled": True}
-        documents.create_documents(client, None, rctx)
-        attachments = client.search_read(
-            'ir.attachment',
-            [["res_model", "=", "hr.applicant"], ["res_id", "in", rctx.applicant_ids]],
-            fields=["res_model", "res_id", "mimetype", "type", "raw"], limit=0,
-        )
-        assert len(attachments) == 2, f"expected 2 CV PDF attachments, got {len(attachments)}"
-        for att in attachments:
-            assert att["mimetype"] == "application/pdf", att
-            assert att["type"] == "binary", att
-            assert att["raw"], "attachment has no data"
-            decoded = base64.b64decode(att["raw"])
-            assert decoded.startswith(b"%PDF"), "decoded attachment is not a PDF"
+    if not recruitment_installed:
         results.append((
-            "documents: P2 — CV PDF attachments created + read-back, gemini=None fallback (Pattern 2+4)",
-            True, f"{len(attachments)} attachments",
+            "documents: P2 — CV PDF attachments created + read-back, gemini=None fallback (Pattern 2+4) "
+            "SKIP — hr_recruitment nicht installiert", True, "skipped",
         ))
-    except Exception as e:
-        results.append(("documents: P2 — CV PDF attachments created + read-back, gemini=None fallback (Pattern 2+4)", False, str(e)))
+    else:
+        try:
+            rctx.module_selections.documents = {"bill_pdfs_enabled": False, "cv_pdfs_enabled": True}
+            documents.create_documents(client, None, rctx)
+            attachments = client.search_read(
+                'ir.attachment',
+                [["res_model", "=", "hr.applicant"], ["res_id", "in", rctx.applicant_ids]],
+                fields=["res_model", "res_id", "mimetype", "type", "raw"], limit=0,
+            )
+            assert len(attachments) == 2, f"expected 2 CV PDF attachments, got {len(attachments)}"
+            for att in attachments:
+                assert att["mimetype"] == "application/pdf", att
+                assert att["type"] == "binary", att
+                assert att["raw"], "attachment has no data"
+                decoded = base64.b64decode(att["raw"])
+                assert decoded.startswith(b"%PDF"), "decoded attachment is not a PDF"
+            results.append((
+                "documents: P2 — CV PDF attachments created + read-back, gemini=None fallback (Pattern 2+4)",
+                True, f"{len(attachments)} attachments",
+            ))
+        except Exception as e:
+            results.append((
+                "documents: P2 — CV PDF attachments created + read-back, gemini=None fallback (Pattern 2+4)",
+                False, str(e),
+            ))
 
     # Step 3 — Pattern 5: empty ctx.bill_ids/applicant_ids -> graceful skip,
     # no crash, no attachment/search_read calls at all.

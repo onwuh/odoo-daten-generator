@@ -43,6 +43,23 @@ def run(client, ctx):
     """
     results = []
 
+    # hr.applicant does not exist as a model at all without hr_recruitment
+    # installed (confirmed live, 2026-08-29: a bare "the model 'hr.applicant'
+    # does not exist" 404 on demo-test5, where hr_recruitment is
+    # state=uninstalled) — a genuinely different app-installation-state issue
+    # from a field-schema mismatch, not something any field rename in
+    # modules/recruiting.py could fix. hr.job itself DOES exist independently
+    # (it's a base-hr model used for bare job-position tracking), but its
+    # hr_recruitment-added fields — including payment_interval — do not,
+    # which is what a live run against this instance actually surfaces first.
+    # Steps 3/5/6 use hr.skill(.type)/hr.skill.level, which are NOT part of
+    # hr_recruitment and stay unconditional. This is the same
+    # ctx.installed_modules gate test_hr.py needed for its leave-related
+    # steps in S10 Phase A, for the identical reason: these steps call the
+    # low-level module functions directly, bypassing orchestrator.py's own
+    # (correct) "hr_recruitment" in ctx.installed_modules gate.
+    recruitment_installed = 'hr_recruitment' in ctx.installed_modules
+
     # Setup — resolve or create department
     dept_id = None
     try:
@@ -58,56 +75,64 @@ def run(client, ctx):
     job_id = None
 
     # Step 1 — Create job (delete leftover from previous run first)
-    try:
-        existing = client.search_read(
-            'hr.job',
-            [["name", "=", "Integration Test Stelle"], ["department_id", "=", dept_id]],
-            fields=["id"],
-            limit=1,
-        )
-        if existing:
-            client.call_method('hr.job', 'unlink', ids=[existing[0]["id"]])
-        job_id = create_job(
-            client,
-            "Integration Test Stelle",
-            dept_id,
-            target=1,
-            description="Automatisch erstellte Teststelle",
-        )
-        assert isinstance(job_id, int) and job_id > 0
-        rec = client.search_read(
-            'hr.job',
-            [["id", "=", job_id]],
-            fields=["name"],
-            limit=1,
-        )
-        assert rec and rec[0]["name"] == "Integration Test Stelle"
-        ctx.job_ids.append(job_id)
-        results.append(("recruiting: create job + read-back name", True, job_id))
-    except Exception as e:
-        results.append(("recruiting: create job + read-back name", False, str(e)))
+    if not recruitment_installed:
+        results.append(("recruiting: create job + read-back name SKIP — hr_recruitment nicht installiert",
+                        True, "skipped"))
+    else:
+        try:
+            existing = client.search_read(
+                'hr.job',
+                [["name", "=", "Integration Test Stelle"], ["department_id", "=", dept_id]],
+                fields=["id"],
+                limit=1,
+            )
+            if existing:
+                client.call_method('hr.job', 'unlink', ids=[existing[0]["id"]])
+            job_id = create_job(
+                client,
+                "Integration Test Stelle",
+                dept_id,
+                target=1,
+                description="Automatisch erstellte Teststelle",
+            )
+            assert isinstance(job_id, int) and job_id > 0
+            rec = client.search_read(
+                'hr.job',
+                [["id", "=", job_id]],
+                fields=["name"],
+                limit=1,
+            )
+            assert rec and rec[0]["name"] == "Integration Test Stelle"
+            ctx.job_ids.append(job_id)
+            results.append(("recruiting: create job + read-back name", True, job_id))
+        except Exception as e:
+            results.append(("recruiting: create job + read-back name", False, str(e)))
 
     # Step 2 — Create applicant
-    try:
-        assert job_id, "No job created in step 1"
-        applicant_id = create_applicant(
-            client,
-            job_id,
-            "Max Bewerber",
-            "bewerber@integration.example",
-            "+49 000 0",
-        )
-        assert isinstance(applicant_id, int) and applicant_id > 0
-        rec = client.search_read(
-            'hr.applicant',
-            [["id", "=", applicant_id]],
-            fields=["partner_name"],
-            limit=1,
-        )
-        assert rec and rec[0]["partner_name"] == "Max Bewerber"
-        results.append(("recruiting: create applicant + read-back partner_name", True, applicant_id))
-    except Exception as e:
-        results.append(("recruiting: create applicant + read-back partner_name", False, str(e)))
+    if not recruitment_installed:
+        results.append(("recruiting: create applicant + read-back partner_name SKIP — hr_recruitment nicht installiert",
+                        True, "skipped"))
+    else:
+        try:
+            assert job_id, "No job created in step 1"
+            applicant_id = create_applicant(
+                client,
+                job_id,
+                "Max Bewerber",
+                "bewerber@integration.example",
+                "+49 000 0",
+            )
+            assert isinstance(applicant_id, int) and applicant_id > 0
+            rec = client.search_read(
+                'hr.applicant',
+                [["id", "=", applicant_id]],
+                fields=["partner_name"],
+                limit=1,
+            )
+            assert rec and rec[0]["partner_name"] == "Max Bewerber"
+            results.append(("recruiting: create applicant + read-back partner_name", True, applicant_id))
+        except Exception as e:
+            results.append(("recruiting: create applicant + read-back partner_name", False, str(e)))
 
     # Step 3 — create skill type + skill (live)
     try:
@@ -127,29 +152,33 @@ def run(client, ctx):
         results.append(("recruiting: create skill_type + skill + read-back", False, str(e)))
 
     # Step 4 — applicant email + phone read-back (live)
-    try:
-        assert job_id, "No job created in step 1"
-        applicant2_id = create_applicant(
-            client, job_id,
-            "Erika Bewerberin",
-            "erika@integration.example",
-            "+49 111 2222222",
-        )
-        assert isinstance(applicant2_id, int) and applicant2_id > 0
-        rec = client.search_read(
-            'hr.applicant',
-            [["id", "=", applicant2_id]],
-            fields=["partner_name", "email_from", "partner_phone"],
-            limit=1,
-        )
-        assert rec, "Applicant not found"
-        assert rec[0]["email_from"] == "erika@integration.example", \
-            f"email_from mismatch: {rec[0].get('email_from')}"
-        assert rec[0]["partner_phone"] == "+49 111 2222222", \
-            f"partner_phone mismatch: {rec[0].get('partner_phone')}"
-        results.append(("recruiting: applicant email_from + partner_phone read-back", True, applicant2_id))
-    except Exception as e:
-        results.append(("recruiting: applicant email_from + partner_phone read-back", False, str(e)))
+    if not recruitment_installed:
+        results.append(("recruiting: applicant email_from + partner_phone read-back SKIP — "
+                        "hr_recruitment nicht installiert", True, "skipped"))
+    else:
+        try:
+            assert job_id, "No job created in step 1"
+            applicant2_id = create_applicant(
+                client, job_id,
+                "Erika Bewerberin",
+                "erika@integration.example",
+                "+49 111 2222222",
+            )
+            assert isinstance(applicant2_id, int) and applicant2_id > 0
+            rec = client.search_read(
+                'hr.applicant',
+                [["id", "=", applicant2_id]],
+                fields=["partner_name", "email_from", "partner_phone"],
+                limit=1,
+            )
+            assert rec, "Applicant not found"
+            assert rec[0]["email_from"] == "erika@integration.example", \
+                f"email_from mismatch: {rec[0].get('email_from')}"
+            assert rec[0]["partner_phone"] == "+49 111 2222222", \
+                f"partner_phone mismatch: {rec[0].get('partner_phone')}"
+            results.append(("recruiting: applicant email_from + partner_phone read-back", True, applicant2_id))
+        except Exception as e:
+            results.append(("recruiting: applicant email_from + partner_phone read-back", False, str(e)))
 
     # Step 5 — empty job_ids guard (unit/mock)
     try:
@@ -227,26 +256,30 @@ def run(client, ctx):
     # gemini=None to prove it needs no LLM call for the batch path.
     # create_recruiting_data does not persist job_ids on ctx (pre-existing, not
     # a D3 concern), so new jobs are identified via a before/after id diff.
-    try:
-        before_job_ids = {j["id"] for j in client.search_read('hr.job', [], fields=["id"], limit=0)}
-        rctx = _make_rctx(num_jobs=2, num_candidates=3)
-        create_recruiting_data(client, None, rctx)
-        after_job_ids = {j["id"] for j in client.search_read('hr.job', [], fields=["id"], limit=0)}
-        new_job_ids = list(after_job_ids - before_job_ids)
-        assert len(new_job_ids) == 2, f"expected 2 new jobs, got {len(new_job_ids)}"
-        applicants = client.search_read(
-            'hr.applicant', [["job_id", "in", new_job_ids]],
-            fields=["partner_name", "email_from", "partner_phone"], limit=0,
-        )
-        assert len(applicants) == 3, f"expected 3 applicants, got {len(applicants)}"
-        assert all(a.get("email_from") and a.get("partner_phone") for a in applicants), \
-            "applicant missing derived email/phone"
-        results.append((
-            "recruiting: create_recruiting_data end-to-end (D3 batch), read-back",
-            True, f"{len(new_job_ids)} jobs, {len(applicants)} applicants",
-        ))
-    except Exception as e:
-        results.append(("recruiting: create_recruiting_data end-to-end (D3 batch), read-back", False, str(e)))
+    if not recruitment_installed:
+        results.append(("recruiting: create_recruiting_data end-to-end (D3 batch), read-back SKIP — "
+                        "hr_recruitment nicht installiert", True, "skipped"))
+    else:
+        try:
+            before_job_ids = {j["id"] for j in client.search_read('hr.job', [], fields=["id"], limit=0)}
+            rctx = _make_rctx(num_jobs=2, num_candidates=3)
+            create_recruiting_data(client, None, rctx)
+            after_job_ids = {j["id"] for j in client.search_read('hr.job', [], fields=["id"], limit=0)}
+            new_job_ids = list(after_job_ids - before_job_ids)
+            assert len(new_job_ids) == 2, f"expected 2 new jobs, got {len(new_job_ids)}"
+            applicants = client.search_read(
+                'hr.applicant', [["job_id", "in", new_job_ids]],
+                fields=["partner_name", "email_from", "partner_phone"], limit=0,
+            )
+            assert len(applicants) == 3, f"expected 3 applicants, got {len(applicants)}"
+            assert all(a.get("email_from") and a.get("partner_phone") for a in applicants), \
+                "applicant missing derived email/phone"
+            results.append((
+                "recruiting: create_recruiting_data end-to-end (D3 batch), read-back",
+                True, f"{len(new_job_ids)} jobs, {len(applicants)} applicants",
+            ))
+        except Exception as e:
+            results.append(("recruiting: create_recruiting_data end-to-end (D3 batch), read-back", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results
