@@ -3,3 +3,6 @@
 
 # --- Lint (CI) ---
 ruff==0.16.5
+
+# --- Security lint (CI) ---
+bandit==1.9.4

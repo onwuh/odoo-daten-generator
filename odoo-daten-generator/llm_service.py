@@ -181,7 +181,7 @@ class LLMService:
 
     @staticmethod
     def _hash(items) -> str:
-        return hashlib.md5("|".join(sorted(str(i) for i in items)).encode()).hexdigest()[:8]
+        return hashlib.md5("|".join(sorted(str(i) for i in items)).encode(), usedforsecurity=False).hexdigest()[:8]
 
     def _cache_load(self, key: str) -> Optional[Any]:
         path = _CACHE_DIR / f"{key}.json"

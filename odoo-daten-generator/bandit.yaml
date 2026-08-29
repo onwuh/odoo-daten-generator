@@ -1,0 +1,26 @@
+# Security lint. Skips are narrow and each has a reason — not a blanket
+# severity floor — so a genuinely new finding in one of these families still
+# fails CI; only the specific patterns already reviewed and confirmed
+# intentional in this codebase are silenced.
+exclude_dirs:
+  - ./tests
+  - ./.venv
+
+skips:
+  # random: this app's entire job is generating non-cryptographic demo data
+  # (names, dates, amounts, PDF layout variants) — every random.choice/
+  # random.random call in modules/ and pdf_factory.py trips this, 96 hits,
+  # zero of them security-relevant.
+  - B311
+  # assert_used: the only live hits are in test_mrp_live.py, a throwaway
+  # live-debug script (own file header: "Delete this file after all steps
+  # pass") — not production code.
+  - B101
+  # try_except_pass / try_except_continue: the current instances are
+  # deliberate graceful-degradation (modules/mrp.py's quality-module probe,
+  # odoo_client.py's HTTP retry body read, odoo_actions.py's per-model
+  # fields_get compatibility probe) — matches this project's documented
+  # "probing is expected to 404, must not clutter the error report" design,
+  # not a swallowed bug.
+  - B110
+  - B112
