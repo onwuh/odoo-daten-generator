@@ -696,6 +696,8 @@
   color: var(--ink); font-size: 13px;
 }
 
+.feedback-textarea { min-height: 100px; resize: vertical; font-family: inherit; margin: 8px 0; }
+
 .section-caption {
   font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   color: var(--ink-faint); font-weight: 700;

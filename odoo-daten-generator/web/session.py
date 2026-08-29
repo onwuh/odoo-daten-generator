@@ -59,6 +59,9 @@ class Session:
     # --- connect results (safe to expose) ---
     connect: Optional[Any] = None
     run_ids: List[str] = field(default_factory=list)
+    # POST /api/feedback admission control — trimmed to the rate window on
+    # every check, same shape as web/jobs.py's per-session run cap.
+    feedback_timestamps: List[float] = field(default_factory=list)
 
     @property
     def connected(self) -> bool:

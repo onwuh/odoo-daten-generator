@@ -26,6 +26,7 @@
       <div class="foot-row"><span class="dot" id="foot-odoo-dot"></span> <span id="foot-odoo-text">Odoo: nicht verbunden</span></div>
       <div class="foot-row"><span class="dot" id="foot-llm-dot"></span> <span id="foot-llm-text">LLM: nicht verbunden</span></div>
       <button class="rail-help" id="btn-tutorial-reopen" type="button" title="Anleitung anzeigen">?</button>
+      <button class="rail-help is-hidden" id="btn-feedback-open" type="button" title="Feedback geben">✉</button>
     </div>
   </nav>
 
@@ -266,11 +267,43 @@
       <li>Zur Konfiguration wechseln, Umfang und Module festlegen, „Lauf starten“.</li>
       <li>Fertig? „Diesen Lauf löschen“ in der Generierungsansicht räumt alle von diesem Lauf angelegten
         Datensätze wieder ab.</li>
+      <li>Etwas unklar, kaputt, oder eine Idee? Der <span class="f">✉</span>-Knopf unten links schickt
+        kurzes Feedback direkt als GitHub-Issue — jederzeit erreichbar.</li>
     </ol>
     <div class="btn-row">
       <button class="btn" id="tutorial-ok" type="button">Verstanden</button>
       <button class="btn ghost" id="tutorial-later" type="button">Später</button>
     </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- FEEDBACK — Overlay für Bug-/Feature-Meldungen als GitHub-Issue. -->
+<!-- Erreichbar über den Rail-Fußzeilen-Knopf, öffnet sich außerdem  -->
+<!-- automatisch nach jedem abgeschlossenen Lauf (bis abbestellt).   -->
+<!-- ============================================================ -->
+<div class="overlay is-hidden" id="feedback-modal">
+  <div class="overlay-card">
+    <button class="overlay-close" id="feedback-close" type="button" aria-label="Schließen">×</button>
+    <h2>Feedback geben</h2>
+    <p class="field-hint is-hidden" id="feedback-context-hint"></p>
+    <div class="radio-set">
+      <label class="radio-line"><input type="radio" name="feedback-category" value="bug" checked> Bug</label>
+      <label class="radio-line"><input type="radio" name="feedback-category" value="idee_feature"> Idee &amp; Feature</label>
+    </div>
+    <textarea id="feedback-message" class="wide-input feedback-textarea" maxlength="4000"
+              placeholder="Was ist passiert? Was fehlt?"></textarea>
+    <div class="field-hint">Wird als GitHub-Issue in pahuodoo/odoo-daten-generator angelegt — kein
+      Zugangscode und keine Zugangsdaten werden mitgeschickt.</div>
+    <label class="check-line is-hidden" id="feedback-optout-row">
+      <input type="checkbox" id="feedback-optout"> Nicht mehr automatisch nach jedem Lauf fragen
+    </label>
+    <div class="btn-row">
+      <button class="btn" id="feedback-submit" type="button">Senden</button>
+      <button class="btn ghost" id="feedback-cancel" type="button">Abbrechen</button>
+      <span class="inline-hint" id="feedback-hint"></span>
+    </div>
+    <div class="inline-hint is-hidden" id="feedback-result"></div>
   </div>
 </div>
 
