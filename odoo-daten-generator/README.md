@@ -75,6 +75,28 @@ Running uvicorn directly instead of Compose, add `--proxy-headers
 --forwarded-allow-ips '*'` so the app sees the real scheme and marks the session
 cookie `Secure`.
 
+### Auto-update (Pi5 / server profile)
+
+There's no built-in auto-update — `docker compose`'s `restart: unless-stopped`
+only restarts a crashed container, it never pulls new code or rebuilds the
+image. `scripts/update.sh` covers that: pull-based (the host fetches, nothing
+inbound needs opening), runs `git pull --ff-only` then `docker compose up -d
+--build` only if new commits landed, and skips if a previous run is still in
+progress (`flock`). Logs to `update.log` next to it.
+
+Wire it up via cron on the deploy host:
+
+```bash
+crontab -e
+```
+
+```
+0 3 * * * /path/to/odoo-daten-generator/scripts/update.sh
+```
+
+Runs nightly at 03:00. Check `update.log` after the first run to confirm it
+found and pulled `main`.
+
 ## What you supply
 
 Per session, in memory only, discarded on expiry (a janitor sweeps abandoned
