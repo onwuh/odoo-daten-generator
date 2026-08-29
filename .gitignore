@@ -10,3 +10,4 @@ test_config.ini
 **/seeds/runs/
 .env
 **/seeds/cache/
+odoo-daten-generator/update.log
