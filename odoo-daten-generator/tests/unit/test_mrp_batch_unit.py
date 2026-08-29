@@ -29,6 +29,15 @@ def _make_ctx(mrp_config):
     )
 
 
+def _workcenter_vals(client):
+    """Flatten every create_batch('mrp.workcenter', vals_list) call into one list of vals."""
+    vals = []
+    for call in client.create_batch.call_args_list:
+        if call.args[0] == 'mrp.workcenter':
+            vals.extend(call.args[1])
+    return vals
+
+
 def _mock_client():
     client = MagicMock()
     counter = {"n": 3000, "tmpl": 9000}
@@ -42,8 +51,14 @@ def _mock_client():
 
     def _search_read(model, domain=None, fields=None, limit=None, **kw):
         if model == 'product.product':
-            counter["tmpl"] += 1
-            return [{"product_tmpl_id": [counter["tmpl"], "tmpl"]}]
+            # get_product_template_ids_bulk sends [["id", "in", [...]]] — one
+            # row per requested id, each with its own synthetic template id.
+            ids = next((clause[2] for clause in (domain or []) if clause[0] == "id" and clause[1] == "in"), [])
+            rows = []
+            for pid in ids:
+                counter["tmpl"] += 1
+                rows.append({"id": pid, "product_tmpl_id": [counter["tmpl"], "tmpl"]})
+            return rows
         return []
 
     client.create_batch.side_effect = _create_batch
@@ -164,7 +179,7 @@ def run():
         ctx.feature_flags = {"mrp_routings": True}  # routings ON, but 0 workcenters requested
         with patch("modules.mrp.odoo_actions.create_product"):
             mrp.create_mrp_data(client, gemini=None, ctx=ctx)
-        workcenter_creates = [c for c in client.create.call_args_list if c.args[0] == 'mrp.workcenter']
+        workcenter_creates = _workcenter_vals(client)
         assert workcenter_creates == [], f"B15 regressed: created workcenters despite num_workcenters=0: {workcenter_creates}"
         results.append(("create_mrp_data: num_workcenters=0 -> no workcenters created (B15)", True, ""))
     except AssertionError as e:
@@ -184,7 +199,7 @@ def run():
         ctx.feature_flags = {}  # mrp_routings key absent entirely
         with patch("modules.mrp.odoo_actions.create_product"):
             mrp.create_mrp_data(client, gemini=None, ctx=ctx)
-        workcenter_creates = [c for c in client.create.call_args_list if c.args[0] == 'mrp.workcenter']
+        workcenter_creates = _workcenter_vals(client)
         assert workcenter_creates == [], (
             f"B15 default asymmetry: missing mrp_routings key created workcenters "
             f"(GUI defaults this to off): {workcenter_creates}"
@@ -209,7 +224,7 @@ def run():
         ctx.model_access = {"mrp.workcenter": False}
         with patch("modules.mrp.odoo_actions.create_product"):
             mrp.create_mrp_data(client, gemini=None, ctx=ctx)
-        workcenter_creates = [c for c in client.create.call_args_list if c.args[0] == 'mrp.workcenter']
+        workcenter_creates = _workcenter_vals(client)
         assert workcenter_creates == [], (
             f"model_access blocking mrp.workcenter must prevent workcenter creation: {workcenter_creates}"
         )
@@ -232,7 +247,7 @@ def run():
         ctx.model_access = {}
         with patch("modules.mrp.odoo_actions.create_product"):
             mrp.create_mrp_data(client, gemini=None, ctx=ctx)
-        workcenter_creates = [c for c in client.create.call_args_list if c.args[0] == 'mrp.workcenter']
+        workcenter_creates = _workcenter_vals(client)
         assert len(workcenter_creates) == 2, workcenter_creates
         results.append(("create_mrp_data: empty model_access defaults open, does not block (B1 guard)", True, ""))
     except AssertionError as e:
@@ -249,7 +264,8 @@ def run():
 
         def _search_read_with_company(model, domain=None, fields=None, limit=None, **kw):
             if model == 'product.product':
-                return [{"product_tmpl_id": [9001, "tmpl"]}]
+                ids = next((c[2] for c in (domain or []) if c[0] == "id" and c[1] == "in"), [])
+                return [{"id": pid, "product_tmpl_id": [9001, "tmpl"]} for pid in ids]
             if model == 'res.company':
                 return [{"id": 777}]  # the real res.company id
             return []
@@ -265,9 +281,9 @@ def run():
         ctx.company_ids = [42]
         with patch("modules.mrp.odoo_actions.create_product"):
             mrp.create_mrp_data(client, gemini=None, ctx=ctx)
-        workcenter_creates = [c for c in client.create.call_args_list if c.args[0] == 'mrp.workcenter']
+        workcenter_creates = _workcenter_vals(client)
         assert workcenter_creates, "expected at least one workcenter create call"
-        sent_company_id = workcenter_creates[0].args[1].get("company_id")
+        sent_company_id = workcenter_creates[0].get("company_id")
         assert sent_company_id == 777, (
             f"A6 regressed: expected the real res.company id (777) via "
             f"get_main_company_id, got {sent_company_id!r} (ctx.company_ids[0] would be 42)"
@@ -276,6 +292,30 @@ def run():
                         True, f"company_id={sent_company_id}"))
     except AssertionError as e:
         results.append(("create_mrp_data: mrp.workcenter.company_id uses get_main_company_id, not ctx.company_ids[0] (A6)",
+                        False, str(e)))
+
+    # ------------------------------------------------------------------
+    # Template-id lookups: N main products + M sub-BOM components -> exactly
+    # 2 search_read('product.product', ...) calls total (one bulk lookup for
+    # main products, one for sub-BOM components), not one per product.
+    # ------------------------------------------------------------------
+    try:
+        client = _mock_client()
+        ctx = _make_ctx({
+            "num_products": 3, "components_per_bom": 2, "sub_boms_per_product": 1,
+            "num_workcenters": 0, "num_manufacturing_orders": 0, "create_quality_points": False,
+        })
+        ctx.feature_flags = {"mrp_routings": False}
+        with patch("modules.mrp.odoo_actions.create_product"):
+            mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+        tmpl_lookups = [c for c in client.search_read.call_args_list if c.args[0] == 'product.product']
+        assert len(tmpl_lookups) == 2, tmpl_lookups
+        results.append((
+            "create_mrp_data: template-id lookups via 2 bulk search_read calls, not N per-product",
+            True, f"search_read('product.product') calls={len(tmpl_lookups)}",
+        ))
+    except AssertionError as e:
+        results.append(("create_mrp_data: template-id lookups via 2 bulk search_read calls, not N per-product",
                         False, str(e)))
 
     all_ok = all(ok for _, ok, _ in results)

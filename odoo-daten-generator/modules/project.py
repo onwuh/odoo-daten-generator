@@ -148,8 +148,14 @@ def create_project_data(client, gemini, ctx: RunContext) -> None:
             for seq, sname in enumerate(selected[:num_stages], start=1)
         ]
 
+        # Group tasks by their randomly-chosen stage so each stage gets one
+        # write(ids=[...]) call instead of one write per task — write()
+        # already accepts a list of ids, no reason to call it once per task.
+        tasks_by_stage: dict = {}
         for task_id in project_task_map.get(pid, []):
-            update_task_stage(client, task_id, random.choice(stage_ids))
+            tasks_by_stage.setdefault(random.choice(stage_ids), []).append(task_id)
+        for stage_id, task_ids in tasks_by_stage.items():
+            client.write('project.task', task_ids, {"stage_id": stage_id})
 
     logger.info(f"✅ {len(ctx.project_ids)} Projekte mit Aufgaben und Phasen erstellt.")
 

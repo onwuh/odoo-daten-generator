@@ -298,29 +298,29 @@ def create_bank_transactions_for_all_invoices(client, invoice_ids, bill_ids):
 
     logger.info(f"-> Saldo: Anfang {balance_start:.2f} / Ende {balance_end_real:.2f}")
 
-    created_line_ids = []
-    num_exact = num_with_dev = 0
-    for trans in transactions_to_create:
-        line_values = {
+    line_vals_list = [
+        {
             "statement_id": statement_id,
             "journal_id": journal_id,
             "payment_ref": trans["label"],
             "amount": trans["amount"],
             "partner_id": trans["partner_id"],
         }
-        try:
-            line_id = client.create('account.bank.statement.line', line_values)
-            created_line_ids.append(line_id)
-            if trans["has_deviation"]:
-                num_with_dev += 1
-                if trans.get("original_amount") and trans["original_amount"] != trans["amount"]:
-                    logger.info(f"-> Banktransaktion {trans['id']}: Abweichung Betrag ({trans['amount']} vs {trans['original_amount']})")
-                else:
-                    logger.info(f"-> Banktransaktion {trans['id']}: Abweichung Label ({trans['label']})")
+        for trans in transactions_to_create
+    ]
+
+    created_line_ids = client.create_batch('account.bank.statement.line', line_vals_list)
+
+    num_with_dev = num_exact = 0
+    for trans in transactions_to_create:
+        if trans["has_deviation"]:
+            num_with_dev += 1
+            if trans.get("original_amount") and trans["original_amount"] != trans["amount"]:
+                logger.info(f"-> Banktransaktion {trans['id']}: Abweichung Betrag ({trans['amount']} vs {trans['original_amount']})")
             else:
-                num_exact += 1
-        except Exception as e:
-            logger.warning(f"   ⚠️  Fehler beim Erstellen der Banktransaktion für Rechnung {trans['id']}: {e}")
+                logger.info(f"-> Banktransaktion {trans['id']}: Abweichung Label ({trans['label']})")
+        else:
+            num_exact += 1
 
     logger.info(f"✅ {len(created_line_ids)} Banktransaktionen erstellt ({num_exact} exakt, {num_with_dev} mit Abweichung)")
     return created_line_ids
