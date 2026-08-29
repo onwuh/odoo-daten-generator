@@ -33,6 +33,7 @@ API keys via environment variables:
 - `GROQ_API_KEY` (primary LLM)
 - `GEMINI_API_KEY` (fallback LLM)
 - `ODOO_API_KEY`
+- `GITHUB_TOKEN` (server-only, feedback → GitHub issue creation — no server_config.py fallback, unlike the three above)
 
 ## Planning Documents
 
@@ -53,6 +54,7 @@ Single entry point: `web/app.py` (FastAPI; the browser UI in `static/` is a
 | `web/session.py` | Shared-access-code auth; credentials memory-only, per session |
 | `web/jobs.py` | Worker pool, admission control, run records, progress callbacks |
 | `web/sse.py` | Per-run append-only event stream (log/module/status/end) |
+| `web/feedback.py` | POST /api/feedback → GitHub issue creation via PAT (`GITHUB_TOKEN`) |
 | `connect_service.py` | Connection probe checklist (D4, ex-`gui.py` screen 2) |
 | `run_config.py` | Request payload → `DemoCriteria`/`ModuleSelections`; `WANTED_MODULES` |
 | `run_journal.py` | D7 run markers (`seeds/runs/<run_id>.json`) + best-effort cleanup |

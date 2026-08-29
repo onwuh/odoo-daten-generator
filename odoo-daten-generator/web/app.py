@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import secrets
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -30,7 +31,7 @@ from logging_setup import configure_logging
 from odoo_client import OdooJson2Client
 from run_journal import (RunJournal, delete_run, journal_dir_writable,
                          prune_journals, retention_days)
-from web import security
+from web import feedback, security
 from web.jobs import AdmissionRefused, JobQueue
 from web.session import CSRF_HEADER, SESSION_COOKIE, SessionStore, check_access_code
 from web.sse import EventBroker
@@ -135,6 +136,9 @@ async def _lifespan(_app: FastAPI):
     if not os.environ.get("ODOO_GENERATOR_ACCESS_CODE"):
         logger.warning("[web] ODOO_GENERATOR_ACCESS_CODE ist nicht gesetzt — "
                        "jede Anmeldung wird abgelehnt.")
+    if not os.environ.get("GITHUB_TOKEN"):
+        logger.warning("[web] GITHUB_TOKEN ist nicht gesetzt — Feedback erstellt "
+                       "keine GitHub-Issues (503).")
     # Probe the writable paths at startup. Both are configured by environment
     # variable and both fail late and confusingly when wrong: the cache surfaced
     # as a bare "[Errno 30] Read-only file system: '/data'" two minutes into a
@@ -410,6 +414,29 @@ def _own_run(run_id: str, session):
     return record
 
 
+def _feedback_run_context(run_id: Optional[str], session) -> Optional[Dict[str, Any]]:
+    """Best-effort, ownership-checked run context for a feedback submission.
+
+    Deliberately not _own_run: runs are pruned after FINISHED_RUN_TTL_SECONDS,
+    and a stale or foreign run_id must not fail the feedback submission — it
+    should just go in without context. Data-minimized: run_id/status/per-module
+    status/error-count only, never target/database/error text (see
+    feedback._build_body).
+    """
+    if not run_id:
+        return None
+    record = jobs.get(run_id)
+    if record is None or record.session_id != session.id:
+        return None
+    return {
+        "run_id": record.run_id,
+        "status": record.status,
+        "modules": [{"key": m["key"], "status": m["status"]}
+                    for m in record.public_dict()["modules"]],
+        "api_error_count": len(record.api_errors),
+    }
+
+
 @app.get("/api/runs/{run_id}")
 def api_run_status(run_id: str, session=Depends(get_session)) -> Dict[str, Any]:
     return _own_run(run_id, session).public_dict()
@@ -453,6 +480,55 @@ def api_run_cleanup(run_id: str, session=Depends(get_session_csrf)) -> Dict[str,
         return {"deleted": 0, "failed": [], "skipped": 0, "total": 0}
     client = OdooJson2Client(session.base_url, session.database, session.odoo_key)
     return delete_run(client, journal)
+
+
+# ---------------------------------------------------------------------------
+# Feedback
+# ---------------------------------------------------------------------------
+
+_FEEDBACK_MESSAGE_MAX = 4000
+_FEEDBACK_RATE_LIMIT = 5
+_FEEDBACK_RATE_WINDOW_SECONDS = 3600
+
+
+def _check_feedback_rate_limit(session) -> None:
+    """Per-session cap so one flaky auto-popup loop can't flood the repo."""
+    now = time.time()
+    session.feedback_timestamps = [
+        t for t in session.feedback_timestamps if now - t < _FEEDBACK_RATE_WINDOW_SECONDS
+    ]
+    if len(session.feedback_timestamps) >= _FEEDBACK_RATE_LIMIT:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                            detail="Zu viele Feedback-Einsendungen — bitte später erneut versuchen.")
+    session.feedback_timestamps.append(now)
+
+
+@app.post("/api/feedback", status_code=status.HTTP_201_CREATED)
+async def api_feedback(request: Request, session=Depends(get_session_csrf)) -> Dict[str, Any]:
+    """Creates a GitHub issue via a server-held PAT — no user GitHub login needed.
+
+    No Depends(_connected): feedback ("the login screen is confusing") must
+    work before any Odoo connection exists.
+    """
+    body = await request.json()
+    category = body.get("category")
+    if category not in feedback.CATEGORIES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ungültige Kategorie.")
+    message = (body.get("message") or "").strip()
+    if not message or len(message) > _FEEDBACK_MESSAGE_MAX:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"Nachricht muss zwischen 1 und {_FEEDBACK_MESSAGE_MAX} "
+                                   "Zeichen lang sein.")
+    _check_feedback_rate_limit(session)
+    context = _feedback_run_context(body.get("run_id"), session)
+    try:
+        result = await asyncio.to_thread(
+            feedback.create_github_issue, category, message, context)
+    except feedback.GitHubConfigError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+    except feedback.GitHubUpstreamError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    return result
 
 
 def _json(value: Any) -> str:

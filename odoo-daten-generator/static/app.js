@@ -20,6 +20,8 @@
     runId: null,
     source: null,
     moduleRows: {},
+    feedbackRunId: null,
+    feedbackPromptedRunId: null,
     // S10/R10 (F3): a LATCH, not a live mirror of state.connect.ok — set once
     // on the first successful /api/connect and never cleared except by
     // logout. A live check would lock the user out of their own running run
@@ -681,6 +683,7 @@
         setText("login-hint", "Angemeldet.");
         setHidden("panel-login", true);
         setHidden("panel-connect", false);
+        setHidden("btn-feedback-open", false);
         loadDefaults();
         // S10/R10 (F1): after login, not on page load — the fields the
         // tutorial's steps 3+ reference aren't visible before this point.
@@ -798,6 +801,99 @@
   $("tutorial-later").addEventListener("click", hideTutorial);
   $("tutorial-close").addEventListener("click", hideTutorial);
   $("btn-tutorial-reopen").addEventListener("click", showTutorial);
+
+  // -------------------------------------------------------------- feedback
+  // Persistent button (rail-foot) AND an automatic popup after every run
+  // finishes — the tool is early in rollout and wants heavy feedback volume
+  // right now. The opt-out checkbox (auto-popup only) is the permanent brake;
+  // statusLabel() is defined further down but usable here since function
+  // declarations are hoisted within this file's enclosing IIFE.
+  var FEEDBACK_OPTOUT_KEY = "odoo-gen-feedback-optout";
+
+  function feedbackOptedOut() {
+    try {
+      return window.localStorage.getItem(FEEDBACK_OPTOUT_KEY) === "1";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function setFeedbackOptedOut() {
+    try { window.localStorage.setItem(FEEDBACK_OPTOUT_KEY, "1"); } catch (e) { /* see tutorialSeen() */ }
+  }
+
+  function openFeedback(opts) {
+    opts = opts || {};
+    var isAuto = opts.trigger === "auto";
+    // Manual trigger has no opts.runId — fall back to the most recent run of
+    // this session, so "click ✉ because something looked wrong after a run"
+    // still attaches context. _feedback_run_context ignores a stale/unknown id.
+    state.feedbackRunId = opts.runId || state.runId || null;
+    $("feedback-message").value = "";
+    var bugRadio = document.querySelector('input[name="feedback-category"][value="bug"]');
+    if (bugRadio) bugRadio.checked = true;
+    setText("feedback-hint", "");
+    clear($("feedback-result"));
+    setHidden("feedback-result", true);
+    setHidden("feedback-optout-row", !isAuto);
+    $("feedback-optout").checked = false;
+    if (isAuto) {
+      setText("feedback-context-hint", "Lauf beendet (" + statusLabel(opts.status) + ") — kurzes Feedback dazu?");
+      setHidden("feedback-context-hint", false);
+    } else {
+      setHidden("feedback-context-hint", true);
+    }
+    setHidden("feedback-modal", false);
+  }
+
+  function hideFeedback() {
+    // Checked BEFORE hiding so ×/Abbrechen/post-submit auto-close all honour it.
+    if (!$("feedback-optout-row").classList.contains("is-hidden") && checked("feedback-optout")) {
+      setFeedbackOptedOut();
+    }
+    setHidden("feedback-modal", true);
+  }
+
+  $("btn-feedback-open").addEventListener("click", function () { openFeedback({ trigger: "manual" }); });
+  $("feedback-close").addEventListener("click", hideFeedback);
+  $("feedback-cancel").addEventListener("click", hideFeedback);
+
+  $("feedback-submit").addEventListener("click", function () {
+    var message = $("feedback-message").value.trim();
+    if (!message) {
+      setText("feedback-hint", "Bitte eine Nachricht eingeben.");
+      return;
+    }
+    var categoryInput = document.querySelector('input[name="feedback-category"]:checked');
+    var payload = { category: categoryInput ? categoryInput.value : "bug", message: message };
+    if (state.feedbackRunId) payload.run_id = state.feedbackRunId;
+    var button = this;
+    button.disabled = true;
+    setText("feedback-hint", "Wird gesendet…");
+    api("/api/feedback", { method: "POST", body: payload })
+      .then(function (data) {
+        setText("feedback-hint", "");
+        clear($("feedback-result"));
+        var link = document.createElement("a");
+        link.href = data.url;
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.textContent = "Issue #" + data.number + " ansehen ↗";
+        $("feedback-result").appendChild(link);
+        setHidden("feedback-result", false);
+        setTimeout(hideFeedback, 1500);
+      })
+      .catch(function (err) { setText("feedback-hint", err.message); })
+      .finally(function () { button.disabled = false; });
+  });
+
+  function maybeAutoFeedback(runId, runStatus) {
+    if (feedbackOptedOut()) return;
+    if (state.feedbackPromptedRunId === runId) return;
+    if (!$("feedback-modal").classList.contains("is-hidden")) return; // don't clobber a manual draft
+    state.feedbackPromptedRunId = runId;
+    openFeedback({ trigger: "auto", runId: runId, status: runStatus });
+  }
 
   // --------------------------------------------------------------- connect
   function renderChecklist(steps) {
@@ -1033,10 +1129,14 @@
     source.addEventListener("status", function (e) {
       applyRunStatus(JSON.parse(e.data));
     });
-    source.addEventListener("end", function () {
+    source.addEventListener("end", function (e) {
       source.close();
       state.source = null;
-      api("/api/runs/" + encodeURIComponent(runId)).then(applyRunStatus);
+      var fallbackStatus = null;
+      try { fallbackStatus = JSON.parse(e.data).status; } catch (err) { /* no/unparsable payload */ }
+      api("/api/runs/" + encodeURIComponent(runId))
+        .then(function (data) { applyRunStatus(data); maybeAutoFeedback(runId, data.status); })
+        .catch(function () { if (fallbackStatus) maybeAutoFeedback(runId, fallbackStatus); });
     });
     source.onerror = function () {
       // EventSource retries on its own; only report a stream that is really gone.
@@ -1105,6 +1205,7 @@
     state.csrf = data.csrf_token;
     setHidden("panel-login", true);
     setHidden("panel-connect", false);
+    setHidden("btn-feedback-open", false);
     loadDefaults();
     if (!tutorialSeen()) showTutorial();
   }).catch(function () { /* not logged in yet — the login panel stays */ });
