@@ -496,9 +496,15 @@
       },
     },
     {
-      key: "documents", icon: "docs", title: "Dokumente (PDFs)", badge: "kein Odoo-Modul", span2: true,
+      key: "documents", icon: "docs", title: "Dokumente (PDFs)", badge: "Beta · kein Odoo-Modul", span2: true,
+      defaultOn: false,
       note: "Erzeugt PDF-Dateien lokal und hängt sie als Anhang an — unabhängig von installierten Apps, daher immer verfügbar.",
       build: function (body) {
+        // Beta warning — only visible while this card's switch is on, since
+        // .m-body itself is display:none until then (see app.css). That's
+        // the "show a hint once someone enables it" behaviour, no extra JS.
+        body.appendChild(el("div", "field-hint beta-hint",
+          "Beta: Layout und Rechnungsdaten dieser PDFs werden noch verbessert — vor einer Kundenpräsentation prüfen."));
         body.appendChild(checkLine("doc-bills", "PDF-Rechnungen für Eingangsrechnungen", "", true));
         body.appendChild(checkLine("doc-cvs", "Lebenslauf-PDFs für Bewerber", "", true));
       },
