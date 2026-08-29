@@ -193,6 +193,91 @@ def run():
     except AssertionError as e:
         results.append(("create_mrp_data: missing mrp_routings key defaults to off, matching gui.py (B15)", False, str(e)))
 
+    # ------------------------------------------------------------------
+    # S10/R10 (Pattern 3): mrp_routings=True + num_workcenters>0 is not
+    # enough on its own any more — model_access={'mrp.workcenter': False}
+    # (a real 403/no-rights-group case, not a settings-off case, which
+    # feature_flags already covers) must still block work center creation.
+    # ------------------------------------------------------------------
+    try:
+        client = _mock_client()
+        ctx = _make_ctx({
+            "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
+            "num_workcenters": 3, "num_manufacturing_orders": 0, "create_quality_points": False,
+        })
+        ctx.feature_flags = {"mrp_routings": True}
+        ctx.model_access = {"mrp.workcenter": False}
+        with patch("modules.mrp.odoo_actions.create_product"):
+            mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+        workcenter_creates = [c for c in client.create.call_args_list if c.args[0] == 'mrp.workcenter']
+        assert workcenter_creates == [], (
+            f"model_access blocking mrp.workcenter must prevent workcenter creation: {workcenter_creates}"
+        )
+        results.append(("create_mrp_data: model_access blocks mrp.workcenter even with mrp_routings=True (Pattern 3)",
+                        True, ""))
+    except AssertionError as e:
+        results.append(("create_mrp_data: model_access blocks mrp.workcenter even with mrp_routings=True (Pattern 3)",
+                        False, str(e)))
+
+    try:
+        # The converse — an EMPTY model_access (nothing probed, e.g. the
+        # module wasn't in installed_modules at connect time) must default
+        # open and not itself block workcenter creation.
+        client = _mock_client()
+        ctx = _make_ctx({
+            "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
+            "num_workcenters": 2, "num_manufacturing_orders": 0, "create_quality_points": False,
+        })
+        ctx.feature_flags = {"mrp_routings": True}
+        ctx.model_access = {}
+        with patch("modules.mrp.odoo_actions.create_product"):
+            mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+        workcenter_creates = [c for c in client.create.call_args_list if c.args[0] == 'mrp.workcenter']
+        assert len(workcenter_creates) == 2, workcenter_creates
+        results.append(("create_mrp_data: empty model_access defaults open, does not block (B1 guard)", True, ""))
+    except AssertionError as e:
+        results.append(("create_mrp_data: empty model_access defaults open, does not block (B1 guard)", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # S10/R10 (A6): company_id passed to mrp.workcenter must come from
+    # odoo_actions.get_main_company_id(client) — a real res.company id — not
+    # ctx.company_ids[0], which holds res.partner ids (customer contacts).
+    # ------------------------------------------------------------------
+    try:
+        client = _mock_client()
+        client.search_read.side_effect = None
+
+        def _search_read_with_company(model, domain=None, fields=None, limit=None, **kw):
+            if model == 'product.product':
+                return [{"product_tmpl_id": [9001, "tmpl"]}]
+            if model == 'res.company':
+                return [{"id": 777}]  # the real res.company id
+            return []
+
+        client.search_read.side_effect = _search_read_with_company
+        ctx = _make_ctx({
+            "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
+            "num_workcenters": 1, "num_manufacturing_orders": 0, "create_quality_points": False,
+        })
+        ctx.feature_flags = {"mrp_routings": True}
+        # A res.partner id, deliberately different from the res.company id
+        # above — if the bug regressed, this is what would leak through.
+        ctx.company_ids = [42]
+        with patch("modules.mrp.odoo_actions.create_product"):
+            mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+        workcenter_creates = [c for c in client.create.call_args_list if c.args[0] == 'mrp.workcenter']
+        assert workcenter_creates, "expected at least one workcenter create call"
+        sent_company_id = workcenter_creates[0].args[1].get("company_id")
+        assert sent_company_id == 777, (
+            f"A6 regressed: expected the real res.company id (777) via "
+            f"get_main_company_id, got {sent_company_id!r} (ctx.company_ids[0] would be 42)"
+        )
+        results.append(("create_mrp_data: mrp.workcenter.company_id uses get_main_company_id, not ctx.company_ids[0] (A6)",
+                        True, f"company_id={sent_company_id}"))
+    except AssertionError as e:
+        results.append(("create_mrp_data: mrp.workcenter.company_id uses get_main_company_id, not ctx.company_ids[0] (A6)",
+                        False, str(e)))
+
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results
 

@@ -14,16 +14,22 @@ from typing import Any, Dict, List, Optional, Set
 import odoo_actions
 from llm_service import LLMService, get_language_name
 from odoo_client import OdooJson2Client
-from run_config import MODULE_LABELS, WANTED_MODULES
+from run_config import MODULE_LABELS, WANTED_MODULES, effective_installed_modules
 
 logger = logging.getLogger(__name__)
 
 # Checklist step ids, in display order. The frontend renders these labels.
+# "access" sits right after "modules": it answers a question "Installierte
+# Module" cannot — a module can be installed and still be unwritable for this
+# API key (a settings checkbox off, a missing rights group). On demo-test5
+# the pre-S10 read-only probe reported mrp_routings=True with the "Work
+# Orders" setting off, so the run started and was guaranteed to fail.
 STEP_LABELS = [
     ("odoo", "Odoo-Verbindung"),
     ("company", "Firmenname"),
     ("language", "Sprache"),
     ("modules", "Installierte Module"),
+    ("access", "Schreibrechte"),
     ("version", "Odoo-Version"),
     ("existing", "Vorhandene Stammdaten"),
     ("llm", "LLM-Verbindung"),
@@ -47,6 +53,14 @@ class ConnectResult:
     language_name: str = "German"
     installed_modules: Set[str] = field(default_factory=set)
     feature_flags: Dict[str, bool] = field(default_factory=dict)
+    # Raw per-model create-access results (odoo_actions.probe_model_access).
+    model_access: Dict[str, bool] = field(default_factory=dict)
+    # Subset of installed_modules whose PRIMARY model (odoo_actions.
+    # PRIMARY_MODEL_PER_MODULE) is not creatable — computed by the SAME
+    # run_config.effective_installed_modules a run itself uses, so the
+    # frontend renders exactly the decision the run will make rather than
+    # re-deriving its own answer from the raw model_access dict.
+    blocked_modules: Set[str] = field(default_factory=set)
     odoo_version: Optional[str] = None
     field_warnings: List[str] = field(default_factory=list)
     existing_company_ids: List[int] = field(default_factory=list)
@@ -70,6 +84,8 @@ class ConnectResult:
             # quality points are silently never generated (mrp.py:268/:347), and
             # CRM leads stay off. Same silent-disable class as the B1 bug.
             "feature_flags": self.feature_flags,
+            "model_access": self.model_access,
+            "blocked_modules": sorted(self.blocked_modules),
             "odoo_version": self.odoo_version,
             "field_warnings": self.field_warnings,
             "existing_companies": len(self.existing_company_ids),
@@ -149,6 +165,7 @@ def probe(*, base_url: str, database: str, odoo_key: str,
             step("language", False, str(exc)[:200])
 
         # -- Installed modules + feature flags --
+        mods: Set[str] = set()
         try:
             mods = odoo_actions.get_installed_modules(client, WANTED_MODULES)
             result.installed_modules = mods
@@ -164,18 +181,43 @@ def probe(*, base_url: str, database: str, odoo_key: str,
         except Exception as exc:
             step("modules", False, str(exc)[:200])
 
+        # -- Write access (R10/WP1) --
+        # A model existing and being readable does not mean this API key can
+        # CREATE records on it — the gap that let a run start on demo-test5
+        # with mrp_routings reporting True while the setting was off. Uses
+        # the SAME effective_installed_modules a run itself uses (see
+        # run_config), so this step and the run agree on which modules are
+        # actually usable.
+        try:
+            result.model_access = odoo_actions.probe_model_access(client, mods)
+            _usable, result.blocked_modules = effective_installed_modules(mods, result.model_access)
+            if result.blocked_modules:
+                labels = ", ".join(MODULE_LABELS.get(m, m) for m in sorted(result.blocked_modules))
+                step("access", False, f"Keine Schreibrechte: {labels}")
+            else:
+                step("access", True, "OK")
+        except Exception as exc:
+            logger.warning(f"Schreibrechte nicht ermittelbar: {exc}")
+            step("access", False, str(exc)[:200])
+
         # -- Server version (non-fatal) --
         try:
             version = odoo_actions.get_server_version(client)
             result.odoo_version = version
             if version:
-                result.field_warnings = odoo_actions.check_field_compatibility(client) or []
+                result.field_warnings = odoo_actions.check_field_compatibility(
+                    client, installed_modules=mods) or []
                 detail = version
                 if result.field_warnings:
                     detail += f" · {len(result.field_warnings)} Feld-Warnung(en) siehe Log"
                 step("version", True, detail)
             else:
-                step("version", False, "unbekannt")
+                # Non-fatal by design (S5): the version string is cosmetic and
+                # check_field_compatibility already degrades gracefully without
+                # it. Reporting this red would (once WP5's all-green gate
+                # exists) dead-end the whole UI over a string this tool never
+                # needed to run.
+                step("version", True, "unbekannt")
         except Exception as exc:
             step("version", False, str(exc)[:200])
 

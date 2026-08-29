@@ -19,6 +19,8 @@ if _ROOT not in sys.path:
 
 import llm_service
 import run_journal
+import requests
+from odoo_client import OdooJson2Client
 
 
 def run():
@@ -188,6 +190,58 @@ def run():
         results.append(("Cleanup: storniert zuerst und meldet den echten Grund", True, ""))
     except Exception as e:
         results.append(("Cleanup: storniert zuerst und meldet den echten Grund", False, str(e)))
+
+    try:
+        # S10/R10 end-to-end regression: the two tests above check
+        # _first_new_error against a hand-built errors list. This one drives a
+        # REAL OdooJson2Client (call_method now makes exactly one request per
+        # call — the payload-format fallback chain is gone), so it also proves
+        # odoo_client._record_failure/_select_attempt put the real message
+        # where _first_new_error expects to find it — not just that
+        # _first_new_error can find it if it's there.
+        class _FakeResponse:
+            def __init__(self, status_code, text=""):
+                self.status_code = status_code
+                self.text = text
+                self.headers = {"Content-Type": "application/json"}
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    err = requests.HTTPError(f"{self.status_code}")
+                    err.response = self
+                    raise err
+
+            def json(self):
+                return {}
+
+        def _fake_post(url, json=None, timeout=None, allow_redirects=None):
+            if url.endswith("/unlink"):
+                return _FakeResponse(422, text=(
+                    '{"error": {"data": {"message": '
+                    '"You can not delete a confirmed sales order"}}}'
+                ))
+            # action_cancel: fails too, for a different, unrelated reason —
+            # delete_run's best-effort contract must swallow this one.
+            return _FakeResponse(422, text=(
+                '{"error": {"data": {"message": "nothing to cancel"}}}'
+            ))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = run_journal.RunJournal("demo-e2e", Path(tmp))
+            journal.record("sale.order", [66])
+            client = run_journal.JournalingClient("https://demo-x.odoo.com", "db", "key",
+                                                  journal=journal)
+            client.session.post = _fake_post
+            # action_cancel (CANCEL_BEFORE_UNLINK) also fails — delete_run
+            # swallows that per its own "best effort" contract and proceeds to
+            # unlink, whose failure is the one that must surface.
+            summary = run_journal.delete_run(client, journal)
+            assert summary["deleted"] == 0 and len(summary["failed"]) == 1, summary
+            assert "confirmed sales order" in summary["failed"][0]["error"], summary
+            assert "nothing to cancel" not in summary["failed"][0]["error"], summary
+        results.append(("Cleanup (E2E, echter Client): meldet die informative Meldung, nicht das letzte 422", True, ""))
+    except Exception as e:
+        results.append(("Cleanup (E2E, echter Client): meldet die informative Meldung, nicht das letzte 422", False, str(e)))
 
     # ------------------------------------------------------------------
     # An unwritable cache directory degrades to "no caching", never aborts a run

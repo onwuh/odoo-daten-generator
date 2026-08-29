@@ -170,6 +170,29 @@ def create_leave_data(client, ctx: RunContext) -> list:
     if not ctx.employee_ids:
         return []
 
+    # hr.leave/hr.leave.allocation ship with hr_holidays, hr.work.entry.type
+    # with hr_work_entry — NOT with hr. Employees installed does not imply
+    # absences installed. Before this gate (R10), this fired unconditionally
+    # as soon as 'hr' was installed and failed loudly on every one of those
+    # models when the leave apps weren't there (the live-reported [9]-[14]
+    # errors this sprint traced). WARNING, not INFO: if either technical
+    # module name is wrong on some Odoo release, this gate would otherwise
+    # skip forever, silently — the exact failure class it exists to close.
+    missing = [m for m in ("hr_holidays", "hr_work_entry") if m not in ctx.installed_modules]
+    if missing:
+        logger.warning(f"⚠️  Urlaubsdaten übersprungen — fehlende Module: {', '.join(missing)}")
+        return []
+
+    # Installed is not the same question as writable: the app can be present
+    # while this API key still lacks create rights on the specific model
+    # (a rights-group gap, distinct from the module-not-installed case above).
+    # Default True — a model missing from model_access was never probed.
+    blocked = [m for m in ("hr.leave", "hr.leave.allocation", "hr.work.entry.type")
+              if not ctx.model_access.get(m, True)]
+    if blocked:
+        logger.warning(f"⚠️  Urlaubsdaten übersprungen — keine Schreibrechte auf: {', '.join(blocked)}")
+        return []
+
     entries_per_employee = int(to_params.get("entries_per_employee", 2))
     avg_length_days = int(to_params.get("avg_length_days", 5))
     past_future_pct = int(to_params.get("past_future_pct", 30))   # % future

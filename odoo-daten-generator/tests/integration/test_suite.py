@@ -38,6 +38,7 @@ from tests.integration import (
     test_inventory,
     test_documents,
     test_run_journal,
+    test_odoo_actions,
 )
 
 
@@ -72,6 +73,7 @@ _MODULES = [
     ("inventory",   test_inventory.run),
     ("documents",   test_documents.run),
     ("run_journal",  test_run_journal.run),
+    ("odoo_actions", test_odoo_actions.run),
 ]
 
 

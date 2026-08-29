@@ -12,7 +12,7 @@ from config import ModuleSelections, RunContext, DemoCriteria
 from modules.hr import create_leave_data, get_or_create_annual_leave_type
 
 
-def _make_ctx(hr_timeoff: dict, employee_ids=None) -> RunContext:
+def _make_ctx(hr_timeoff: dict, employee_ids=None, installed_modules=None) -> RunContext:
     criteria = DemoCriteria(
         mode="both", industry="Test", num_companies=1,
         num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
@@ -24,6 +24,13 @@ def _make_ctx(hr_timeoff: dict, employee_ids=None) -> RunContext:
         criteria=criteria, module_selections=sel,
         industry="Test", language_name="Deutsch", language_code="de",
         gemini_model_name="",
+        # S10/R10: create_leave_data now gates on hr_holidays/hr_work_entry
+        # being installed (they, not hr, are where hr.leave/hr.work.entry.type
+        # actually ship). Every positive case below exercises the leave logic
+        # itself, so both are installed by default here; the one negative case
+        # for the new gate passes installed_modules=set() explicitly.
+        installed_modules=(installed_modules if installed_modules is not None
+                           else {"hr_holidays", "hr_work_entry"}),
     )
     ctx.employee_ids = employee_ids or []
     return ctx
@@ -273,6 +280,45 @@ def run():
         results.append(("B17: get_or_create_annual_leave_type omits shortcut_behavior", True, ""))
     except Exception as e:
         results.append(("B17: get_or_create_annual_leave_type omits shortcut_behavior", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # S10/R10 — Pattern 3/5: hr.leave/hr.work.entry.type ship with
+    # hr_holidays/hr_work_entry, not with hr. Employees installed must not
+    # imply absences installed; create_leave_data must skip gracefully
+    # (no API calls at all) rather than fail loudly on every leave model.
+    # ------------------------------------------------------------------
+    try:
+        mock_client = unittest.mock.MagicMock()
+        test_ctx = _make_ctx({
+            "enabled": True, "entries_per_employee": 2, "avg_length_days": 5,
+            "past_future_pct": 30, "timescale_days": 180, "validate_pct": 100,
+        }, employee_ids=[101], installed_modules=set())
+        leave_ids = create_leave_data(mock_client, test_ctx)
+        assert leave_ids == [], f"expected graceful skip, got {leave_ids!r}"
+        mock_client.create.assert_not_called()
+        mock_client.create_batch.assert_not_called()
+        mock_client.search_read.assert_not_called()
+        results.append(("S10: create_leave_data skips gracefully without hr_holidays/hr_work_entry (Pattern 3)",
+                        True, ""))
+    except Exception as e:
+        results.append(("S10: create_leave_data skips gracefully without hr_holidays/hr_work_entry (Pattern 3)",
+                        False, str(e)))
+
+    try:
+        # Only one of the two missing must still block — both models are
+        # needed (hr.leave.allocation via hr_holidays, hr.work.entry.type via
+        # hr_work_entry).
+        mock_client = unittest.mock.MagicMock()
+        test_ctx = _make_ctx({
+            "enabled": True, "entries_per_employee": 2, "avg_length_days": 5,
+            "past_future_pct": 30, "timescale_days": 180, "validate_pct": 100,
+        }, employee_ids=[101], installed_modules={"hr_holidays"})  # hr_work_entry missing
+        leave_ids = create_leave_data(mock_client, test_ctx)
+        assert leave_ids == [], f"expected graceful skip with only one of two installed, got {leave_ids!r}"
+        mock_client.create.assert_not_called()
+        results.append(("S10: create_leave_data needs BOTH hr_holidays and hr_work_entry", True, ""))
+    except Exception as e:
+        results.append(("S10: create_leave_data needs BOTH hr_holidays and hr_work_entry", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

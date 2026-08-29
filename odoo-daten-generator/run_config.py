@@ -10,15 +10,26 @@ already scheduled to delete the GUI), and a module missing from this list never
 enters `ctx.installed_modules`, so `orchestrator.py` skips it forever with no
 error. Same silent-disable class as the historical B1 bug.
 """
+import logging
 from typing import Any, Dict, Optional, Set, Tuple
 
 from config import DemoCriteria, ModuleSelections, RunContext
+from odoo_actions import PRIMARY_MODEL_PER_MODULE
+
+logger = logging.getLogger(__name__)
 
 # Odoo modules probed via ir.module.module on connect.
+#
+# hr_holidays/hr_work_entry (S10/R10): hr.leave/hr.leave.allocation/
+# hr.work.entry.type ship with these, NOT with hr — employees installed does
+# not imply absences installed. Without a probe for them, modules/hr.py's
+# create_leave_data fired as soon as 'hr' was installed and failed loudly on
+# every one of those models when the leave apps weren't there. They are
+# GATE_ONLY_MODULES below: probed and labelled, never a selectable module.
 WANTED_MODULES = [
     "crm", "sale", "account", "hr", "project",
     "hr_timesheet", "mrp", "hr_recruitment",
-    "purchase", "stock",
+    "purchase", "stock", "hr_holidays", "hr_work_entry",
 ]
 
 # "documents" is deliberately absent above: it is a pseudo-module. It attaches
@@ -26,6 +37,15 @@ WANTED_MODULES = [
 # the technical name of Odoo's unrelated real Documents app — probing for it
 # would gate PDF generation on an app nobody installed.
 PSEUDO_MODULES = ["documents"]
+
+# Probed (WANTED_MODULES) and labelled (MODULE_LABELS), but never a progress
+# row, never a ModuleSelections field, never entered into MODULE_RUN_ORDER or
+# orchestrator.py's module_order — they only gate a sub-behaviour of an
+# already-installed module (modules/hr.py's create_leave_data). Kept as their
+# own set, not folded into WANTED_MODULES's normal treatment, because every
+# WANTED_MODULES entry is otherwise assumed to be a run_config-selectable
+# module — see active_progress_keys and test_run_config_unit.py's invariant.
+GATE_ONLY_MODULES = {"hr_holidays", "hr_work_entry"}
 
 MODULE_LABELS = {
     "crm": "CRM",
@@ -38,12 +58,16 @@ MODULE_LABELS = {
     "hr_recruitment": "Recruiting",
     "purchase": "Einkauf",
     "stock": "Lager",
+    "hr_holidays": "Abwesenheiten",
+    "hr_work_entry": "Arbeitszeiterfassung",
     "documents": "Dokumente (PDFs)",
     "stammdaten": "Stammdaten",
 }
 
 # Progress rows, in the order orchestrator.py actually executes them.
 # "stammdaten" is prepended by the caller unless skip_master_data is set.
+# GATE_ONLY_MODULES are deliberately absent — they never run as their own
+# step, see the comment there.
 MODULE_RUN_ORDER = [
     "mrp", "crm", "sale", "hr", "project", "hr_timesheet",
     "account", "hr_recruitment", "purchase", "stock", "documents",
@@ -296,19 +320,65 @@ def build_selections(payload: Dict[str, Any]) -> Tuple[ModuleSelections, Set[str
     return sel, selected
 
 
+def effective_installed_modules(installed: Set[str],
+                                model_access: Dict[str, bool]) -> Tuple[Set[str], Set[str]]:
+    """Split `installed` into (usable, blocked) using each module's primary
+    write-access probe (odoo_actions.PRIMARY_MODEL_PER_MODULE).
+
+    A module with no primary-model entry (documents' pseudo-module, or any
+    future module key this mapping hasn't caught up with) is always usable —
+    there's nothing to gate it on. A module WITH a primary entry that was
+    never probed (missing from model_access) is also usable: `.get(model,
+    True)` defaults open, the same B1-error-class guard as everywhere else
+    model_access is read. Only an explicit False blocks a module.
+
+    Single source of truth for this decision: called both here (to filter
+    ctx.installed_modules so orchestrator.py needs no change at all) and from
+    connect_service (so the API reports the SAME decision the run will make,
+    rather than the frontend re-deriving its own answer from the raw probe
+    dict and risking a different one for a module with a blocked secondary
+    model but a writable primary one).
+    """
+    usable: Set[str] = set()
+    blocked: Set[str] = set()
+    for module in installed:
+        primary = PRIMARY_MODEL_PER_MODULE.get(module)
+        if primary is None or model_access.get(primary, True):
+            usable.add(module)
+        else:
+            blocked.add(module)
+    return usable, blocked
+
+
 def build_context(payload: Dict[str, Any], *, language_name: str, language_code: str,
                   llm_model_name: str, installed_modules: Set[str],
                   feature_flags: Dict[str, bool],
+                  model_access: Optional[Dict[str, bool]] = None,
                   existing_company_ids=None, existing_product_ids=None) -> Tuple[RunContext, Set[str]]:
     """Assemble a RunContext from a validated request payload.
 
     `feature_flags` is not optional in practice: passing `{}` silently disables
     every MRP work center, BOM operation and quality point (mrp.py:268/:347) and
     CRM leads. The connect endpoint must supply the probed flags.
+
+    `model_access` gates `installed_modules` down to modules the API-key user
+    can actually write to (effective_installed_modules) — installed-but-
+    unwritable modules never enter ctx.installed_modules, so orchestrator.py's
+    existing `"mod" in ctx.installed_modules` gate skips them without any
+    change to that locked file. `installed_modules` itself is not renamed
+    because that field's name is what every module reads.
     """
     validate_consent(payload)
     criteria = build_criteria(payload)
     selections, selected = build_selections(payload)
+
+    access = dict(model_access or {})
+    usable_modules, blocked_modules = effective_installed_modules(
+        set(installed_modules or set()), access)
+    if blocked_modules:
+        logger.warning(
+            f"[access] Modul(e) ohne Schreibrechte, aus installed_modules entfernt: "
+            f"{', '.join(sorted(blocked_modules))}")
 
     ctx = RunContext(
         criteria=criteria,
@@ -317,8 +387,9 @@ def build_context(payload: Dict[str, Any], *, language_name: str, language_code:
         language_name=language_name,
         language_code=language_code,
         gemini_model_name=llm_model_name,
-        installed_modules=set(installed_modules or set()),
+        installed_modules=usable_modules,
         feature_flags=dict(feature_flags or {}),
+        model_access=access,
     )
 
     if _as_bool(payload.get("use_existing")):
