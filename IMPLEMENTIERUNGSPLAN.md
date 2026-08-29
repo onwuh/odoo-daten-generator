@@ -919,7 +919,27 @@ unabhängigen Fehlschläge wie in Phase A (siehe oben), keine neuen.
 
 Offen und ausdrücklich nicht in S10: R6, R7, S5 Tier 2, Provenienz-Invariante als
 CI-Prüfung, F8 (siehe oben), sowie der vorbestehende `hr.job.payment_interval`-Bug in
-`modules/recruiting.py` (ausgelagert, siehe CLAUDE.md „Verified field gotchas").
+`modules/recruiting.py` (ausgelagert, siehe CLAUDE.md „Verified field gotchas" — **seitdem
+behoben, siehe Nachtrag unten**).
+
+**Nachtrag — `hr.job.payment_interval`-Bug behoben (2026-08-29).** Die ursprüngliche Diagnose
+war falsch: kein Feldschema-Mismatch, sondern `hr_recruitment` selbst steht auf `demo-test5`
+auf `state=uninstalled` (live per `ir.module.module` bestätigt) — dieselbe Fehlerklasse wie F6
+(`hr_holidays`/`hr_work_entry`), nur ohne eigene Sonde bis jetzt unbemerkt, weil
+`modules/recruiting.py` selbst nie angefasst wurde. `orchestrator.py:75` gatet
+`create_recruiting_data` bereits korrekt auf `"hr_recruitment" in ctx.installed_modules` —
+Produktivcode war nie betroffen. Der Bug saß ausschließlich in zwei Live-Integrationstests, die
+die low-level Recruiting-Helfer ungegatet aufriefen: `tests/integration/test_recruiting.py`
+(Schritte 1/2/4/7) bekam das `ctx.installed_modules`-Gate, das `test_hr.py` in Phase A für
+Urlaubsdaten bereits etabliert hatte — eine zweite Prüfung dieses Fixes zeigte, dass
+`tests/integration/test_documents.py`s Setup (Bewerber-Erzeugung fürs P2-CV-PDF-Fixture)
+denselben ungegateten Aufruf unabhängig ein zweites Mal enthielt und ebenfalls das Gate
+brauchte. 306/306 Unit-, 79/79 Live-Integrationsschritte grün (die 3 zusätzlichen Schritte
+ggü. den 76 aus Phase A/B sind `test_documents.py`s P1/P2/Pattern-5-Schritte, die durch den
+frühen `return` in der defekten Setup-Exception vorher nie gezählt wurden). Separat, zeitgleich
+in einer parallelen Session gemerged: CI-Lint-Infrastruktur (`ruff.toml`,
+`.github/workflows/ci.yml`, inzwischen auch ein `bandit`-Job) — eigener Commit, nicht Teil
+dieses Fixes.
 
 ---
 
