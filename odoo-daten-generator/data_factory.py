@@ -123,7 +123,12 @@ def build_vendor_footer_info(supplier_name: str) -> Dict[str, Any]:
     different suppliers' bills look distinct, not to be individually
     meaningful. "tax_number" is a USt-IdNr. despite the key name (DE + 9
     digits is that format, not the separate local Steuernummer) — pdf_factory
-    labels it accordingly.
+    labels it accordingly. "skonto_percent"/"skonto_days" are an early-payment
+    discount clause (e.g. "2% Skonto bei Zahlung innerhalb 7 Tagen") — a
+    detail real invoicing-software exports carry that a bare "N Tage netto"
+    line doesn't; skonto_days is always drawn from a pool below every
+    possible payment_terms_days value so the discount window is always
+    shorter than the plain due date, as it has to be to make sense.
 
     Uses a LOCAL random.Random instance seeded from the supplier name's
     CRC32, never the module-global `random` this file uses everywhere else:
@@ -146,6 +151,8 @@ def build_vendor_footer_info(supplier_name: str) -> Dict[str, Any]:
         "bank_name": bank_name,
         "payment_terms_days": rng.choice([14, 21, 30, 45]),
         "customer_number": f"K-{rng.randint(10000, 99999)}",
+        "skonto_percent": rng.choice([2, 3, 5]),
+        "skonto_days": rng.choice([7, 10]),
     }
 
 

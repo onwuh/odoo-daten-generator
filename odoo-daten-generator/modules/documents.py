@@ -139,7 +139,9 @@ def _create_bill_pdfs(client, ctx: RunContext) -> None:
             price_subtotal = line.get("price_subtotal") or 0
             price_total = line.get("price_total") or 0
 
-            tax_breakdown_by_rate[rate] = tax_breakdown_by_rate.get(rate, 0.0) + (price_total - price_subtotal)
+            bucket = tax_breakdown_by_rate.setdefault(rate, {"base": 0.0, "tax": 0.0})
+            bucket["base"] += price_subtotal
+            bucket["tax"] += (price_total - price_subtotal)
             pdf_lines.append({
                 "description": description,
                 "quantity": line.get("quantity") or 0,
@@ -154,8 +156,8 @@ def _create_bill_pdfs(client, ctx: RunContext) -> None:
             "tax": bill.get("amount_tax") or 0,
             "total": bill.get("amount_total") or 0,
             "tax_breakdown": [
-                {"rate": rate, "amount": amount}
-                for rate, amount in sorted(tax_breakdown_by_rate.items())
+                {"rate": rate, "base": bucket["base"], "amount": bucket["tax"]}
+                for rate, bucket in sorted(tax_breakdown_by_rate.items())
             ],
         }
 

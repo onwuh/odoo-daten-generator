@@ -197,7 +197,7 @@ def run():
         totals = kwargs.get("totals")
         assert totals == {
             "untaxed": 100.0, "tax": 19.0, "total": 119.0,
-            "tax_breakdown": [{"rate": 19.0, "amount": 19.0}],
+            "tax_breakdown": [{"rate": 19.0, "base": 100.0, "amount": 19.0}],
         }, totals
         lines_arg = mock_build.call_args.args[4]
         assert lines_arg[0]["tax_rate"] == 19.0, lines_arg
@@ -452,6 +452,7 @@ def run():
         assert info1 == info2, (info1, info2)
         assert set(info1.keys()) == {
             "tax_number", "iban", "bic", "bank_name", "payment_terms_days", "customer_number",
+            "skonto_percent", "skonto_days",
         }, info1
         empty = data_factory.build_vendor_footer_info("")
         assert set(empty.keys()) == set(info1.keys()), empty
