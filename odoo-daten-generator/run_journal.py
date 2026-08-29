@@ -162,8 +162,9 @@ def prune_journals(directory: Optional[Path] = None, days: Optional[int] = None)
 class JournalingClient(OdooJson2Client):
     """OdooJson2Client that records every id it creates into a RunJournal.
 
-    Subclass rather than a patch: `odoo_client.py`'s payload-format fallback
-    logic is architecture-locked and stays untouched.
+    Subclass rather than a patch: journaling is a separate concern from how
+    `create`/`create_batch` build their request, and overriding them here
+    means this file never needs to know that detail.
     """
 
     def __init__(self, *args, journal: RunJournal, **kwargs):
@@ -208,10 +209,11 @@ CANCEL_BEFORE_UNLINK = {
 def _first_new_error(client: OdooJson2Client, mark: int) -> Optional[str]:
     """The first error recorded since `mark` — already redacted by odoo_client.
 
-    call_method walks a payload-format fallback chain, so the exception that
-    finally propagates is the *last*, least informative attempt ("422 Client
-    Error"). The first recorded error is the one that says "You can not delete a
-    confirmed sales order."
+    A cleanup pass can fail several calls before `mark` is read; each failed
+    call contributes exactly one entry to `client.errors` (odoo_client.py sends
+    one request per logical operation), but only the earliest of those is the
+    one that actually explains why cleanup stopped — e.g. "You can not delete a
+    confirmed sales order" rather than a later, unrelated 404/422.
     """
     for entry in client.errors[mark:]:
         body = entry.get("error_body")

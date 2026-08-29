@@ -35,12 +35,8 @@ _ERROR_MESSAGE_LIMIT = 300
 # a loop that should have been one batched call.
 #
 # The backoff is the safety net for what batching cannot remove: a full run still
-# makes several hundred calls, and _post_with_variants multiplies each logical
-# call by up to eight HTTP attempts. Without it every module after the ceiling
-# fails in a way that reads like a code defect rather than a rate limit.
-#
-# Deliberately NOT part of the locked payload-format fallback chain below: it
-# retries the same request unchanged and never alters the payload.
+# makes several hundred calls. Without it every module after the ceiling fails in
+# a way that reads like a code defect rather than a rate limit.
 _RETRY_STATUSES = (429, 503)
 _MAX_ATTEMPTS = 5
 _BACKOFF_BASE_SECONDS = 2.0
@@ -145,12 +141,6 @@ def _redact_error_body(response: "requests.Response") -> str:
     return f"<Antwortkörper unterdrückt: {len(raw)} Zeichen, {content_type}>"
 
 
-# A logical operation walks a payload-format fallback chain, so most of its HTTP
-# attempts are *planned* probing: the JSON/2 router answers an unknown path shape
-# with a 404 whose body says "Did you mean POST /json/2/<model>/<method>?". Those
-# are never the reason an operation failed and must not be reported as one.
-_ROUTING_HINT = "Did you mean POST /json/2/"
-
 # has_create_access answers a question with three possible outcomes, not two:
 # yes, no, and "could not find out". Only these two statuses mean a definitive
 # no. Everything else — a rate limit, a gateway error, a timeout — is unknown,
@@ -159,29 +149,21 @@ _ROUTING_HINT = "Did you mean POST /json/2/"
 _ACCESS_DENIED_STATUSES = (403, 404)
 
 
-def _is_routing_hint(attempt: Dict[str, Any]) -> bool:
-    return (attempt.get("status_code") == 404
-            and _ROUTING_HINT in (attempt.get("body") or ""))
-
-
 def _select_attempt(attempts: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Pick the attempt that actually explains the failure.
 
-    The exception that finally propagates out of the fallback chain is the last,
-    least informative one ("422 Client Error"). The first attempt carrying a
-    structured Odoo message is the one that says "You can not delete a confirmed
-    sales order" — that is what the run summary and the cleanup report need.
+    A logical operation now makes exactly one HTTP request in the common case
+    — there is no cross-method payload-format chain left to pick between (see
+    "JSON2 payload-format fallback chain — removed" in CLAUDE.md). This still
+    matters for _post's own 401-retry dance, which can leave more than one
+    attempt in a frame: the earliest one with a real (non-placeholder) body is
+    the one that names the actual reason, not a later, less specific failure.
     """
     if not attempts:
         return None
     for attempt in attempts:
-        if _is_routing_hint(attempt):
-            continue
         body = attempt.get("body") or ""
         if body and not body.startswith("<"):
-            return attempt
-    for attempt in reversed(attempts):
-        if not _is_routing_hint(attempt):
             return attempt
     return attempts[-1]
 
@@ -200,9 +182,10 @@ class OdooJson2Client:
             "Accept": "application/json",
         })
         # One entry per FAILED LOGICAL OPERATION (create, write, call_method …),
-        # not per HTTP attempt: the fallback chain below multiplies every logical
-        # call by up to eight requests, and reporting each of those separately is
-        # what made 8 of 14 reported errors in a live run not be errors at all.
+        # not per HTTP attempt — a single operation can still make more than
+        # one HTTP attempt (the 401-retry dance in _post, or create_batch
+        # falling back to per-record creates), and only the attempt that
+        # actually explains the failure should end up here.
         self.errors: List[Dict[str, Any]] = []
         # Stack of in-flight logical operations; each frame collects the HTTP
         # attempts made inside it. A stack, not a single list, because
@@ -235,10 +218,11 @@ class OdooJson2Client:
         """Scope one logical operation; on failure record exactly one error.
 
         The attempts are owned by this frame rather than carried on the raised
-        exception: create/write/call_method each call _post_with_variants several
-        times and only the last exception survives, and call_method swallows its
-        first — most informative — attempt entirely. Collecting here is what keeps
-        run_journal._first_new_error able to name Odoo's real reason.
+        exception: _post's own 401-retry dance can make several HTTP attempts
+        before finally raising, and only the last of those would survive on
+        the exception itself. Collecting here is what keeps
+        run_journal._first_new_error able to name Odoo's real reason instead
+        of a later, unrelated failure.
         """
         frame: List[Dict[str, Any]] = []
         self._attempt_frames.append(frame)
@@ -364,32 +348,9 @@ class OdooJson2Client:
         logger.info(f"[HTTP] {response.status_code} OK")
         return response.json()
 
-    def _post_with_variants(self, paths: List[str], payload: Dict[str, Any]) -> Any:
-        last_error: Optional[Exception] = None
-        for p in paths:
-            try:
-                return self._post(p, payload)
-            except requests.HTTPError as e:
-                last_error = e
-                # try with trailing slash variant too
-                try:
-                    if not p.endswith('/'):
-                        return self._post(p + '/', payload)
-                except requests.HTTPError as e2:
-                    last_error = e2
-                    continue
-        if last_error is not None:
-            raise last_error
-        raise RuntimeError("No paths provided for request")
-
     def model_method(self, model: str, method: str, payload: Dict[str, Any]) -> Any:
-        # Prefer direct model path first (most endpoints exist there), then call_kw, then call
         with self._record_failure(model, method):
-            return self._post_with_variants([
-                f"/{model}/{method}",
-                f"/call_kw/{model}/{method}",
-                f"/call/{model}/{method}",
-            ], payload)
+            return self._post(f"/{model}/{method}", payload)
 
     def search(self, model: str, domain: List[Any], context: Optional[Dict[str, Any]] = None) -> List[int]:
         payload: Dict[str, Any] = {"domain": domain}
@@ -420,45 +381,13 @@ class OdooJson2Client:
 
     def create(self, model: str, values: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> int:
         with self._record_failure(model, "create"):
-            # Try documented JSON-2 example format first: vals_list
-            vals_list_payload: Dict[str, Any] = {"vals_list": [values]}
+            payload: Dict[str, Any] = {"vals_list": [values]}
             if context is not None:
-                vals_list_payload["context"] = context
-            try:
-                result = self._post_with_variants([
-                    f"/{model}/create",
-                ], vals_list_payload)
-                if isinstance(result, list):
-                    return result[0]
-                return int(result)
-            except requests.HTTPError as e:
-                # Fallback to call variants using args/kwargs
-                if e.response is not None and e.response.status_code in (404, 422):
-                    call_payload: Dict[str, Any] = {"args": [values], "kwargs": {}}
-                    if context is not None:
-                        call_payload["context"] = context
-                    try:
-                        result2 = self._post_with_variants([
-                            f"/call/{model}/create",
-                            f"/call_kw/{model}/create",
-                        ], call_payload)
-                        if isinstance(result2, list):
-                            return result2[0]
-                        return int(result2)
-                    except requests.HTTPError as e2:
-                        if e2.response is not None and e2.response.status_code in (404, 422):
-                            # Last fallback to direct {values}
-                            payload: Dict[str, Any] = {"values": values}
-                            if context is not None:
-                                payload["context"] = context
-                            result3 = self._post_with_variants([
-                                f"/{model}/create",
-                            ], payload)
-                            if isinstance(result3, list):
-                                return result3[0]
-                            return int(result3)
-                        raise
-                raise
+                payload["context"] = context
+            result = self._post(f"/{model}/create", payload)
+            if isinstance(result, list):
+                return result[0]
+            return int(result)
 
     def create_batch(self, model: str, values_list: List[Dict[str, Any]], context: Optional[Dict[str, Any]] = None) -> List[int]:
         """Create multiple records in one API call using vals_list.
@@ -472,17 +401,16 @@ class OdooJson2Client:
             payload["context"] = context
         with self._record_failure(model, "create_batch"):
             try:
-                result = self._post_with_variants([f"/{model}/create"], payload)
+                result = self._post(f"/{model}/create", payload)
                 if isinstance(result, list):
                     return [int(r) for r in result]
                 return [int(result)]
             except requests.HTTPError as e:
-                # Only fall back on "this shape isn't accepted here" (404/422),
-                # same restriction as create()/write() — a 429 that survived
-                # _send's retries must not turn one batched call into N
-                # individual ones, exactly the anti-pattern batching exists to
-                # avoid (CLAUDE.md: never "fix" a 429 by retrying in a loop that
-                # should have been one batched call).
+                # Only fall back on "this shape isn't accepted here" (404/422) —
+                # a 429 that survived _send's retries must not turn one batched
+                # call into N individual ones, exactly the anti-pattern batching
+                # exists to avoid (CLAUDE.md: never "fix" a 429 by retrying in a
+                # loop that should have been one batched call).
                 if not (e.response is not None and e.response.status_code in (404, 422)):
                     raise
                 # Fallback: create each record individually. Each self.create()
@@ -497,79 +425,35 @@ class OdooJson2Client:
                 return ids
 
     def write(self, model: str, ids: List[int], values: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> bool:
-        # Direct JSON-2 expects 'vals' key
         payload: Dict[str, Any] = {"ids": ids, "vals": values}
         if context is not None:
             payload["context"] = context
         with self._record_failure(model, "write"):
-            try:
-                result = self._post_with_variants([
-                    f"/{model}/write",
-                ], payload)
-                return bool(result)
-            except requests.HTTPError as e:
-                if e.response is not None and e.response.status_code in (404, 422):
-                    # Fallback to call variants
-                    call_payload: Dict[str, Any] = {"args": [ids, values], "kwargs": {}}
-                    if context is not None:
-                        call_payload["context"] = context
-                    result2 = self._post_with_variants([
-                        f"/call_kw/{model}/write",
-                        f"/call/{model}/write",
-                    ], call_payload)
-                    return bool(result2)
-                raise
+            return bool(self._post(f"/{model}/write", payload))
 
-    def call_method(self, model: str, method: str, ids: Optional[List[int]] = None, args: Optional[List[Any]] = None, kwargs: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None) -> Any:
-        # Helper to call model methods possibly on recordsets
-        args = args or []
-        kwargs = kwargs or {}
+    def call_method(self, model: str, method: str, ids: Optional[List[int]] = None, kwargs: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None) -> Any:
+        # JSON-2 dispatches by keyword only (matched to the target method's own
+        # parameter names) plus the "ids" recordset marker — there is no
+        # positional-args concept to send, which is why this no longer takes an
+        # `args` parameter (B11's non-empty-args guard is now a TypeError at the
+        # call site instead: see tests/unit/test_odoo_client_unit.py).
+        payload: Dict[str, Any] = dict(kwargs or {})
+        if ids is not None:
+            payload["ids"] = ids
+        if context is not None:
+            payload["context"] = context
         with self._record_failure(model, method):
-            # 1) Try direct endpoint with 'ids' payload (JSON-2 recordset pattern)
-            if ids is not None:
-                direct_payload: Dict[str, Any] = {"ids": ids}
-                direct_payload.update(kwargs)
-                if context is not None:
-                    direct_payload["context"] = context
-                try:
-                    return self._post_with_variants([
-                        f"/{model}/{method}",
-                    ], direct_payload)
-                except requests.HTTPError as e:
-                    if not (e.response is not None and e.response.status_code in (404, 422)):
-                        raise
-            # 2) Try call_kw with args/kwargs
-            call_payload: Dict[str, Any] = {"args": ([] if ids is None else [ids]) + args, "kwargs": kwargs}
-            if context is not None:
-                call_payload["context"] = context
-            try:
-                return self._post_with_variants([
-                    f"/call_kw/{model}/{method}",
-                    f"/call/{model}/{method}",
-                    f"/{model}/{method}",
-                ], call_payload)
-            except requests.HTTPError as e:
-                # 3) Last fallback: direct without args/kwargs. Only safe when there
-                # was never anything meaningful to send in the first place (B11) —
-                # otherwise this silently drops ids/args/kwargs and fires an empty
-                # call (e.g. message_post() with no message, action_confirm() on
-                # nothing), masking the real error instead of surfacing it.
-                if ids or args or kwargs:
-                    raise
-                fallback_payload: Dict[str, Any] = {}
-                if context is not None:
-                    fallback_payload["context"] = context
-                return self._post_with_variants([
-                    f"/{model}/{method}",
-                ], fallback_payload)
+            return self._post(f"/{model}/{method}", payload)
 
     def has_create_access(self, model: str) -> bool:
         """Whether the API-key user may create records on `model`.
 
         A single POST /{model}/has_access — deliberately NOT routed through
-        model_method/call_method: their fallback chain builds an {"args": [...]}
-        shape on a 404, which this endpoint rejects, costing ~6 extra HTTP
-        attempts per model that doesn't exist on this instance for nothing.
+        model_method/call_method: those wrap every attempt in _record_failure,
+        which always records a failure. Probing is expected to 404 for models
+        that don't exist on this instance, and that must not clutter the error
+        report the way a real operation's failure does — record_error=False on
+        the direct _post call below is what suppresses it.
 
         Returns False only for a DEFINITIVE no: a real 403, or a 404 (the model
         does not exist here). Every other failure — 429, 5xx, timeout, a refused
@@ -606,5 +490,3 @@ class OdooJson2Client:
     def get_errors(self) -> List[Dict[str, Any]]:
         """Return a list of all API errors that occurred during execution."""
         return self.errors.copy()
-
-

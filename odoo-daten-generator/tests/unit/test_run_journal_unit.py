@@ -165,8 +165,10 @@ def run():
         results.append(("Cleanup: Wizard-Datensätze werden übersprungen, nicht gemeldet", False, str(e)))
 
     try:
-        # Odoo refuses to unlink a confirmed order until it is cancelled, and the
-        # meaningful reason is the FIRST recorded error, not the last fallback's.
+        # Odoo refuses to unlink a confirmed order until it is cancelled. Simulates
+        # two errors landing in client.errors between the mark and the read (e.g.
+        # from two different failed calls in the same cleanup pass) to check that
+        # _first_new_error picks the meaningful one, not a later placeholder.
         with tempfile.TemporaryDirectory() as tmp:
             journal = run_journal.RunJournal("demo-cancel", Path(tmp))
             journal.record("sale.order", [55])
@@ -192,10 +194,11 @@ def run():
     try:
         # S10/R10 end-to-end regression: the two tests above check
         # _first_new_error against a hand-built errors list. This one drives a
-        # REAL OdooJson2Client through the full call_method fallback chain, so
-        # it also proves odoo_client._record_failure/_select_attempt put the
-        # informative message where _first_new_error expects to find it — not
-        # just that _first_new_error can find it if it's there.
+        # REAL OdooJson2Client (call_method now makes exactly one request per
+        # call — the payload-format fallback chain is gone), so it also proves
+        # odoo_client._record_failure/_select_attempt put the real message
+        # where _first_new_error expects to find it — not just that
+        # _first_new_error can find it if it's there.
         class _FakeResponse:
             def __init__(self, status_code, text=""):
                 self.status_code = status_code
@@ -212,15 +215,15 @@ def run():
                 return {}
 
         def _fake_post(url, json=None, timeout=None, allow_redirects=None):
-            payload = json or {}
-            if "args" in payload:
-                # call_kw/call attempt: the informative one.
+            if url.endswith("/unlink"):
                 return _FakeResponse(422, text=(
                     '{"error": {"data": {"message": '
                     '"You can not delete a confirmed sales order"}}}'
                 ))
-            return _FakeResponse(404, text=(
-                '{"error": {"message": "Did you mean POST /json/2/sale.order/unlink ?"}}'
+            # action_cancel: fails too, for a different, unrelated reason —
+            # delete_run's best-effort contract must swallow this one.
+            return _FakeResponse(422, text=(
+                '{"error": {"data": {"message": "nothing to cancel"}}}'
             ))
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -229,13 +232,13 @@ def run():
             client = run_journal.JournalingClient("https://demo-x.odoo.com", "db", "key",
                                                   journal=journal)
             client.session.post = _fake_post
-            # action_cancel (CANCEL_BEFORE_UNLINK) also fails the same way —
-            # delete_run swallows that per its own "best effort" contract and
-            # proceeds to unlink, whose failure is the one that must surface.
+            # action_cancel (CANCEL_BEFORE_UNLINK) also fails — delete_run
+            # swallows that per its own "best effort" contract and proceeds to
+            # unlink, whose failure is the one that must surface.
             summary = run_journal.delete_run(client, journal)
             assert summary["deleted"] == 0 and len(summary["failed"]) == 1, summary
             assert "confirmed sales order" in summary["failed"][0]["error"], summary
-            assert "Did you mean" not in summary["failed"][0]["error"], summary
+            assert "nothing to cancel" not in summary["failed"][0]["error"], summary
         results.append(("Cleanup (E2E, echter Client): meldet die informative Meldung, nicht das letzte 422", True, ""))
     except Exception as e:
         results.append(("Cleanup (E2E, echter Client): meldet die informative Meldung, nicht das letzte 422", False, str(e)))

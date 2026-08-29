@@ -1,28 +1,39 @@
 """Unit tests for odoo_client.py.
 
-Two generations of coverage in this file, kept together deliberately:
+Three things are covered here, kept together deliberately:
 
-1. B11 call_method fallback-3 regression guard (original, unchanged).
-   Fallback 3 used to fire on ANY HTTPError from the call_kw/call/direct attempts,
-   silently dropping ids/args/kwargs and posting an empty payload — an empty
+1. B11 call_method fallback-3 regression guard (adapted). The old fallback 3
+   fired on ANY HTTPError from the call_kw/call/direct attempts, silently
+   dropping ids/args/kwargs and posting an empty payload — an empty
    message_post(), an action_confirm() on nothing, masking the real error.
-   Mandatory per the architect's approval conditions:
-     - non-empty ids/args/kwargs -> the real HTTPError propagates, no empty-payload
-       fallback call is ever sent
-     - all-empty ids/args/kwargs -> fallback 3 still fires (and can still succeed)
+   That three-stage chain is gone (the format-fallback-collapse work):
+   call_method now sends exactly one request, built from ids+kwargs, which
+   already reduces to the empty-payload shape when both are absent — no
+   separate fallback stage needed. The two invariants B11 actually cared
+   about survive as the first two cases below:
+     - non-empty ids/kwargs -> the real HTTPError propagates, no empty-payload
+       call is ever sent
+     - all-empty ids/kwargs -> the (only) request can still be the empty shape
+       and succeed
+   The `args` parameter itself is gone (0 real call sites ever used it, and
+   JSON-2 has no positional-args concept) — a caller that still passes
+   `args=...` now gets a TypeError at the call site instead of a silently
+   swallowed HTTPError.
 
-2. S10/R10 error-bookkeeping rewrite (WP1 has_create_access, WP2 de-noising).
-   `self.errors` used to grow by one entry per HTTP attempt — up to eight per
-   logical operation, since the payload-format fallback chain multiplies each
-   call. A live run found 8 of 14 reported errors were planned 404 probing, not
-   real failures. Errors are now recorded once per failed LOGICAL OPERATION, via
-   a `_record_failure` frame, carrying the most informative attempt rather than
-   the last (least informative) one that happens to propagate.
+2. One-request-per-operation regression guards for create/create_batch/write/
+   search_read/call_method, so a future change can't silently reintroduce a
+   multi-attempt chain.
 
-Both generations share the same fake-session harness, and the harness's
-allow_redirects assertion (Guard B) applies uniformly — a call site added by
-either generation that forgets `allow_redirects=False` fails every test in this
-file, not just the one that exercises it.
+3. S10/R10 error-bookkeeping (WP1 has_create_access, WP2 de-noising). Errors
+   are recorded once per failed LOGICAL OPERATION via a `_record_failure`
+   frame, not once per HTTP attempt — relevant now mainly for `_post`'s own
+   401-retry dance, which can still make more than one HTTP attempt inside a
+   single operation.
+
+All tests share the same fake-session harness, and the harness's
+allow_redirects assertion (Guard B) applies uniformly — a call site added
+later that forgets `allow_redirects=False` fails every test in this file,
+not just the one that exercises it.
 """
 import json as json_module
 import os
@@ -59,33 +70,25 @@ def _odoo_error_body(message: str) -> str:
     return json_module.dumps({"error": {"data": {"message": message}}})
 
 
-def _routing_hint_body(model: str, method: str) -> str:
-    # The real 404 body the JSON/2 router sends for an unknown path shape —
-    # planned probing, never the reason an operation failed.
-    return json_module.dumps({
-        "error": {"message": f"404 Not Found. Did you mean POST /json/2/{model}/{method} ?"}
-    })
+def _default_responder(url, payload):
+    # "fallback shape" = the shape call_method sends when ids and kwargs are
+    # both absent: {} or just {"context": ...}
+    is_fallback_shape = set(payload.keys()) <= {"context"}
+    if is_fallback_shape:
+        return _FakeResponse(200, json_data={"result": True})
+    return _FakeResponse(404, text="not found")
 
 
 def _make_client_with_fake_post(responder=None):
-    """responder(url, payload) -> _FakeResponse, or None to use the B11 default."""
+    """responder(url, payload) -> _FakeResponse. Defaults to B11's fake server."""
     client = OdooJson2Client("https://example.test", "db", "key")
     sent = []
-
-    def default_responder(url, payload):
-        # "fallback shape" = the empty payload3 sends: {} or just {"context": ...}
-        is_fallback_shape = set(payload.keys()) <= {"context"}
-        if is_fallback_shape:
-            return _FakeResponse(200, json_data={"result": True})
-        return _FakeResponse(404, text="not found")
-
-    active_responder = responder or default_responder
+    active_responder = responder or _default_responder
 
     def fake_post(url, json=None, timeout=None, allow_redirects=None):
         # Guard B: every POST must opt out of redirects. Asserting it here means
         # a call site added later without the kwarg fails this test rather than
-        # quietly re-opening the SSRF hop. Applies to every test in this file,
-        # old and new alike.
+        # quietly re-opening the SSRF hop. Applies to every test in this file.
         assert allow_redirects is False, f"allow_redirects={allow_redirects!r} statt False"
         payload = json or {}
         sent.append((url, payload))
@@ -103,8 +106,8 @@ def run():
     # ==================================================================
 
     # ------------------------------------------------------------------
-    # Non-empty ids: every real attempt fails -> the HTTPError must
-    # propagate, and fallback 3's empty-payload shape must never be sent.
+    # Non-empty ids: the single request fails -> the HTTPError must
+    # propagate. No second, empty-payload request may follow it.
     # ------------------------------------------------------------------
     try:
         client, sent = _make_client_with_fake_post()
@@ -114,92 +117,181 @@ def run():
         except requests.HTTPError:
             raised = True
         assert raised, "expected HTTPError to propagate for non-empty ids, but call_method returned normally"
+        assert len(sent) == 1, f"expected exactly one request, got {len(sent)}: {sent}"
         fallback_shaped = [p for _, p in sent if set(p.keys()) <= {"context"}]
-        assert not fallback_shaped, f"B11 regressed: empty-payload fallback was sent despite non-empty ids: {fallback_shaped}"
+        assert not fallback_shaped, f"empty-payload request was sent despite non-empty ids: {fallback_shaped}"
         results.append((
-            "call_method: non-empty ids -> error propagates, no empty-payload fallback",
-            True, f"{len(sent)} attempts made, none empty-payload",
+            "call_method: non-empty ids -> error propagates, exactly one request, none empty-payload",
+            True, f"{len(sent)} request made",
         ))
     except AssertionError as e:
-        results.append(("call_method: non-empty ids -> error propagates, no empty-payload fallback", False, str(e)))
+        results.append(("call_method: non-empty ids -> error propagates, exactly one request, none empty-payload", False, str(e)))
 
     # ------------------------------------------------------------------
-    # Non-empty args (no ids) -> same guarantee.
+    # All-empty ids/kwargs: the one request IS the empty shape, and can
+    # succeed — this used to require a dedicated "fallback 3"; now it's
+    # just what building payload = kwargs + optional ids naturally produces.
+    # ------------------------------------------------------------------
+    try:
+        client, sent = _make_client_with_fake_post()
+        result = client.call_method('res.partner', 'some_method')
+        assert result == {"result": True}, f"expected the empty-shape request to succeed, got {result}"
+        assert len(sent) == 1, f"expected exactly one request, got {len(sent)}: {sent}"
+        fallback_shaped = [p for _, p in sent if set(p.keys()) <= {"context"}]
+        assert fallback_shaped, "the all-empty case did not produce the empty-payload shape"
+        results.append((
+            "call_method: all-empty ids/kwargs -> the one request is empty-shaped and succeeds",
+            True, f"{len(sent)} request made",
+        ))
+    except AssertionError as e:
+        results.append(("call_method: all-empty ids/kwargs -> the one request is empty-shaped and succeeds", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # args is gone: a caller that still passes it gets a TypeError at the
+    # call site, not a silently-swallowed HTTPError from a dead fallback
+    # path. This is B11's old "never silently drop meaningful data into an
+    # empty call" guarantee, now enforced by Python's own argument binding
+    # instead of by call_method's code.
     # ------------------------------------------------------------------
     try:
         client, sent = _make_client_with_fake_post()
         raised = False
         try:
             client.call_method('res.partner', 'some_method', args=[123])
-        except requests.HTTPError:
+        except TypeError:
             raised = True
-        assert raised, "expected HTTPError to propagate for non-empty args"
-        fallback_shaped = [p for _, p in sent if set(p.keys()) <= {"context"}]
-        assert not fallback_shaped, f"B11 regressed: empty-payload fallback sent despite non-empty args: {fallback_shaped}"
-        results.append(("call_method: non-empty args (no ids) -> error propagates, no empty-payload fallback", True, ""))
+        assert raised, "expected TypeError: call_method no longer accepts 'args'"
+        assert not sent, f"no request should have been attempted before the TypeError: {sent}"
+        results.append(("call_method: args= raises TypeError, no request attempted", True, ""))
     except AssertionError as e:
-        results.append(("call_method: non-empty args (no ids) -> error propagates, no empty-payload fallback", False, str(e)))
+        results.append(("call_method: args= raises TypeError, no request attempted", False, str(e)))
+
+    # ==================================================================
+    # One request per operation — regression guard against the removed
+    # payload-format fallback chain silently coming back.
+    # ==================================================================
 
     # ------------------------------------------------------------------
-    # All-empty ids/args/kwargs: fallback 3 must still fire (and can succeed) —
-    # this is the one legitimate use of the empty-payload fallback.
+    # create: exactly one POST, {"vals_list": [values]}.
     # ------------------------------------------------------------------
     try:
-        client, sent = _make_client_with_fake_post()
-        result = client.call_method('res.partner', 'some_method')
-        assert result == {"result": True}, f"expected fallback 3 to succeed, got {result}"
-        fallback_shaped = [p for _, p in sent if set(p.keys()) <= {"context"}]
-        assert fallback_shaped, "fallback 3 never fired for the legitimate all-empty case"
-        results.append((
-            "call_method: all-empty ids/args/kwargs -> fallback 3 still fires and succeeds",
-            True, f"{len(sent)} attempts made, fallback fired",
-        ))
+        def create_responder(url, payload):
+            assert payload.get("vals_list") == [{"name": "Test GmbH"}], payload
+            return _FakeResponse(200, json_data=[7])
+
+        client, sent = _make_client_with_fake_post(create_responder)
+        rec_id = client.create('res.partner', {"name": "Test GmbH"})
+        assert rec_id == 7, rec_id
+        assert len(sent) == 1, f"expected exactly one POST, got {len(sent)}: {sent}"
+        results.append(("create: exactly one POST with vals_list", True, ""))
     except AssertionError as e:
-        results.append(("call_method: all-empty ids/args/kwargs -> fallback 3 still fires and succeeds", False, str(e)))
+        results.append(("create: exactly one POST with vals_list", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # create_batch: exactly one POST, {"vals_list": [...]}.
+    # ------------------------------------------------------------------
+    try:
+        def batch_responder(url, payload):
+            assert payload.get("vals_list") == [{"name": "A"}, {"name": "B"}], payload
+            return _FakeResponse(200, json_data=[1, 2])
+
+        client, sent = _make_client_with_fake_post(batch_responder)
+        ids = client.create_batch('res.partner', [{"name": "A"}, {"name": "B"}])
+        assert ids == [1, 2], ids
+        assert len(sent) == 1, f"expected exactly one POST, got {len(sent)}: {sent}"
+        results.append(("create_batch: exactly one POST with vals_list", True, ""))
+    except AssertionError as e:
+        results.append(("create_batch: exactly one POST with vals_list", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # write: exactly one POST, {"ids": [...], "vals": {...}}.
+    # ------------------------------------------------------------------
+    try:
+        def write_responder(url, payload):
+            assert payload == {"ids": [5], "vals": {"name": "Neu"}}, payload
+            return _FakeResponse(200, json_data=True)
+
+        client, sent = _make_client_with_fake_post(write_responder)
+        result = client.write('res.partner', [5], {"name": "Neu"})
+        assert result is True, result
+        assert len(sent) == 1, f"expected exactly one POST, got {len(sent)}: {sent}"
+        results.append(("write: exactly one POST with ids+vals", True, ""))
+    except AssertionError as e:
+        results.append(("write: exactly one POST with ids+vals", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # search_read: exactly one POST, direct /{model}/search_read path
+    # (no call_kw/call variants attempted first).
+    # ------------------------------------------------------------------
+    try:
+        def search_read_responder(url, payload):
+            assert url.endswith("/res.partner/search_read"), url
+            assert payload.get("domain") == [], payload
+            return _FakeResponse(200, json_data=[{"id": 1}])
+
+        client, sent = _make_client_with_fake_post(search_read_responder)
+        result = client.search_read('res.partner', [], fields=["id"])
+        assert result == [{"id": 1}], result
+        assert len(sent) == 1, f"expected exactly one POST, got {len(sent)}: {sent}"
+        results.append(("search_read: exactly one POST, direct path", True, ""))
+    except AssertionError as e:
+        results.append(("search_read: exactly one POST, direct path", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # call_method: exactly one POST, direct /{model}/{method} path with
+    # ids+kwargs flattened together (no call_kw/call variants attempted).
+    # ------------------------------------------------------------------
+    try:
+        def call_method_responder(url, payload):
+            assert url.endswith("/sale.order/action_confirm"), url
+            assert payload == {"ids": [9], "extra": "x"}, payload
+            return _FakeResponse(200, json_data=True)
+
+        client, sent = _make_client_with_fake_post(call_method_responder)
+        result = client.call_method('sale.order', 'action_confirm', ids=[9], kwargs={"extra": "x"})
+        assert result is True, result
+        assert len(sent) == 1, f"expected exactly one POST, got {len(sent)}: {sent}"
+        results.append(("call_method: exactly one POST, ids+kwargs flattened", True, ""))
+    except AssertionError as e:
+        results.append(("call_method: exactly one POST, ids+kwargs flattened", False, str(e)))
 
     # ==================================================================
     # Generation 2 — S10/R10 error bookkeeping
     # ==================================================================
 
     # ------------------------------------------------------------------
-    # One errors entry per failed operation; the first structured Odoo
-    # message wins over the last, uninformative one; routing-hint 404s
-    # are never selected; attempts is counted correctly.
+    # create: on failure, exactly one error entry with the real structured
+    # message. Used to test a 3-stage payload-format chain (routing-hint
+    # 404s on stages 1/3, the informative message on stage 2) — that chain
+    # is gone, create() now makes exactly one request, so there is nothing
+    # left to pick between; this checks the single attempt is still
+    # recorded correctly.
     # ------------------------------------------------------------------
     try:
-        def create_responder(url, payload):
-            if "vals_list" in payload or "values" in payload:
-                # Stages 1 and 3 both post to /{model}/create — planned probing.
-                return _FakeResponse(404, text=_routing_hint_body("res.partner", "create"))
-            if "args" in payload:
-                # Stage 2: call/call_kw with args/kwargs — the informative one.
-                return _FakeResponse(422, text=_odoo_error_body(
-                    "You can not delete a confirmed sales order"))
-            return _FakeResponse(422, text="")
+        def failing_create_responder(url, payload):
+            return _FakeResponse(422, text=_odoo_error_body(
+                "You can not delete a confirmed sales order"))
 
-        client, sent = _make_client_with_fake_post(create_responder)
+        client, sent = _make_client_with_fake_post(failing_create_responder)
         raised = False
         try:
             client.create('res.partner', {"name": "Test GmbH"})
         except requests.HTTPError:
             raised = True
-        assert raised, "expected create() to raise when every variant fails"
+        assert raised, "expected create() to raise on failure"
+        assert len(sent) == 1, f"expected exactly one POST, got {len(sent)}: {sent}"
         assert len(client.errors) == 1, f"expected exactly 1 error entry, got {len(client.errors)}: {client.errors}"
         entry = client.errors[0]
         assert entry["model"] == "res.partner", entry
         assert entry["method"] == "create", entry
-        assert "You can not delete" in (entry["error_body"] or ""), \
-            f"expected the informative message to win over the final placeholder, got: {entry['error_body']!r}"
-        assert "Did you mean" not in (entry["error_body"] or ""), \
-            f"a routing-hint 404 must never be selected as the reason: {entry['error_body']!r}"
-        assert entry["attempts"] == len(sent), \
-            f"attempts ({entry['attempts']}) must equal HTTP calls made ({len(sent)})"
+        assert "You can not delete" in (entry["error_body"] or ""), entry
+        assert entry["attempts"] == 1, entry
         results.append((
-            "create: one error per operation, informative message wins over final 422",
-            True, f"{entry['attempts']} attempts, body={entry['error_body']!r}",
+            "create: on failure, exactly one error entry with the real message",
+            True, f"body={entry['error_body']!r}",
         ))
     except AssertionError as e:
-        results.append(("create: one error per operation, informative message wins over final 422", False, str(e)))
+        results.append(("create: on failure, exactly one error entry with the real message", False, str(e)))
 
     # ------------------------------------------------------------------
     # Success leaves no error entry — including the 401 retry path, which
@@ -228,25 +320,20 @@ def run():
     # and a second from the inner create() frame.
     # ------------------------------------------------------------------
     try:
-        def batch_responder(url, payload):
-            if "vals_list" in payload and isinstance(payload["vals_list"], list) and len(payload["vals_list"]) > 1:
+        def batch_fallback_responder(url, payload):
+            vals_list = payload.get("vals_list") or []
+            if len(vals_list) > 1:
                 # The whole-batch attempt: reject with a retryable shape (422)
                 # so create_batch falls into its per-record fallback.
                 return _FakeResponse(422, text="")
             # Per-record create(): let the record named "Boom GmbH" fail
-            # everywhere, everyone else succeeds on the first (vals_list) shape.
-            values = None
-            if "vals_list" in payload and payload["vals_list"]:
-                values = payload["vals_list"][0]
-            elif "values" in payload:
-                values = payload["values"]
-            elif "args" in payload and payload["args"]:
-                values = payload["args"][0]
+            # everywhere, everyone else succeeds.
+            values = vals_list[0] if vals_list else None
             if values and values.get("name") == "Boom GmbH":
                 return _FakeResponse(422, text="")
             return _FakeResponse(200, json_data=[7])
 
-        client, sent = _make_client_with_fake_post(batch_responder)
+        client, sent = _make_client_with_fake_post(batch_fallback_responder)
         raised = False
         try:
             client.create_batch('res.partner', [
