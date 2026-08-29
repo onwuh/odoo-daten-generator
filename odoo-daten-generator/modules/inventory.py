@@ -2,7 +2,7 @@
 and MRP components (R3).
 
 No LLM calls — pure structure. Independent of purchase.py's receipts (no
-stock.picking validation this sprint — see IMPLEMENTIERUNGSPLAN.md R3/S8): a
+stock.picking validation this sprint — see ROADMAP.md R3/S8): a
 purchase.order confirmation already shows up in Odoo's Inventory app as a
 pending receipt natively, so no double-counting risk against the quants
 seeded here.

@@ -1,5 +1,5 @@
 """Unit tests for modules/hr.py — D3 batch-creation call-count guard (employees only;
-leave-request creation stays out of D3 scope, see IMPLEMENTIERUNGSPLAN.md)."""
+leave-request creation stays out of D3 scope, see ROADMAP.md)."""
 import os
 import sys
 from unittest.mock import MagicMock
