@@ -24,6 +24,7 @@ import base64
 import logging
 
 import data_factory
+import odoo_actions
 import pdf_factory
 from config import RunContext
 from fallback_data import FALLBACK_CV_BULLETS
@@ -48,7 +49,8 @@ def _create_bill_pdfs(client, ctx: RunContext) -> None:
     logger.info("\n--- DOCUMENTS: Erstelle PDF-Rechnungen für Eingangsrechnungen ---")
     bills = client.search_read(
         'account.move', [["id", "in", ctx.bill_ids]],
-        fields=["id", "name", "ref", "invoice_date", "partner_id", "invoice_line_ids"],
+        fields=["id", "name", "ref", "invoice_date", "invoice_date_due", "currency_id",
+                "amount_untaxed", "amount_tax", "amount_total", "partner_id", "invoice_line_ids"],
         limit=0,
     )
     if not bills:
@@ -70,9 +72,41 @@ def _create_bill_pdfs(client, ctx: RunContext) -> None:
     if all_line_ids:
         line_recs = client.search_read(
             'account.move.line', [["id", "in", all_line_ids]],
-            fields=["id", "name", "quantity", "price_unit", "product_id"], limit=0,
+            fields=["id", "name", "quantity", "price_unit", "price_subtotal", "price_total",
+                    "product_id", "product_uom_id", "tax_ids"],
+            limit=0,
         )
         lines_by_id = {r["id"]: r for r in line_recs}
+
+    # tax_ids is a many2many — batch-resolve every distinct tax id referenced
+    # across all bills to its rate in one call rather than one per line.
+    all_tax_ids = {tid for line in lines_by_id.values() for tid in (line.get("tax_ids") or [])}
+    tax_rate_by_id = {}
+    if all_tax_ids:
+        tax_recs = client.search_read(
+            'account.tax', [["id", "in", list(all_tax_ids)]], fields=["id", "amount"], limit=0,
+        )
+        tax_rate_by_id = {t["id"]: t.get("amount") or 0 for t in tax_recs}
+
+    # The vendor-bill's recipient is this run's own company, not a res.partner
+    # created by this pipeline — fetched once, outside the per-bill loop,
+    # since it's the same for every bill. A freshly provisioned demo SaaS
+    # tenant's company record is typically address-less (live-confirmed on
+    # demo-test5), so a blank street/zip/city falls back to a deterministic
+    # synthetic address instead of printing an empty "bill to" block.
+    company_info = odoo_actions.get_main_company_info(client)
+    buyer_name = company_info.get("name") or "Kunde"
+    if company_info.get("street") and company_info.get("zip") and company_info.get("city"):
+        addr_lines = [company_info["street"]]
+        if company_info.get("street2"):
+            addr_lines.append(company_info["street2"])
+        addr_lines.append(f"{company_info['zip']} {company_info['city']}".strip())
+        if company_info.get("country_name"):
+            addr_lines.append(company_info["country_name"])
+        buyer_address = "\n".join(addr_lines)
+    else:
+        fallback = data_factory.build_recipient_fallback_address(buyer_name)
+        buyer_address = f"{fallback['street']}\n{fallback['zip']} {fallback['city']}"
 
     attachment_vals_list = []
     for bill in bills:
@@ -86,7 +120,11 @@ def _create_bill_pdfs(client, ctx: RunContext) -> None:
         ]
         supplier_address = "\n".join(address_parts)
 
+        currency = bill.get("currency_id")
+        currency_symbol = currency[1] if isinstance(currency, (list, tuple)) and len(currency) > 1 else "EUR"
+
         pdf_lines = []
+        tax_breakdown_by_rate: dict = {}
         for line_id in bill.get("invoice_line_ids") or []:
             line = lines_by_id.get(line_id)
             if not line:
@@ -94,11 +132,32 @@ def _create_bill_pdfs(client, ctx: RunContext) -> None:
             product = line.get("product_id")
             product_name = product[1] if isinstance(product, (list, tuple)) and len(product) > 1 else None
             description = line.get("name") or product_name or "Position"
+            uom = line.get("product_uom_id")
+            uom_name = uom[1] if isinstance(uom, (list, tuple)) and len(uom) > 1 else "Stk."
+            tax_ids = line.get("tax_ids") or []
+            rate = tax_rate_by_id.get(tax_ids[0], 0) if tax_ids else 0
+            price_subtotal = line.get("price_subtotal") or 0
+            price_total = line.get("price_total") or 0
+
+            tax_breakdown_by_rate[rate] = tax_breakdown_by_rate.get(rate, 0.0) + (price_total - price_subtotal)
             pdf_lines.append({
                 "description": description,
                 "quantity": line.get("quantity") or 0,
+                "uom": uom_name,
                 "price_unit": line.get("price_unit") or 0,
+                "tax_rate": rate,
+                "amount_untaxed": price_subtotal,
             })
+
+        totals = {
+            "untaxed": bill.get("amount_untaxed") or 0,
+            "tax": bill.get("amount_tax") or 0,
+            "total": bill.get("amount_total") or 0,
+            "tax_breakdown": [
+                {"rate": rate, "amount": amount}
+                for rate, amount in sorted(tax_breakdown_by_rate.items())
+            ],
+        }
 
         # S10/R10 (F4): pdf_factory.py deliberately has no data_factory
         # coupling (it does no Odoo/network calls at all), so the one thing
@@ -109,7 +168,12 @@ def _create_bill_pdfs(client, ctx: RunContext) -> None:
             supplier_name, supplier_address,
             bill.get("name") or bill.get("ref"), bill.get("invoice_date"),
             pdf_lines,
+            currency_symbol=currency_symbol,
             footer_info=data_factory.build_vendor_footer_info(supplier_name),
+            buyer_name=buyer_name,
+            buyer_address=buyer_address,
+            due_date=bill.get("invoice_date_due"),
+            totals=totals,
         )
         attachment_vals_list.append({
             "name": f"Rechnung_{bill.get('name') or bill['id']}.pdf",
