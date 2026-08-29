@@ -82,7 +82,6 @@ def run(client, ctx):
 
     # Step 3 — Pattern 5: missing prerequisites (empty component_ids) -> graceful skip.
     try:
-        mock_client_calls = []
         skip_rctx = _make_rctx()
         skip_rctx.company_ids = [partner_id]
         skip_rctx.component_ids = []

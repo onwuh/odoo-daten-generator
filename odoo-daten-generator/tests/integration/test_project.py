@@ -1,6 +1,5 @@
 import sys
 import os
-import datetime
 from unittest.mock import MagicMock
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))

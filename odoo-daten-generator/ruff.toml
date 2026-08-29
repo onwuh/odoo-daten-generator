@@ -1,0 +1,12 @@
+# Pyflakes only (F): unused imports, unused locals, undefined names. These are
+# real bugs, never style. We deliberately do NOT enable ruff's own default
+# extras (E4/E7/E9) or any opinionated plugin family:
+#   - E402 (import not at top) would fire on the `sys.path.insert(...)` shim
+#     every test file and several modules use on purpose so `import config`
+#     resolves the same way it does under the Docker WORKDIR (see Dockerfile
+#     comment "Runs from /app so the modules' plain `import config` style
+#     keeps working"). That pattern is architectural, not a lint violation.
+#   - E501 (line length) was never enforced here; turning it on now would be
+#     1300+ pre-existing hits unrelated to the CI check being added.
+[lint]
+select = ["F"]

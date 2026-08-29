@@ -196,7 +196,7 @@ def create_bank_transactions_for_all_invoices(client, invoice_ids, bill_ids):
     Vendor bills: exact match, negative amounts (outgoing payments).
     Customer invoices: 80% exact, 20% with label typo OR amount deviation (±5-20%).
     """
-    logger.info(f"\n--- ACCOUNTING: Erstelle Banktransaktionen für Rechnungen dieses Laufs ---")
+    logger.info("\n--- ACCOUNTING: Erstelle Banktransaktionen für Rechnungen dieses Laufs ---")
     if not invoice_ids and not bill_ids:
         logger.info("-> Keine Rechnungen aus diesem Lauf — keine Banktransaktionen")
         return []

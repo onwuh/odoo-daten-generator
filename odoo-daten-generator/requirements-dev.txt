@@ -1,2 +1,5 @@
 # Development extras on top of requirements.txt.
 -r requirements.txt
+
+# --- Lint (CI) ---
+ruff==0.16.5

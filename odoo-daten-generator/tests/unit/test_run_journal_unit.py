@@ -20,7 +20,6 @@ if _ROOT not in sys.path:
 import llm_service
 import run_journal
 import requests
-from odoo_client import OdooJson2Client
 
 
 def run():

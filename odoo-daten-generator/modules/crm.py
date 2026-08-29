@@ -426,4 +426,4 @@ def _create_activities(client, opp_ids, ctx: RunContext):
         except Exception as e:
             logger.warning(f"⚠️  Aktivität für Opp {opp_id} fehlgeschlagen: {e}")
 
-    logger.info(f"✅ Aktivitäten erstellt.")
+    logger.info("✅ Aktivitäten erstellt.")
