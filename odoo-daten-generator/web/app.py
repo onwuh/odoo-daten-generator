@@ -286,10 +286,20 @@ async def api_connect(request: Request, session=Depends(get_session_csrf)) -> Di
     # the key, never which hosts it may reach. See server_config for the
     # trade-off and the kill switch.
     resolved_url = server_config.apply("url", body.get("url"))
-    resolved_db = server_config.apply("db", body.get("db"))
     try:
         base_url = security.validate_target_url(resolved_url)
-        database = security.validate_database_name(resolved_db)
+        # S10/R10 (F2): the database field is no longer asked for in the UI —
+        # on Odoo Online the database name IS the instance's subdomain label,
+        # so it's derived from the URL Guard A already validated. The
+        # server_config link stays in the chain (not just body -> derived):
+        # without it, an operator's config.ini "db" value would become a
+        # silently-ignored field, exactly the class of bug this sprint exists
+        # to close. A body-supplied "db" still wins for self-hosted instances
+        # or any database whose name doesn't match its subdomain.
+        database = security.validate_database_name(
+            server_config.apply("db", body.get("db"))
+            or security.derive_database_name(base_url)
+        )
     except security.TargetUrlError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 

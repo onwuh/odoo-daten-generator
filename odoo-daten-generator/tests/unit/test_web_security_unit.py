@@ -91,6 +91,23 @@ def run():
         results.append(("DB-Name: CRLF/Leerzeichen abgelehnt", False, str(e)))
 
     # ------------------------------------------------------------------
+    # S10/R10 (F2): database name derived from the validated URL — Odoo
+    # Online provisions the database as the instance's subdomain label.
+    # ------------------------------------------------------------------
+    try:
+        assert security.derive_database_name("https://demo-test5.odoo.com") == "demo-test5"
+        # Always the first label, even if a future Guard A relaxation ever
+        # allowed a longer host — this function itself doesn't re-validate.
+        assert security.derive_database_name("https://demo-a1.odoo.com") == "demo-a1"
+        # Output of derive_database_name must itself pass validate_database_name —
+        # the two are meant to compose directly in web/app.py's fallback chain.
+        derived = security.derive_database_name("https://demo-kunde-xyz.odoo.com")
+        assert security.validate_database_name(derived) == derived
+        results.append(("DB-Name: aus validierter URL abgeleitet (erstes Host-Label)", True, derived))
+    except Exception as e:
+        results.append(("DB-Name: aus validierter URL abgeleitet (erstes Host-Label)", False, str(e)))
+
+    # ------------------------------------------------------------------
     # Guard B: redirects are refused rather than followed
     # ------------------------------------------------------------------
     try:

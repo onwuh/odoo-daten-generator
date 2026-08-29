@@ -67,6 +67,10 @@ class ConnectResult:
     existing_product_ids: List[int] = field(default_factory=list)
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
+    # S10/R10 (F2): the resolved database name — surfaced so the frontend can
+    # show it even though there's no longer an input field for it (WP4 derives
+    # it from the URL rather than asking).
+    database: Optional[str] = None
 
     def as_public_dict(self) -> Dict[str, Any]:
         """JSON-safe view for the API. Carries no credentials by construction."""
@@ -76,6 +80,7 @@ class ConnectResult:
                 {"key": s.key, "label": s.label, "ok": s.ok, "detail": s.detail}
                 for s in self.steps
             ],
+            "database": self.database,
             "company_name": self.company_name,
             "language_code": self.language_code,
             "language_name": self.language_name,
@@ -128,7 +133,7 @@ def probe(*, base_url: str, database: str, odoo_key: str,
     Returns ``(result, client, llm)``. ``client``/``llm`` are ``None`` when their
     probe failed; the caller must not store a session in that case.
     """
-    result = ConnectResult()
+    result = ConnectResult(database=database)
     labels = dict(STEP_LABELS)
     client: Optional[OdooJson2Client] = None
     llm: Optional[LLMService] = None

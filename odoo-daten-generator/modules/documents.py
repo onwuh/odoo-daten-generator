@@ -23,6 +23,7 @@ is the only field that round-trips actual file content on create/read.
 import base64
 import logging
 
+import data_factory
 import pdf_factory
 from config import RunContext
 from fallback_data import FALLBACK_CV_BULLETS
@@ -99,10 +100,16 @@ def _create_bill_pdfs(client, ctx: RunContext) -> None:
                 "price_unit": line.get("price_unit") or 0,
             })
 
+        # S10/R10 (F4): pdf_factory.py deliberately has no data_factory
+        # coupling (it does no Odoo/network calls at all), so the one thing
+        # it can't derive itself — fake-but-deterministic footer data — is
+        # computed here and passed in. The layout variant itself needs no
+        # argument: build_vendor_bill_pdf derives it from supplier_name.
         pdf_bytes = pdf_factory.build_vendor_bill_pdf(
             supplier_name, supplier_address,
             bill.get("name") or bill.get("ref"), bill.get("invoice_date"),
             pdf_lines,
+            footer_info=data_factory.build_vendor_footer_info(supplier_name),
         )
         attachment_vals_list.append({
             "name": f"Rechnung_{bill.get('name') or bill['id']}.pdf",

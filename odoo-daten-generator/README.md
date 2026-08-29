@@ -80,7 +80,7 @@ cookie `Secure`.
 Per session, in memory only, discarded on expiry (a janitor sweeps abandoned
 sessions rather than waiting for someone to touch them again):
 
-- the target Odoo URL, database and API key,
+- the target Odoo URL and API key (the database name is derived from the URL),
 - your own LLM API key and model name.
 
 ### Beta: server-side defaults

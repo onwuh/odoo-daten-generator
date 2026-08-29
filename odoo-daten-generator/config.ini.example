@@ -1,5 +1,9 @@
 [odoo]
 url = https://demo-your-instance.odoo.com
+# Optional on Odoo Online: the web console derives the database name from the
+# URL's subdomain label (https://demo-your-instance.odoo.com -> demo-your-instance)
+# when this is left blank or absent. Set it explicitly for a self-hosted instance,
+# or any database whose name doesn't match its subdomain.
 db = your-database-name
 api_key = YOUR_ODOO_API_KEY_HERE
 

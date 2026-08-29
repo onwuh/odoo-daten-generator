@@ -98,3 +98,19 @@ def validate_database_name(raw: Optional[str]) -> str:
     if not DB_NAME_RE.match(candidate):
         raise TargetUrlError("Datenbankname enthält unzulässige Zeichen.")
     return candidate
+
+
+def derive_database_name(validated_url: str) -> str:
+    """Odoo Online provisions the database name as the instance's subdomain
+    label — a hosting convention, not something Guard A's host-shape check
+    enforces. Takes the URL `validate_target_url` already returned (so the
+    host is already known to match `DEMO_HOST_RE`), and returns its first
+    label, e.g. "https://demo-test5.odoo.com" -> "demo-test5".
+
+    Always lower-case, because `validate_target_url` already lower-cased the
+    host. This is a convenience default, not a replacement for the "db" field
+    still accepted in the request body — a self-hosted instance or one whose
+    database name doesn't match its subdomain needs that escape hatch.
+    """
+    host = urlsplit(validated_url).hostname or ""
+    return host.split(".")[0]

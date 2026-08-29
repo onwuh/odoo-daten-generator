@@ -165,6 +165,48 @@ def run():
         results.append(("Guard A: falsches Ziel wird abgelehnt, ohne zu verbinden", False, str(e)))
 
     # ------------------------------------------------------------------
+    # S10/R10 (F2): no "db" supplied and no server default configured ->
+    # /api/connect derives it from the URL and passes THAT to probe().
+    # ------------------------------------------------------------------
+    try:
+        import server_config
+        with TestClient(web_app.app) as client:
+            csrf = _login(client)
+            # Force the middle link of the chain to contribute nothing, so a
+            # pass here can only mean the derivation itself ran.
+            with patch.object(server_config, "defaults", return_value={}), \
+                 patch.object(connect_service, "probe",
+                              return_value=(_fake_connect_result(), MagicMock(), MagicMock())) as probe:
+                response = client.post("/api/connect", headers=_auth_headers(csrf), json={
+                    "url": "https://demo-ableitung-test.odoo.com",
+                    "odoo_key": "k", "llm_key": "k", "llm_model": "m",
+                })
+                assert response.status_code == 200, response.text
+                assert probe.call_args.kwargs["database"] == "demo-ableitung-test", probe.call_args.kwargs
+        results.append(("Connect: fehlendes db wird aus der URL abgeleitet", True, ""))
+    except Exception as e:
+        results.append(("Connect: fehlendes db wird aus der URL abgeleitet", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # A supplied "db" still wins over the derivation — the self-hoster escape
+    # hatch WP4 explicitly keeps.
+    # ------------------------------------------------------------------
+    try:
+        with TestClient(web_app.app) as client:
+            csrf = _login(client)
+            with patch.object(connect_service, "probe",
+                              return_value=(_fake_connect_result(), MagicMock(), MagicMock())) as probe:
+                response = client.post("/api/connect", headers=_auth_headers(csrf), json={
+                    "url": "https://demo-ableitung-test.odoo.com", "db": "andere-db",
+                    "odoo_key": "k", "llm_key": "k", "llm_model": "m",
+                })
+                assert response.status_code == 200, response.text
+                assert probe.call_args.kwargs["database"] == "andere-db", probe.call_args.kwargs
+        results.append(("Connect: übergebenes db gewinnt gegen die Ableitung", True, ""))
+    except Exception as e:
+        results.append(("Connect: übergebenes db gewinnt gegen die Ableitung", False, str(e)))
+
+    # ------------------------------------------------------------------
     # /api/connect returns feature_flags — a missing one silently disables all
     # MRP work centers, BOM operations and quality points (B1 bug class)
     # ------------------------------------------------------------------
@@ -503,10 +545,13 @@ def run():
                 assert response.status_code == 200, response.text
                 data = response.json()
                 assert data["has_odoo_key"] is True and data["has_llm_key"] is True, data
-                assert data["url"] == fake["url"] and data["db"] == fake["db"], data
+                assert data["url"] == fake["url"], data
                 assert "operator-odoo-secret" not in response.text, "Schlüssel im Ergebnis!"
                 assert "operator-llm-secret" not in response.text, "Schlüssel im Ergebnis!"
                 assert "odoo_key" not in data and "llm_key" not in data, sorted(data)
+                # S10/R10 (F2): "db" is no longer part of this endpoint's surface —
+                # the frontend derives it from the URL instead of pre-filling a field.
+                assert "db" not in data, sorted(data)
         # Unauthenticated callers get nothing — the demo hostname it carries is
         # prospect-identifying.
         with TestClient(web_app.app) as anon:

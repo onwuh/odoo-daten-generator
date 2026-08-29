@@ -7,6 +7,7 @@ everything structural (addresses, emails, phones, prices) from static_data.py.
 """
 
 import random
+import zlib
 from typing import Any, Dict, List, Optional, Tuple
 
 import static_data
@@ -103,6 +104,33 @@ def price_for_product() -> Tuple[float, float]:
     list_price = round(random.uniform(15, 500), 2)
     standard_price = round(list_price * random.uniform(0.4, 0.8), 2)
     return list_price, standard_price
+
+
+def build_vendor_footer_info(supplier_name: str) -> Dict[str, Any]:
+    """Deterministic fake footer data for a vendor-bill PDF (tax number, IBAN,
+    payment terms, customer number) — S10/R10 (F4). No LLM call: these fields
+    exist to make different suppliers' bills look distinct, not to be
+    individually meaningful.
+
+    Uses a LOCAL random.Random instance seeded from the supplier name's
+    CRC32, never the module-global `random` this file uses everywhere else:
+    reseeding the global generator here (random.seed(...)) would make every
+    draw AFTER this call reproduce a fixed sequence too — including this same
+    pipeline's later, genuinely-random master-data/product draws — a
+    cross-contamination bug that would stay invisible until someone reorders
+    the pipeline. The XOR constant just decorrelates this seed from
+    pdf_factory's own per-supplier variant-selection seed, which is also
+    derived from the same name; the two don't need to move independently for
+    correctness, but there's no reason to hand them the exact same stream.
+    """
+    rng = random.Random(zlib.crc32((supplier_name or "").encode("utf-8")) ^ 0x1BADB002)
+    return {
+        "tax_number": f"DE{rng.randint(100000000, 999999999)}",
+        "iban": (f"DE{rng.randint(10, 99)} {rng.randint(10000000, 99999999):08d} "
+                f"{rng.randint(1000000000, 9999999999):010d}"),
+        "payment_terms_days": rng.choice([14, 21, 30, 45]),
+        "customer_number": f"K-{rng.randint(10000, 99999)}",
+    }
 
 
 def build_products(product_names: Dict[str, List[str]], descriptions: Optional[Dict[str, str]] = None) -> List[dict]:
