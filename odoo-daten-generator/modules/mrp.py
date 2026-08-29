@@ -30,6 +30,24 @@ def get_product_template_id(client, product_id):
     return None
 
 
+def get_product_template_ids_bulk(client, product_ids: list) -> dict:
+    """Return {product_id: template_id} for all given product variants in one
+    search_read instead of one per product — same lookup as
+    get_product_template_id, just batched."""
+    if not product_ids:
+        return {}
+    records = client.search_read(
+        'product.product', [["id", "in", product_ids]], fields=["id", "product_tmpl_id"], limit=0,
+    )
+    result = {}
+    for r in records:
+        tmpl = r.get("product_tmpl_id")
+        if isinstance(tmpl, (list, tuple)) and tmpl:
+            tmpl = tmpl[0]
+        result[r["id"]] = tmpl
+    return result
+
+
 def create_bom(client, product_tmpl_id, product_id=None, quantity=1.0, code=None, bom_type="normal"):
     """Create a manufacturing BOM for a given product template."""
     values = {"product_tmpl_id": product_tmpl_id, "type": bom_type, "product_qty": quantity}
@@ -155,7 +173,7 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
         )
 
     # D3: components created first (batched), then parent/sub BOMs with
-    # bom_line_ids inlined — see IMPLEMENTIERUNGSPLAN.md D3. Sub-BOMs need their
+    # bom_line_ids inlined — see ROADMAP.md D3. Sub-BOMs need their
     # component's product_tmpl_id, which only exists once the component itself
     # has been created, so the ordering below is load-bearing, not cosmetic:
     # main products -> main components -> raw materials (for sub-BOMs) -> all BOMs.
@@ -173,11 +191,13 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
     ctx.product_ids.extend(main_product_ids)
     main_list_price = {pid: vals["list_price"] for pid, vals in zip(main_product_ids, main_product_vals)}
 
-    # Template ids + component name lists per main product (reads — not batchable creates)
+    # Template ids + component name lists per main product (one bulk read for
+    # all main products instead of one search_read per product).
+    main_tmpl_ids = get_product_template_ids_bulk(client, main_product_ids)
     main_tmpl_id = {}
     main_component_names = {}
     for pid, name in zip(main_product_ids, main_products):
-        tmpl_id = get_product_template_id(client, pid)
+        tmpl_id = main_tmpl_ids.get(pid)
         if not tmpl_id:
             logger.warning(f"⚠️  Konnte Template für Produkt {pid} nicht ermitteln — BOM übersprungen.")
             continue
@@ -212,11 +232,15 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
 
     # --- Step 3: batch-create ALL raw materials for sub-BOMs (across all products) ---
     raw_count = max(2, min(4, components_per_bom // 2 + 1))
+    sub_bom_comps = [
+        comp for comps in components_by_product.values() for comp in comps[:sub_boms_per_product]
+    ]
+    comp_tmpl_ids = get_product_template_ids_bulk(client, [c["id"] for c in sub_bom_comps])
     raw_vals_list = []
     raw_meta = []  # [{"comp": <component_meta dict>}, ...], order == raw_vals_list
     for pid, comps in components_by_product.items():
         for comp in comps[:sub_boms_per_product]:
-            comp_tmpl_id = get_product_template_id(client, comp["id"])
+            comp_tmpl_id = comp_tmpl_ids.get(comp["id"])
             if not comp_tmpl_id:
                 continue
             comp["tmpl_id"] = comp_tmpl_id
@@ -302,6 +326,8 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
                     for i in range(num_workcenters)
                 }
             company_id = _get_company_id()
+            wc_names = []
+            wc_vals_list = []
             for seq, (wc_name, wc_info) in enumerate(list(wc_data.items())[:num_workcenters], start=1):
                 slug = "".join(c for c in wc_name.upper() if c.isalnum())[:8]
                 wc_vals = {
@@ -315,7 +341,10 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
                 }
                 if company_id:
                     wc_vals["company_id"] = company_id
-                wc_id = create_workcenter(client, wc_vals)
+                wc_names.append(wc_name)
+                wc_vals_list.append(wc_vals)
+            wc_ids = client.create_batch('mrp.workcenter', wc_vals_list)
+            for wc_name, wc_id in zip(wc_names, wc_ids):
                 workcenter_name_to_id[wc_name] = wc_id
                 ctx.workcenter_ids.append(wc_id)
             logger.info(f"Arbeitszentren erstellt: {len(workcenter_name_to_id)}")
@@ -329,7 +358,7 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
         try:
             logger.info("\n--- MANUFACTURING: Verknuepfe Arbeitsgaenge mit Stuecklisten ---")
             wc_names = list(workcenter_name_to_id.keys())
-            op_count = 0
+            op_vals_list = []
             for bom_id in created_bom_ids:
                 num_ops = random.randint(2, 3)
                 chosen_wcs = random.choices(wc_names, k=num_ops)
@@ -337,15 +366,15 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
                     wc_id = workcenter_name_to_id[wc_name]
                     ops_list = wc_data.get(wc_name, {}).get("operations", ["Bearbeitung"])
                     op_name = random.choice(ops_list)
-                    create_bom_operation(client, {
+                    op_vals_list.append({
                         "name": op_name,
                         "bom_id": bom_id,
                         "workcenter_id": wc_id,
                         "sequence": op_seq * 10,
                         "time_cycle_manual": round(random.uniform(15, 90), 2),
                     })
-                    op_count += 1
-            logger.info(f"Arbeitsgaenge erstellt: {op_count}")
+            client.create_batch('mrp.routing.workcenter', op_vals_list)
+            logger.info(f"Arbeitsgaenge erstellt: {len(op_vals_list)}")
         except Exception as e:
             logger.info(f"Arbeitsgaenge konnten nicht erstellt werden: {e}")
 
@@ -361,8 +390,6 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
             if not picking_type_id:
                 logger.warning("Kein Fertigungs-Vorgangstyp gefunden - Fertigungsauftraege uebersprungen.")
             else:
-                confirmed_mo_ids = []
-                created_mo_count = 0
                 # Pre-fetch quality references once (only if needed)
                 qp_team_id = None
                 qp_test_type_id = None
@@ -380,33 +407,42 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
                     except Exception:
                         pass  # quality module likely not installed
 
+                mo_vals_list = []
                 for _ in range(num_manufacturing_orders):
                     bom_id = random.choice(created_bom_ids)
                     product_id = bom_product_map.get(bom_id)
                     if not product_id:
                         continue
+                    mo_vals_list.append({
+                        "product_id": product_id,
+                        "product_qty": float(random.randint(5, 50)),
+                        "bom_id": bom_id,
+                        "company_id": company_id,
+                        "date_start": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    })
+                mo_ids = client.create_batch('mrp.production', mo_vals_list) if mo_vals_list else []
+                created_mo_count = len(mo_ids)
+                to_confirm = [mo_id for mo_id in mo_ids if random.random() < 0.7]
+
+                if to_confirm:
                     try:
-                        mo_id = create_manufacturing_order(client, {
-                            "product_id": product_id,
-                            "product_qty": float(random.randint(5, 50)),
-                            "bom_id": bom_id,
-                            "company_id": company_id,
-                        })
-                        created_mo_count += 1
-                        if random.random() < 0.7:
-                            if confirm_manufacturing_order(client, mo_id):
-                                confirmed_mo_ids.append(mo_id)
-                    except Exception as mo_e:
-                        logger.warning(f"Fertigungsauftrag uebersprungen: {mo_e}")
+                        client.call_method('mrp.production', 'action_confirm', ids=to_confirm)
+                        confirmed_mo_ids = list(to_confirm)
+                    except Exception:
+                        # Batched confirm failed for the group (e.g. one MO
+                        # lacking components) — fall back to the per-MO path,
+                        # which already isolates failures one at a time.
+                        confirmed_mo_ids = [
+                            mo_id for mo_id in to_confirm if confirm_manufacturing_order(client, mo_id)
+                        ]
 
                 logger.info(f"Fertigungsauftraege: {created_mo_count} erstellt, {len(confirmed_mo_ids)} bestaetigt.")
 
                 # Quality Points (per BOM)
                 if create_quality_points and qp_team_id and qp_test_type_id:
                     try:
-                        qp_count = 0
-                        for bom_id in created_bom_ids:
-                            create_quality_point(client, {
+                        qp_vals_list = [
+                            {
                                 "name": f"QP-BOM-{bom_id}",
                                 "team_id": qp_team_id,
                                 "picking_type_ids": [(4, picking_type_id)],
@@ -414,9 +450,11 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
                                 "test_type_id": qp_test_type_id,
                                 "test_report_type": "none",
                                 "bom_id": bom_id,
-                            })
-                            qp_count += 1
-                        logger.info(f"Qualitaetspruefpunkte erstellt: {qp_count}")
+                            }
+                            for bom_id in created_bom_ids
+                        ]
+                        client.create_batch('quality.point', qp_vals_list)
+                        logger.info(f"Qualitaetspruefpunkte erstellt: {len(qp_vals_list)}")
                     except Exception as qp_e:
                         logger.info(f"Qualitaetspruefpunkte konnten nicht erstellt werden: {qp_e}")
         except Exception as e:

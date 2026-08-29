@@ -79,6 +79,38 @@ def create_leave_request(client, employee_id, work_entry_type_id, date_from_str,
         return None
 
 
+def get_existing_leaves_bulk(client, emp_ids: list) -> dict:
+    """Return {emp_id: [(date_from, date_to), ...]} for all given employees in
+    one search_read instead of one per employee — same query as
+    get_existing_leaves, just batched across the whole run."""
+    if not emp_ids:
+        return {}
+    try:
+        records = client.search_read(
+            'hr.leave',
+            [["employee_id", "in", emp_ids], ["state", "!=", "refuse"]],
+            fields=["employee_id", "request_date_from", "request_date_to"],
+            limit=0,
+        )
+        result: dict = {emp_id: [] for emp_id in emp_ids}
+        for r in records:
+            emp = r.get("employee_id")
+            emp_id = emp[0] if isinstance(emp, (list, tuple)) else emp
+            df = r.get("request_date_from")
+            dt = r.get("request_date_to")
+            if emp_id in result and df and dt:
+                result[emp_id].append((
+                    datetime.date.fromisoformat(df),
+                    datetime.date.fromisoformat(dt),
+                ))
+        for emp_id, leaves in result.items():
+            logger.info(f"   [timeoff] emp {emp_id}: {len(leaves)} existing leaves loaded")
+        return result
+    except Exception as e:
+        logger.warning(f"[get_existing_leaves_bulk] failed: {e}")
+        return {emp_id: [] for emp_id in emp_ids}
+
+
 def get_existing_leaves(client, emp_id: int) -> list:
     """Return list of (date_from, date_to) tuples for existing non-refused leaves."""
     try:
@@ -208,19 +240,40 @@ def create_leave_data(client, ctx: RunContext) -> list:
     alloc_date_from = today - datetime.timedelta(days=timescale_days)
     alloc_date_to = today + datetime.timedelta(days=timescale_days + 14)
 
-    # Allocate enough days to cover all planned leave
+    # Allocate enough days to cover all planned leave. Every employee gets the
+    # same days/window, only employee_id differs, so this is one create_batch
+    # + one batched approve instead of a create+approve pair per employee.
     alloc_days = max(entries_per_employee * avg_length_days * 2, 30)
-    for emp_id in ctx.employee_ids:
-        create_leave_allocation(client, emp_id, leave_type_id, alloc_days, alloc_date_from, alloc_date_to)
+    alloc_name = (f'Urlaub {alloc_date_from.year}-{alloc_date_to.year}'
+                  if alloc_date_from.year != alloc_date_to.year
+                  else f'Urlaub {alloc_date_from.year}')
+    alloc_vals_list = [
+        {
+            'name': alloc_name,
+            'employee_id': emp_id,
+            'work_entry_type_id': leave_type_id,
+            'number_of_days': alloc_days,
+            'date_from': alloc_date_from.isoformat(),
+            'date_to': alloc_date_to.isoformat(),
+        }
+        for emp_id in ctx.employee_ids
+    ]
+    alloc_ids = client.create_batch('hr.leave.allocation', alloc_vals_list)
+    try:
+        if alloc_ids:
+            client.call_method('hr.leave.allocation', 'action_approve', ids=alloc_ids)
+    except Exception as e:
+        logger.warning(f"[leave_allocation] batch approve failed: {e}")
+
     all_leave_ids = []
     scheduled: dict = {}  # emp_id -> [(start, end), ...]
+    existing_by_emp = get_existing_leaves_bulk(client, ctx.employee_ids)
 
     for emp_id in ctx.employee_ids:
         n_future = round(entries_per_employee * past_future_pct / 100)
         n_past = entries_per_employee - n_future
         scheduled.setdefault(emp_id, [])
-        existing = get_existing_leaves(client, emp_id)
-        scheduled[emp_id].extend(existing)
+        scheduled[emp_id].extend(existing_by_emp.get(emp_id, []))
 
         for _ in range(n_past):
             length = max(1, round(avg_length_days * random.uniform(0.5, 1.5)))
@@ -270,15 +323,37 @@ def create_leave_data(client, ctx: RunContext) -> list:
             if leave_id:
                 all_leave_ids.append(leave_id)
 
-    # Approve validate_pct% of created leaves
+    # Approve validate_pct% of created leaves. Some hr.work.entry.type configs
+    # auto-validate hr.leave on create (see validate_leave_request's docstring)
+    # — one bulk state read filters those out, then one bulk action_approve
+    # call handles the rest, instead of a state-read + approve pair per leave.
     if all_leave_ids and validate_pct > 0:
         if validate_pct >= 100:
             to_validate = all_leave_ids
         else:
             n = max(1, round(len(all_leave_ids) * validate_pct / 100))
             to_validate = random.sample(all_leave_ids, n)
-        for lid in to_validate:
-            validate_leave_request(client, lid)
+
+        try:
+            states = client.search_read(
+                'hr.leave', [['id', 'in', to_validate]], fields=['id', 'state'], limit=0,
+            )
+            already_validated = {r['id'] for r in states if r.get('state') == 'validate'}
+        except Exception as e:
+            logger.warning(f"[timeoff] bulk state check failed: {e}")
+            already_validated = set()
+
+        pending_ids = [lid for lid in to_validate if lid not in already_validated]
+        if pending_ids:
+            try:
+                client.call_method('hr.leave', 'action_approve', ids=pending_ids)
+            except Exception:
+                # Batched approve failed for the group (e.g. one leave needs a
+                # manager, not just the API user) — fall back to the per-leave
+                # path, which re-checks state so it can't double-approve
+                # whatever the failed batch already rolled back.
+                for lid in pending_ids:
+                    validate_leave_request(client, lid)
 
     logger.info(f"✅ Urlaubsdaten fuer {len(ctx.employee_ids)} Mitarbeiter erstellt ({len(all_leave_ids)} Eintraege).")
     return all_leave_ids

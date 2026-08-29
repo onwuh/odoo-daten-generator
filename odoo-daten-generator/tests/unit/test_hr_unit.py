@@ -154,10 +154,13 @@ def run():
             c for c in mock_client.call_method.call_args_list
             if c.args[0] == 'hr.leave' and c.args[1] == 'action_approve'
         ]
-        assert len(approve_calls) == len(leave_ids), \
-            f"expected {len(leave_ids)} approve calls, got {len(approve_calls)}"
+        # Approval is batched into one call_method(ids=[...]) instead of one
+        # call per leave — assert every leave id was covered, not call count.
+        approved_ids = [lid for c in approve_calls for lid in c.kwargs.get('ids', [])]
+        assert sorted(approved_ids) == sorted(leave_ids), \
+            f"expected all of {leave_ids} approved, got {approved_ids}"
         results.append(("hr: validate_pct=100 → action_approve for every leave", True,
-                        f"{len(approve_calls)} calls"))
+                        f"{len(approved_ids)} ids across {len(approve_calls)} call(s)"))
     except Exception as e:
         results.append(("hr: validate_pct=100 → action_approve for every leave", False, str(e)))
 

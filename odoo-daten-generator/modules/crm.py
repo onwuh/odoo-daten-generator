@@ -412,18 +412,21 @@ def _create_activities(client, opp_ids, ctx: RunContext):
     today_pct = act_cfg.get("today_pct", 0)
 
     logger.info(f"--- CRM: Erstelle Aktivitäten für {len(opp_ids)} Opportunities ---")
+    activity_vals_list = []
     for opp_id in opp_ids:
-        try:
-            deadline = _activity_deadline(past_pct, today_pct)
-            activity_type = random.choice(type_pool)
-            client.create('mail.activity', {
-                'res_id': opp_id,
-                'res_model_id': model_id,
-                'activity_type_id': activity_type['id'],
-                'date_deadline': deadline,
-                'summary': activity_type.get('name', 'Follow-up'),
-            })
-        except Exception as e:
-            logger.warning(f"⚠️  Aktivität für Opp {opp_id} fehlgeschlagen: {e}")
+        deadline = _activity_deadline(past_pct, today_pct)
+        activity_type = random.choice(type_pool)
+        activity_vals_list.append({
+            'res_id': opp_id,
+            'res_model_id': model_id,
+            'activity_type_id': activity_type['id'],
+            'date_deadline': deadline,
+            'summary': activity_type.get('name', 'Follow-up'),
+        })
+
+    try:
+        client.create_batch('mail.activity', activity_vals_list)
+    except Exception as e:
+        logger.warning(f"⚠️  Aktivitäten fehlgeschlagen: {e}")
 
     logger.info("✅ Aktivitäten erstellt.")

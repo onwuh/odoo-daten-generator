@@ -273,42 +273,80 @@ def create_recruiting_data(client, gemini, ctx: RunContext) -> None:
 # ------------------------------------------------------------------
 
 def _create_skills(client, recruiting_data: dict, num_skill_types: int, skills_per_type: int):
+    """Create skill types, their levels, and their skills.
+
+    Batched in 3 round trips total (new types, their levels, all new skills)
+    instead of one create() per type/level/skill — the FK chain (levels and
+    skills need their skill_type_id) is resolved the same way mrp.py resolves
+    product -> BOM: batch the parent, then batch the children with the ids
+    the parent batch returned.
+    """
     logger.info("\n--- RECRUITING: Erstelle Kompetenzen ---")
-    all_skill_ids = []
     existing_skill_types = get_existing_skill_types(client)
     existing_skills = get_existing_skills(client)
 
+    type_entries = []  # [{"data", "name", "is_new"}, ...] one per requested skill_type_data
     for skill_type_data in recruiting_data.get("skill_types", [])[:num_skill_types]:
         skill_type_name = skill_type_data.get("name", "")
         if not skill_type_name:
             continue
+        is_new = skill_type_name.lower() not in existing_skill_types
+        type_entries.append({"data": skill_type_data, "name": skill_type_name, "is_new": is_new})
 
-        if skill_type_name.lower() in existing_skill_types:
-            logger.info(f"-> Kompetenzart '{skill_type_name}' existiert bereits, überspringe")
-            skill_type_id = existing_skill_types[skill_type_name.lower()]
-        else:
-            skill_type_id = create_skill_type(client, skill_type_name)
-            existing_skill_types[skill_type_name.lower()] = skill_type_id
+    # --- Step 1: batch-create all new skill types in one call ---
+    new_entries = [e for e in type_entries if e["is_new"]]
+    if new_entries:
+        new_type_ids = client.create_batch(
+            'hr.skill.type', [{"name": e["name"]} for e in new_entries],
+        )
+        for entry, type_id in zip(new_entries, new_type_ids):
+            entry["skill_type_id"] = type_id
+            existing_skill_types[entry["name"].lower()] = type_id
+            logger.info(f"-> Kompetenzart erstellt: {entry['name']} (ID: {type_id})")
 
-            # Levels only for newly-created types — an existing type already has
-            # levels; re-creating them here would duplicate on every run (B13).
-            levels = skill_type_data.get("levels", [])
-            if len(levels) < 3:
-                levels = ["Grundlagen", "Fortgeschritten", "Experte"]
-            for i, level_name in enumerate(levels):
-                progress = int((i + 1) * 100 / len(levels))
-                create_skill_level(client, skill_type_id, level_name, progress)
+    for entry in type_entries:
+        if not entry["is_new"]:
+            entry["skill_type_id"] = existing_skill_types[entry["name"].lower()]
+            logger.info(f"-> Kompetenzart '{entry['name']}' existiert bereits, überspringe")
 
-        for skill_name in skill_type_data.get("skills", [])[:skills_per_type]:
+    # --- Step 2: batch-create ALL levels for ALL new types in one call ---
+    # Levels only for newly-created types — an existing type already has
+    # levels; re-creating them here would duplicate on every run (B13).
+    level_vals_list = []
+    for entry in new_entries:
+        levels = entry["data"].get("levels", [])
+        if len(levels) < 3:
+            levels = ["Grundlagen", "Fortgeschritten", "Experte"]
+        for i, level_name in enumerate(levels):
+            progress = int((i + 1) * 100 / len(levels))
+            level_vals_list.append({
+                "name": level_name, "skill_type_id": entry["skill_type_id"],
+                "level_progress": progress,
+            })
+    if level_vals_list:
+        client.create_batch('hr.skill.level', level_vals_list)
+
+    # --- Step 3: batch-create ALL new skills across ALL types in one call ---
+    skill_vals_list = []
+    skill_slots = []  # parallel to skill_vals_list: either ("new", None) placeholder or the existing id
+    ordered_skill_refs = []  # [("new", idx_into_skill_vals_list) | ("existing", skill_id), ...] in output order
+    for entry in type_entries:
+        skill_type_id = entry["skill_type_id"]
+        for skill_name in entry["data"].get("skills", [])[:skills_per_type]:
             skill_key = (skill_type_id, skill_name.lower())
             if skill_key in existing_skills:
                 logger.info(f"->   Kompetenz '{skill_name}' existiert bereits, überspringe")
-                sid = existing_skills[skill_key]
+                ordered_skill_refs.append(("existing", existing_skills[skill_key]))
             else:
-                sid = create_skill(client, skill_type_id, skill_name)
-                existing_skills[skill_key] = sid
-            all_skill_ids.append(sid)
+                skill_vals_list.append({"name": skill_name, "skill_type_id": skill_type_id})
+                ordered_skill_refs.append(("new", len(skill_vals_list) - 1))
 
+    new_skill_ids = client.create_batch('hr.skill', skill_vals_list) if skill_vals_list else []
+
+    all_skill_ids = [
+        new_skill_ids[idx] if kind == "new" else idx
+        for kind, idx in ordered_skill_refs
+    ]
     return all_skill_ids
 
 
@@ -385,7 +423,7 @@ def _create_applicants(client, ctx, recruiting_data, num_candidates, job_ids, al
         names.append(f"Bewerber {len(names) + 1}")
 
     # Emails/phones are derived deterministically from the name — never
-    # requested from the LLM (IMPLEMENTIERUNGSPLAN.md A2).
+    # requested from the LLM (ROADMAP.md A2).
     emails = [text_utils.email_from_name(n) for n in names]
     phones = [_random_phone_de() for _ in names]
 
