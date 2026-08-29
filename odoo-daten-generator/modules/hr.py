@@ -4,7 +4,6 @@ import logging
 import datetime
 import random
 
-import odoo_actions  # kept for create_employee (shared with project module)
 from config import RunContext
 from fallback_data import FALLBACK_EMPLOYEES
 

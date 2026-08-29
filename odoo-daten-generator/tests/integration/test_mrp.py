@@ -5,7 +5,6 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-import odoo_actions  # kept for create_product (shared utility)
 from config import DemoCriteria, ModuleSelections, RunContext
 from modules.mrp import (
     get_product_template_id,

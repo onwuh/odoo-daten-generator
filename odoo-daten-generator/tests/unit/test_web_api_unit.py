@@ -276,7 +276,7 @@ def run():
                 run_id = created.json()["run_id"]
                 time.sleep(0.4)
             assert client_a.get(f"/api/runs/{run_id}").status_code == 200
-            csrf_b = _login(client_b)
+            _login(client_b)
             foreign = client_b.get(f"/api/runs/{run_id}")
             assert foreign.status_code == 404, foreign.status_code
             events = client_b.get(f"/api/runs/{run_id}/events")

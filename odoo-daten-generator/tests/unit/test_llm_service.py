@@ -4,7 +4,7 @@ import os
 import sys
 import tempfile
 import time
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
@@ -95,7 +95,6 @@ def run():
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             import llm_service as _llm_mod
-            original_cache_dir = _llm_mod._CACHE_DIR
 
             from pathlib import Path
             tmp_cache = Path(tmpdir)

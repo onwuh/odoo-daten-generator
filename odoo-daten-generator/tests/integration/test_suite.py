@@ -153,14 +153,14 @@ def _render_summary(summary):
 def main():
     # --- Unit tests (offline, no Odoo) ---
     print(f"\n{'='*60}")
-    print(f"  UNIT TESTS (offline)")
+    print("  UNIT TESTS (offline)")
     print(f"{'='*60}")
     unit_summary = run_unit_tests()
     unit_ok = _render_unit_summary(unit_summary, section_title="UNIT TEST SUMMARY")
 
     # --- Integration tests (live Odoo) ---
     print(f"\n{'='*60}")
-    print(f"  INTEGRATION TESTS (live Odoo)")
+    print("  INTEGRATION TESTS (live Odoo)")
     print(f"{'='*60}")
     url, db, api_key = _load_config()
     client = OdooJson2Client(url, db, api_key)

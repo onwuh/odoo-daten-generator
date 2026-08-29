@@ -508,25 +508,25 @@ Language: {language}. Return clean JSON only, no markdown fences."""
 
         if style == "notes_only":
             type_instruction = (
-                f'All messages must have "type": "note" and "speaker": "salesperson". '
-                f'Keep each note to 1-3 sentences, internal sales tone.'
+                'All messages must have "type": "note" and "speaker": "salesperson". '
+                'Keep each note to 1-3 sentences, internal sales tone.'
             )
             example_types = '"type": "note", "speaker": "salesperson"'
         elif style == "full_email":
             type_instruction = (
-                f'All messages must be emails ("type": "email"). Alternate between '
-                f'"speaker": "customer" (inbound) and "speaker": "salesperson" (outbound). '
-                f'Start with customer reaching out. Emails should have a proper greeting, '
-                f'a substantive body (2-4 sentences), and a closing line.'
+                'All messages must be emails ("type": "email"). Alternate between '
+                '"speaker": "customer" (inbound) and "speaker": "salesperson" (outbound). '
+                'Start with customer reaching out. Emails should have a proper greeting, '
+                'a substantive body (2-4 sentences), and a closing line.'
             )
             example_types = '"type": "email", "speaker": "customer"'
         else:  # mixed
             type_instruction = (
-                f'Mix emails and internal notes. Emails ("type": "email") can have '
-                f'"speaker": "customer" (inbound) or "speaker": "salesperson" (outbound). '
-                f'Notes ("type": "note") must always have "speaker": "salesperson" (internal only). '
-                f'Emails should be substantive (2-4 sentences with greeting and closing). '
-                f'Notes are short internal observations (1-2 sentences).'
+                'Mix emails and internal notes. Emails ("type": "email") can have '
+                '"speaker": "customer" (inbound) or "speaker": "salesperson" (outbound). '
+                'Notes ("type": "note") must always have "speaker": "salesperson" (internal only). '
+                'Emails should be substantive (2-4 sentences with greeting and closing). '
+                'Notes are short internal observations (1-2 sentences).'
             )
             example_types = '"type": "email", "speaker": "customer"'
 
