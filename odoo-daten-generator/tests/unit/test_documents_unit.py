@@ -147,6 +147,110 @@ def run():
         results.append(("_create_bill_pdfs: partner_id/product_id [id,name] tuples unpacked correctly (Pattern 6)", False, str(e)))
 
     # ------------------------------------------------------------------
+    # Recipient block + net/tax/gross totals: the PDF's "bill to" is this
+    # run's own res.company, and its total must be the account.move's own
+    # amount_untaxed/amount_tax/amount_total — never a value recomputed from
+    # the lines — so the rendered PDF can't disagree with the Odoo record.
+    # Also covers the fallback synthetic address for a blank company record
+    # (the common case on a freshly provisioned demo SaaS tenant).
+    # ------------------------------------------------------------------
+    try:
+        client = _mock_client()
+
+        def _search_read(model, domain=None, fields=None, limit=None, **kw):
+            if model == 'account.move':
+                return [{
+                    "id": 501, "name": "BILL/001", "invoice_date": "2026-08-01",
+                    "invoice_date_due": "2026-08-15", "currency_id": [1, "EUR"],
+                    "amount_untaxed": 100.0, "amount_tax": 19.0, "amount_total": 119.0,
+                    "partner_id": [77, "Acme Lieferant GmbH"],
+                    "invoice_line_ids": [901],
+                }]
+            if model == 'res.partner':
+                return [{"id": 77, "name": "Acme Lieferant GmbH", "street": "Teststr. 1",
+                         "zip": "12345", "city": "Teststadt"}]
+            if model == 'account.move.line':
+                return [{
+                    "id": 901, "name": "Beratung", "quantity": 2, "price_unit": 50.0,
+                    "price_subtotal": 100.0, "price_total": 119.0,
+                    "product_id": [55, "Beratungsleistung"], "product_uom_id": [1, "Stunden"],
+                    "tax_ids": [25],
+                }]
+            if model == 'account.tax':
+                return [{"id": 25, "amount": 19.0}]
+            if model == 'res.company':
+                return []  # blank address -> must fall back to a synthetic one
+            return []
+        client.search_read.side_effect = _search_read
+
+        with patch.object(pdf_factory, "build_vendor_bill_pdf", return_value=b"%PDF-fake") as mock_build:
+            ctx = _make_ctx(documents_sel={"bill_pdfs_enabled": True}, bill_ids=[501])
+            documents.create_documents(client, gemini=None, ctx=ctx)
+
+        assert mock_build.call_count == 1, mock_build.call_count
+        kwargs = mock_build.call_args.kwargs
+        assert kwargs.get("buyer_name") == "Kunde", (
+            f"res.company returned nothing -> buyer_name should fall back to 'Kunde': {kwargs.get('buyer_name')!r}"
+        )
+        assert kwargs.get("buyer_address"), "blank company address must still fall back to a synthetic one, not empty"
+        assert kwargs.get("due_date") == "2026-08-15", kwargs.get("due_date")
+        totals = kwargs.get("totals")
+        assert totals == {
+            "untaxed": 100.0, "tax": 19.0, "total": 119.0,
+            "tax_breakdown": [{"rate": 19.0, "base": 100.0, "amount": 19.0}],
+        }, totals
+        lines_arg = mock_build.call_args.args[4]
+        assert lines_arg[0]["tax_rate"] == 19.0, lines_arg
+        assert lines_arg[0]["uom"] == "Stunden", lines_arg
+        assert lines_arg[0]["amount_untaxed"] == 100.0, lines_arg
+
+        results.append((
+            "_create_bill_pdfs: recipient block + authoritative net/tax/gross totals passed through",
+            True, f"totals={totals}",
+        ))
+    except AssertionError as e:
+        results.append(("_create_bill_pdfs: recipient block + authoritative net/tax/gross totals passed through",
+                        False, str(e)))
+
+    # ------------------------------------------------------------------
+    # The converse of the above: a real, populated res.company address must
+    # be used as-is, not overridden by the synthetic fallback.
+    # ------------------------------------------------------------------
+    try:
+        client = _mock_client()
+
+        def _search_read(model, domain=None, fields=None, limit=None, **kw):
+            if model == 'account.move':
+                return [{
+                    "id": 502, "name": "BILL/002", "invoice_date": "2026-08-01",
+                    "invoice_date_due": "2026-08-01", "currency_id": [1, "EUR"],
+                    "amount_untaxed": 10.0, "amount_tax": 0.0, "amount_total": 10.0,
+                    "partner_id": [77, "Acme Lieferant GmbH"], "invoice_line_ids": [],
+                }]
+            if model == 'res.partner':
+                return [{"id": 77, "name": "Acme Lieferant GmbH", "street": "", "zip": "", "city": ""}]
+            if model == 'res.company':
+                return [{"id": 1, "name": "Meine Firma GmbH", "street": "Hauptstr. 5", "street2": False,
+                         "zip": "10115", "city": "Berlin", "country_id": [57, "Germany"], "vat": "DE123456789"}]
+            return []
+        client.search_read.side_effect = _search_read
+
+        with patch.object(pdf_factory, "build_vendor_bill_pdf", return_value=b"%PDF-fake") as mock_build:
+            ctx = _make_ctx(documents_sel={"bill_pdfs_enabled": True}, bill_ids=[502])
+            documents.create_documents(client, gemini=None, ctx=ctx)
+
+        kwargs = mock_build.call_args.kwargs
+        assert kwargs.get("buyer_name") == "Meine Firma GmbH", kwargs.get("buyer_name")
+        assert kwargs.get("buyer_address") == "Hauptstr. 5\n10115 Berlin\nGermany", (
+            f"real company address must be used verbatim: {kwargs.get('buyer_address')!r}"
+        )
+        results.append(("_create_bill_pdfs: real res.company address used as-is, no synthetic fallback",
+                        True, kwargs.get("buyer_address")))
+    except AssertionError as e:
+        results.append(("_create_bill_pdfs: real res.company address used as-is, no synthetic fallback",
+                        False, str(e)))
+
+    # ------------------------------------------------------------------
     # Pattern 6 (continued) + Pattern 8: hr.applicant.skill.skill_id comes
     # back as [id, name] — must unpack to the skill name, not the tuple —
     # and fetch_cv_bullet_points_batch must be called exactly once across
@@ -346,13 +450,35 @@ def run():
         info1 = data_factory.build_vendor_footer_info("Determinismus GmbH")
         info2 = data_factory.build_vendor_footer_info("Determinismus GmbH")
         assert info1 == info2, (info1, info2)
-        assert set(info1.keys()) == {"tax_number", "iban", "payment_terms_days", "customer_number"}, info1
+        assert set(info1.keys()) == {
+            "tax_number", "iban", "bic", "bank_name", "payment_terms_days", "customer_number",
+            "skonto_percent", "skonto_days",
+        }, info1
         empty = data_factory.build_vendor_footer_info("")
         assert set(empty.keys()) == set(info1.keys()), empty
         results.append(("data_factory.build_vendor_footer_info: deterministic, no crash on empty name (F4)",
                         True, f"{info1}"))
     except AssertionError as e:
         results.append(("data_factory.build_vendor_footer_info: deterministic, no crash on empty name (F4)",
+                        False, str(e)))
+
+    # ------------------------------------------------------------------
+    # data_factory.build_recipient_fallback_address: same determinism
+    # contract as build_vendor_footer_info (same name -> same address,
+    # empty name doesn't crash) — used when the run's own res.company has
+    # no address configured (see _create_bill_pdfs).
+    # ------------------------------------------------------------------
+    try:
+        addr1 = data_factory.build_recipient_fallback_address("Meine Firma GmbH")
+        addr2 = data_factory.build_recipient_fallback_address("Meine Firma GmbH")
+        assert addr1 == addr2, (addr1, addr2)
+        assert set(addr1.keys()) == {"street", "zip", "city"}, addr1
+        empty = data_factory.build_recipient_fallback_address("")
+        assert set(empty.keys()) == set(addr1.keys()), empty
+        results.append(("data_factory.build_recipient_fallback_address: deterministic, no crash on empty name",
+                        True, f"{addr1}"))
+    except AssertionError as e:
+        results.append(("data_factory.build_recipient_fallback_address: deterministic, no crash on empty name",
                         False, str(e)))
 
     all_ok = all(ok for _, ok, _ in results)
