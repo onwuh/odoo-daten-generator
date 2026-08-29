@@ -54,16 +54,35 @@ def run(client, ctx):
     except Exception as e:
         results.append(("hr: create employee + read-back name", False, str(e)))
 
+    # S10/R10: hr.work.entry.type/hr.leave/hr.leave.allocation ship with
+    # hr_work_entry/hr_holidays, NOT with hr — the exact gap this sprint's F6
+    # traced (get_or_create_annual_leave_type and the helpers below have no
+    # ctx-based gate of their own, by design; see modules/hr.py's
+    # create_leave_data for where that gate actually lives). This test file
+    # calls the low-level helpers directly, so IT must skip gracefully here
+    # instead of reporting a live 404 as a code failure when a target
+    # instance — like the one this was first caught against — genuinely
+    # doesn't have these apps installed (Pattern 5).
+    leave_apps_installed = ('hr_holidays' in ctx.installed_modules
+                            and 'hr_work_entry' in ctx.installed_modules)
+
     # Step 2 — Get or create annual leave type
-    try:
-        leave_type_id = get_or_create_annual_leave_type(client)
-        assert isinstance(leave_type_id, int) and leave_type_id > 0
-        results.append(("hr: get_or_create_annual_leave_type", True, leave_type_id))
-    except Exception as e:
-        results.append(("hr: get_or_create_annual_leave_type", False, str(e)))
+    if leave_apps_installed:
+        try:
+            leave_type_id = get_or_create_annual_leave_type(client)
+            assert isinstance(leave_type_id, int) and leave_type_id > 0
+            results.append(("hr: get_or_create_annual_leave_type", True, leave_type_id))
+        except Exception as e:
+            results.append(("hr: get_or_create_annual_leave_type", False, str(e)))
+    else:
+        results.append(("hr: get_or_create_annual_leave_type SKIP — hr_holidays/hr_work_entry nicht installiert",
+                        True, "skipped"))
 
     # Step 3 — Create leave allocation + validate
-    if emp_id and leave_type_id:
+    if not leave_apps_installed:
+        results.append(("hr: create_leave_allocation + validate SKIP — hr_holidays/hr_work_entry nicht installiert",
+                        True, "skipped"))
+    elif emp_id and leave_type_id:
         try:
             today = datetime.date.today()
             date_from = datetime.date(today.year, 1, 1)
@@ -84,7 +103,10 @@ def run(client, ctx):
         results.append(("hr: create_leave_allocation + validate", False, "skipped - missing emp_id or leave_type_id"))
 
     # Step 4 — Create leave request (no auto-approve)
-    if emp_id and leave_type_id:
+    if not leave_apps_installed:
+        results.append(("hr: create_leave_request SKIP — hr_holidays/hr_work_entry nicht installiert",
+                        True, "skipped"))
+    elif emp_id and leave_type_id:
         try:
             today = datetime.date.today()
             days_to_monday = (7 - today.weekday()) % 7 or 7
@@ -102,7 +124,10 @@ def run(client, ctx):
         results.append(("hr: create_leave_request", False, "skipped - missing emp_id or leave_type_id"))
 
     # Step 5 — validate_leave_request
-    if emp_id and leave_type_id:
+    if not leave_apps_installed:
+        results.append(("hr: validate_leave_request SKIP — hr_holidays/hr_work_entry nicht installiert",
+                        True, "skipped"))
+    elif emp_id and leave_type_id:
         try:
             today = datetime.date.today()
             days_to_monday = (7 - today.weekday()) % 7 or 7
@@ -124,37 +149,41 @@ def run(client, ctx):
     # Deterministic reproduction: mirror create_leave_data's alloc-window formula for
     # timescale_days=400, then request a leave 200 days out (guaranteed past Dec 31
     # from any point in the year) and confirm it approves cleanly.
-    try:
-        b5_emp_id = odoo_actions.create_employee(client, "Integration Test B5 Mitarbeiter")
-        assert isinstance(b5_emp_id, int) and b5_emp_id > 0
+    if not leave_apps_installed:
+        results.append(("hr: B5 — leave beyond current year approved SKIP — hr_holidays/hr_work_entry nicht installiert",
+                        True, "skipped"))
+    else:
+        try:
+            b5_emp_id = odoo_actions.create_employee(client, "Integration Test B5 Mitarbeiter")
+            assert isinstance(b5_emp_id, int) and b5_emp_id > 0
 
-        today = datetime.date.today()
-        timescale_days = 400
-        alloc_date_from = today - datetime.timedelta(days=timescale_days)
-        alloc_date_to = today + datetime.timedelta(days=timescale_days + 14)
-        create_leave_allocation(client, b5_emp_id, leave_type_id, 30, alloc_date_from, alloc_date_to)
+            today = datetime.date.today()
+            timescale_days = 400
+            alloc_date_from = today - datetime.timedelta(days=timescale_days)
+            alloc_date_to = today + datetime.timedelta(days=timescale_days + 14)
+            create_leave_allocation(client, b5_emp_id, leave_type_id, 30, alloc_date_from, alloc_date_to)
 
-        far_point = today + datetime.timedelta(days=200)
-        days_to_monday = (7 - far_point.weekday()) % 7
-        far_monday = far_point + datetime.timedelta(days=days_to_monday)
-        far_friday = far_monday + datetime.timedelta(days=4)
-        assert far_monday.year > today.year, (
-            f"test setup error: {far_monday} did not cross into next year from {today}"
-        )
+            far_point = today + datetime.timedelta(days=200)
+            days_to_monday = (7 - far_point.weekday()) % 7
+            far_monday = far_point + datetime.timedelta(days=days_to_monday)
+            far_friday = far_monday + datetime.timedelta(days=4)
+            assert far_monday.year > today.year, (
+                f"test setup error: {far_monday} did not cross into next year from {today}"
+            )
 
-        leave_id = create_leave_request(
-            client, b5_emp_id, leave_type_id,
-            f"{far_monday} 08:00:00", f"{far_friday} 17:00:00",
-        )
-        assert isinstance(leave_id, int) and leave_id > 0, "leave creation failed (allocation window too narrow?)"
-        ok = validate_leave_request(client, leave_id)
-        assert ok is True, "action_approve failed for leave crossing year boundary"
-        results.append((
-            "hr: B5 — leave beyond current year approved", True,
-            f"leave_id={leave_id} {far_monday}-{far_friday}",
-        ))
-    except Exception as e:
-        results.append(("hr: B5 — leave beyond current year approved", False, str(e)))
+            leave_id = create_leave_request(
+                client, b5_emp_id, leave_type_id,
+                f"{far_monday} 08:00:00", f"{far_friday} 17:00:00",
+            )
+            assert isinstance(leave_id, int) and leave_id > 0, "leave creation failed (allocation window too narrow?)"
+            ok = validate_leave_request(client, leave_id)
+            assert ok is True, "action_approve failed for leave crossing year boundary"
+            results.append((
+                "hr: B5 — leave beyond current year approved", True,
+                f"leave_id={leave_id} {far_monday}-{far_friday}",
+            ))
+        except Exception as e:
+            results.append(("hr: B5 — leave beyond current year approved", False, str(e)))
 
     # Step — D3: create_hr_data employee batch, end-to-end, read-back
     try:

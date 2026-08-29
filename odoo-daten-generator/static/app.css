@@ -708,6 +708,7 @@
 .p-status.running { color: var(--accent); }
 .p-status.done { color: var(--good); }
 .p-status.failed { color: var(--bad); }
+.p-status.skipped { color: var(--warn); }
 
 .console { min-height: 320px; max-height: 460px; overflow-y: auto; }
 .console-line { white-space: pre-wrap; word-break: break-word; }

@@ -373,6 +373,7 @@ async def api_preflight(request: Request, session=Depends(get_session_csrf)) -> 
             llm_model_name=session.llm_model or "",
             installed_modules=connect.installed_modules,
             feature_flags=connect.feature_flags,
+            model_access=connect.model_access,
             existing_company_ids=connect.existing_company_ids,
             existing_product_ids=connect.existing_product_ids,
         )

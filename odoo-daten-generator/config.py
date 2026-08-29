@@ -82,6 +82,24 @@ class RunContext:
     # and sale orders draw from the correct pool.
     component_ids: List[int] = field(default_factory=list)
     feature_flags: Dict[str, bool] = field(default_factory=dict)
+    # Raw per-model create-access probe results (odoo_actions.probe_model_access),
+    # keyed by technical model name — e.g. {"ir.attachment": False}. Distinct
+    # from feature_flags: feature_flags names a small set of pre-existing,
+    # multi-model settings (mrp_routings, quality, crm_leads); this is the
+    # per-model result a module reads directly when no such named flag exists
+    # (documents.py's ir.attachment gate, hr.py's leave models). Always read
+    # with .get(model, True) — a model missing from this dict was never probed
+    # (e.g. its parent module wasn't installed) and must not be treated as
+    # blocked, or a module that is actually fine gets silently skipped (B1
+    # error class).
+    model_access: Dict[str, bool] = field(default_factory=dict)
+    # Module keys a handler returned from early because model_access blocked
+    # it entirely (not merely a sub-behaviour within it — see documents.py's
+    # create_documents). Populated by module code, read by web/jobs.py after
+    # orchestrator.run() returns: on_done(ok=True) already fired by then, and
+    # a module function has no other channel to say "I did nothing" versus
+    # "I genuinely succeeded" back to the locked on_module_done signature.
+    skipped_modules: Set[str] = field(default_factory=set)
     # Customer invoices / vendor bills created THIS run — bank transaction
     # generation scopes to these instead of scanning all posted moves in the
     # DB, so re-running the generator doesn't duplicate transactions (B4).

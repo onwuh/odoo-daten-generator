@@ -52,12 +52,13 @@ _ALL_INSTALLED = {"crm", "sale", "account", "hr", "project", "hr_timesheet",
                   "mrp", "hr_recruitment", "purchase", "stock"}
 
 
-def _build(payload, installed=None, flags=None):
+def _build(payload, installed=None, flags=None, model_access=None):
     return run_config.build_context(
         payload,
         language_name="German", language_code="de_DE", llm_model_name="m",
         installed_modules=installed if installed is not None else _ALL_INSTALLED,
         feature_flags=flags if flags is not None else {"crm_leads": True},
+        model_access=model_access,
         existing_company_ids=[101, 102], existing_product_ids=[201],
     )
 
@@ -71,10 +72,18 @@ def run():
     try:
         assert "purchase" in run_config.WANTED_MODULES, run_config.WANTED_MODULES
         assert "stock" in run_config.WANTED_MODULES, run_config.WANTED_MODULES
-        # Every probed module must also have a label and a progress-row slot,
-        # or it silently vanishes from the UI while still running.
+        # Every probed module must also have a label, or it appears in a
+        # checklist detail with no readable name. GATE_ONLY_MODULES
+        # (hr_holidays/hr_work_entry) are probed and labelled but deliberately
+        # have no progress-row slot — they only gate a sub-behaviour of an
+        # already-installed module (modules/hr.py's create_leave_data), see
+        # run_config.GATE_ONLY_MODULES's docstring.
         for key in run_config.WANTED_MODULES + run_config.PSEUDO_MODULES:
             assert key in run_config.MODULE_LABELS, key
+            if key in run_config.GATE_ONLY_MODULES:
+                assert key not in run_config.MODULE_RUN_ORDER, \
+                    f"{key} is gate-only and must never be its own progress row"
+                continue
             assert key in run_config.MODULE_RUN_ORDER, key
         results.append(("WANTED_MODULES enthält purchase und stock", True, ""))
     except Exception as e:
@@ -271,6 +280,75 @@ def run():
         results.append(("Ungültige Payloads werden mit ConfigError abgelehnt", True, ""))
     except Exception as e:
         results.append(("Ungültige Payloads werden mit ConfigError abgelehnt", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # S10/R10 — effective_installed_modules: a module drops out only when its
+    # PRIMARY model is blocked; a missing probe entry defaults to usable
+    # (B1 error class guard), and a secondary model being blocked must not
+    # remove the module.
+    # ------------------------------------------------------------------
+    try:
+        usable, blocked = run_config.effective_installed_modules(
+            {"crm", "sale"}, {"crm.lead": False, "sale.order": True})
+        assert usable == {"sale"}, usable
+        assert blocked == {"crm"}, blocked
+        results.append(("effective_installed_modules: blocked primary model drops the module", True, ""))
+    except Exception as e:
+        results.append(("effective_installed_modules: blocked primary model drops the module", False, str(e)))
+
+    try:
+        # crm.lead (primary) writable, mail.activity (secondary, not consulted
+        # here) irrelevant to this decision.
+        usable, blocked = run_config.effective_installed_modules(
+            {"crm"}, {"crm.lead": True, "mail.activity": False})
+        assert usable == {"crm"} and blocked == set(), (usable, blocked)
+        results.append(("effective_installed_modules: a blocked secondary model does not remove the module", True, ""))
+    except Exception as e:
+        results.append(("effective_installed_modules: a blocked secondary model does not remove the module", False, str(e)))
+
+    try:
+        # Empty model_access: nothing was probed at all -> every module stays
+        # usable (default-True-Regel), never silently dropped.
+        usable, blocked = run_config.effective_installed_modules(
+            {"crm", "sale", "hr"}, {})
+        assert usable == {"crm", "sale", "hr"} and blocked == set(), (usable, blocked)
+        results.append(("effective_installed_modules: empty model_access blocks nothing (Default-True)", True, ""))
+    except Exception as e:
+        results.append(("effective_installed_modules: empty model_access blocks nothing (Default-True)", False, str(e)))
+
+    try:
+        # A module with no PRIMARY_MODEL_PER_MODULE entry at all (e.g. a
+        # future module key this mapping hasn't caught up with) is unaffected.
+        usable, blocked = run_config.effective_installed_modules(
+            {"stammdaten"}, {"res.partner": False})
+        assert usable == {"stammdaten"} and blocked == set(), (usable, blocked)
+        results.append(("effective_installed_modules: module without a primary-model entry is always usable", True, ""))
+    except Exception as e:
+        results.append(("effective_installed_modules: module without a primary-model entry is always usable", False, str(e)))
+
+    try:
+        # End-to-end through build_context: a blocked module must disappear
+        # from ctx.installed_modules AND from active_progress_keys, exactly
+        # like an uninstalled one (B10's existing invariant, now also driven
+        # by write access, not just ir.module.module state).
+        ctx, selected = _build(_FULL, model_access={"crm.lead": False})
+        assert "crm" not in ctx.installed_modules, ctx.installed_modules
+        keys = run_config.active_progress_keys(ctx, selected)
+        assert "crm" not in keys, keys
+        results.append(("effective_installed_modules: blocked module vanishes from ctx AND progress keys", True, ""))
+    except Exception as e:
+        results.append(("effective_installed_modules: blocked module vanishes from ctx AND progress keys", False, str(e)))
+
+    try:
+        # ctx.model_access carries the raw probe dict through unchanged, for
+        # modules that gate a sub-behaviour directly (documents.py's
+        # ir.attachment, modules/hr.py's leave models) rather than through
+        # the coarser installed_modules/feature_flags gates.
+        ctx, _ = _build(_FULL, model_access={"ir.attachment": False})
+        assert ctx.model_access == {"ir.attachment": False}, ctx.model_access
+        results.append(("model_access wird unverändert in den RunContext durchgereicht", True, ""))
+    except Exception as e:
+        results.append(("model_access wird unverändert in den RunContext durchgereicht", False, str(e)))
 
     # ------------------------------------------------------------------
     # Pre-flight counts are arithmetic and non-negative

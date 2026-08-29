@@ -7,7 +7,7 @@ Domain-specific helpers live in their respective modules:
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import data_factory
 from odoo_repository import resolve_country_ids
@@ -130,23 +130,32 @@ def get_enabled_features(client, installed_modules=None) -> Dict[str, bool]:
     installed = installed_modules or set()
     flags = {}
 
-    # mrp_routings: Work Centers + Work Orders accessible?
+    # mrp_routings: can the pipeline actually CREATE work centers/orders? A read
+    # probe here (the pre-S10 approach) answers a different question than the
+    # one that matters — on demo-test5 it reported True while the "Work Orders"
+    # setting checkbox was off, so the run started and was guaranteed to fail.
+    # mrp.routing.workcenter is the model the routing path itself writes
+    # (modules/mrp.py's create_bom_operation) and the more likely place for a
+    # routings-specific ACL than the parent mrp.workcenter.
     if 'mrp' in installed:
-        try:
-            client.search_read('mrp.workcenter', [], fields=['id'], limit=1)
-            flags['mrp_routings'] = True
-        except Exception:
-            flags['mrp_routings'] = False
+        # bool(): has_create_access already returns a real bool, but this flags
+        # dict is serialised to JSON (ConnectResult.as_public_dict) and read
+        # back with `== True`/truthiness elsewhere — wrapping here means a
+        # mocked/stubbed client in a test can never leave a non-bool truthy
+        # object sitting in a "feature flag".
+        flags['mrp_routings'] = bool(client.has_create_access('mrp.workcenter')
+                                     and client.has_create_access('mrp.routing.workcenter'))
 
-    # quality: quality module accessible?
+    # quality: can the pipeline create quality points? Same read-vs-write gap as
+    # above. The existing READ probe on quality.alert.team/quality.point.test_type
+    # inside modules/mrp.py stays — that module still needs to know whether those
+    # reference records exist at all, which this create-access check does not
+    # answer — this flag only replaces what used to gate the create step.
     if 'mrp' in installed or 'quality' in installed:
-        try:
-            client.search_read('quality.alert.team', [], fields=['id'], limit=1)
-            flags['quality'] = True
-        except Exception:
-            flags['quality'] = False
+        flags['quality'] = bool(client.has_create_access('quality.point'))
 
-    # crm_leads: "Use Leads" setting enabled in CRM?
+    # crm_leads: "Use Leads" setting enabled in CRM? Not an access question —
+    # it is an ir.config_parameter value, so the read probe stays as-is.
     if 'crm' in installed:
         try:
             params = client.search_read(
@@ -160,6 +169,83 @@ def get_enabled_features(client, installed_modules=None) -> Dict[str, bool]:
             flags['crm_leads'] = False
 
     return flags
+
+
+# Modules whose write-relevant models have no ir.module.module entry of their
+# own but gate a sub-behaviour of an installed module — probed and labelled,
+# but never a progress row, never a ModuleSelections field, never entered into
+# orchestrator.py's module_order. See run_config.GATE_ONLY_MODULES.
+#
+# hr_holidays/hr_work_entry: modules/hr.py's create_leave_data writes
+# hr.leave/hr.leave.allocation/hr.work.entry.type as soon as 'hr' is installed,
+# but those models ship with hr_holidays/hr_work_entry respectively — employees
+# installed does not imply absences installed. This was previously probed not
+# at all, which is why it failed loudly instead of skipping gracefully.
+GATE_ONLY_PROBE_MODULES = ("hr_holidays", "hr_work_entry")
+
+# Module key -> the models that module's code actually create()/create_batch()s.
+# Curated against the real call sites in modules/*.py, the same way
+# FIELD_COMPAT_WHITELIST below is curated rather than derived — deriving this
+# automatically would mean parsing module source.
+#
+# Deliberately NOT probed, because their access follows their parent model and
+# a separate ACL on them is not a documented Odoo pattern: mrp.bom.line,
+# project.task.type, account.bank.statement.line, hr.department, hr.skill,
+# hr.skill.level.
+MODEL_ACCESS_PROBES: Dict[str, List[str]] = {
+    "stammdaten": ["res.partner", "product.product"],  # always probed
+    "crm": ["crm.lead", "mail.activity"],
+    "sale": ["sale.order", "sale.advance.payment.inv"],
+    "account": ["account.move", "account.journal", "account.bank.statement"],
+    "hr": ["hr.employee"],
+    "hr_holidays": ["hr.leave", "hr.leave.allocation"],
+    "hr_work_entry": ["hr.work.entry.type"],
+    "project": ["project.project", "project.task"],
+    "hr_timesheet": ["account.analytic.line"],
+    "mrp": ["mrp.bom", "mrp.production", "mrp.workcenter",
+           "mrp.routing.workcenter", "quality.point"],
+    "hr_recruitment": ["hr.job", "hr.applicant", "hr.skill.type"],
+    "purchase": ["purchase.order"],
+    "stock": ["stock.quant"],
+    "documents": ["ir.attachment"],  # always probed (pseudo-module, see run_config)
+}
+
+# The one model per module whose create-access decides whether the whole
+# module can run at all — used by run_config.effective_installed_modules to
+# decide which modules get dropped from ctx.installed_modules. A module with
+# several probed models can have a secondary one blocked without being
+# useless (e.g. crm.lead writable but mail.activity not); only the primary
+# model's access controls the all-or-nothing module gate.
+PRIMARY_MODEL_PER_MODULE: Dict[str, str] = {
+    "crm": "crm.lead",
+    "sale": "sale.order",
+    "account": "account.move",
+    "hr": "hr.employee",
+    "project": "project.project",
+    "hr_timesheet": "account.analytic.line",
+    "mrp": "mrp.bom",
+    "hr_recruitment": "hr.applicant",
+    "purchase": "purchase.order",
+    "stock": "stock.quant",
+}
+
+
+def probe_model_access(client, installed_modules) -> Dict[str, bool]:
+    """has_create_access() for every model the pipeline might write, once.
+
+    Only models whose parent module key is installed are probed (or that carry
+    no such gate at all — "stammdaten" and "documents"), mirroring
+    get_enabled_features' existing installed-module gating. Duplicate models
+    across module keys are probed once. A model whose probe raises is treated
+    as an indeterminate "True" by has_create_access itself — this function
+    does not add a second layer of exception handling on top.
+    """
+    installed = set(installed_modules or set())
+    wanted: Set[str] = set()
+    for module_key, models in MODEL_ACCESS_PROBES.items():
+        if module_key in ("stammdaten", "documents") or module_key in installed:
+            wanted.update(models)
+    return {model: client.has_create_access(model) for model in sorted(wanted)}
 
 
 def get_main_company_id(client) -> Optional[int]:
@@ -252,46 +338,75 @@ def get_server_version(client) -> Optional[str]:
     return f"{parts[0]}.{parts[1]}"
 
 
-# Fixed whitelist of {model: [canonical field names the codebase writes/reads]},
-# curated (not auto-derived) from the actual client.create/create_batch/write call
-# sites across modules/*.py — deriving it automatically would mean parsing module
-# source, more machinery than this warning is worth. Prioritizes models/fields
-# already documented as version-sensitive in CLAUDE.md's "Verified field gotchas".
-FIELD_COMPAT_WHITELIST: Dict[str, List[str]] = {
-    'res.partner': ['name', 'is_company', 'street', 'zip', 'city', 'email', 'phone', 'website'],
-    'product.product': ['name', 'list_price', 'type', 'sale_ok', 'purchase_ok'],
-    'crm.lead': ['type', 'partner_id', 'name'],
-    'mail.activity': ['res_id', 'res_model_id', 'activity_type_id', 'date_deadline'],
-    'sale.order': ['partner_id'],
-    'account.move': ['move_type', 'partner_id', 'invoice_line_ids', 'invoice_date'],
-    'account.bank.statement': ['journal_id', 'balance_start', 'balance_end_real'],
-    'hr.employee': ['name'],
-    'hr.leave': ['employee_id', 'work_entry_type_id', 'date_from', 'date_to',
-                 'request_date_from', 'request_date_to'],
-    'hr.leave.allocation': ['employee_id', 'work_entry_type_id'],
-    'hr.work.entry.type': ['name', 'code', 'count_as', 'shortcut_behavior',
-                            'requires_allocation', 'employee_requests'],
-    'hr.applicant': ['partner_name', 'email_from', 'partner_phone', 'job_id',
-                      'schedule_pay', 'applicant_skill_ids'],
-    'hr.job.skill': ['skill_id', 'skill_type_id', 'skill_level_id'],
-    'project.task': ['name', 'project_id'],
-    'mrp.production': ['product_id', 'date_start'],
-    'mrp.bom': ['product_tmpl_id', 'type', 'product_qty'],
-    'ir.attachment': ['res_model', 'res_id', 'raw', 'mimetype', 'type'],
+# Fixed whitelist of {model: (parent module key or None, [canonical field names
+# the codebase writes/reads])}, curated (not auto-derived) from the actual
+# client.create/create_batch/write call sites across modules/*.py — deriving it
+# automatically would mean parsing module source, more machinery than this
+# warning is worth. Prioritizes models/fields already documented as
+# version-sensitive in CLAUDE.md's "Verified field gotchas".
+#
+# The module key exists so check_field_compatibility can skip a model whose app
+# isn't installed. Before this, a fields_get on a missing model's model_method
+# 404s through the full 3-path x 2-slash-variant fallback chain — up to 6 POSTs
+# burned on nothing, per model, on every connect. That waste, not the new S10
+# access probes, is why a sparsely-installed demo instance's connect step made
+# far more than the "~15 requests" it looked like. None means "always check" —
+# a core model with no ir.module.module entry of its own (res.partner,
+# product.product, mail.activity, ir.attachment).
+FIELD_COMPAT_WHITELIST: Dict[str, Tuple[Optional[str], List[str]]] = {
+    'res.partner': (None, ['name', 'is_company', 'street', 'zip', 'city', 'email', 'phone', 'website']),
+    'product.product': (None, ['name', 'list_price', 'type', 'sale_ok', 'purchase_ok']),
+    'crm.lead': ('crm', ['type', 'partner_id', 'name']),
+    'mail.activity': (None, ['res_id', 'res_model_id', 'activity_type_id', 'date_deadline']),
+    'sale.order': ('sale', ['partner_id']),
+    'account.move': ('account', ['move_type', 'partner_id', 'invoice_line_ids', 'invoice_date']),
+    'account.bank.statement': ('account', ['journal_id', 'balance_start', 'balance_end_real']),
+    'hr.employee': ('hr', ['name']),
+    # hr.leave/hr.leave.allocation/hr.work.entry.type ship with hr_holidays/
+    # hr_work_entry, NOT with hr — the exact gap R10/A5 closes for the pipeline
+    # itself; this whitelist has the same gap and gets the same fix.
+    'hr.leave': ('hr_holidays', ['employee_id', 'work_entry_type_id', 'date_from', 'date_to',
+                 'request_date_from', 'request_date_to']),
+    'hr.leave.allocation': ('hr_holidays', ['employee_id', 'work_entry_type_id']),
+    'hr.work.entry.type': ('hr_work_entry', ['name', 'code', 'count_as', 'shortcut_behavior',
+                            'requires_allocation', 'employee_requests']),
+    'hr.applicant': ('hr_recruitment', ['partner_name', 'email_from', 'partner_phone', 'job_id',
+                      'schedule_pay', 'applicant_skill_ids']),
+    'hr.job.skill': ('hr_recruitment', ['skill_id', 'skill_type_id', 'skill_level_id']),
+    'project.task': ('project', ['name', 'project_id']),
+    'mrp.production': ('mrp', ['product_id', 'date_start']),
+    'mrp.bom': ('mrp', ['product_tmpl_id', 'type', 'product_qty']),
+    'ir.attachment': (None, ['res_model', 'res_id', 'raw', 'mimetype', 'type']),
 }
 
 
-def check_field_compatibility(client, whitelist: Optional[Dict[str, List[str]]] = None) -> List[str]:
+def check_field_compatibility(client, installed_modules=None,
+                              whitelist: Optional[Dict[str, List[str]]] = None) -> List[str]:
     """Connect-time check: for each model in the whitelist, calls fields_get and
     warns about any field the codebase writes/reads that this instance doesn't
     have. A model that errors out entirely (e.g. its parent app isn't installed)
     is skipped silently — that's an install-state concern, not a version-
     compatibility one. Non-fatal: logs each warning and returns the list of
     warning strings; callers should not treat a non-empty result as fatal.
+
+    `installed_modules` gates the DEFAULT whitelist only (skips models whose
+    parent app isn't installed, see FIELD_COMPAT_WHITELIST's comment). An
+    explicit `whitelist` (flat {model: [fields]}, as the unit tests pass) is
+    checked unconditionally — the caller supplied exactly the models it wants
+    checked and gating those would silently make such a test depend on
+    installed_modules it never passed.
     """
-    whitelist = FIELD_COMPAT_WHITELIST if whitelist is None else whitelist
     warnings: List[str] = []
-    for model, fields in whitelist.items():
+    if whitelist is not None:
+        entries = list(whitelist.items())
+    else:
+        installed = set(installed_modules or set())
+        entries = [
+            (model, fields) for model, (module_key, fields) in FIELD_COMPAT_WHITELIST.items()
+            if module_key is None or module_key in installed
+        ]
+
+    for model, fields in entries:
         try:
             live_fields = client.model_method(model, 'fields_get', {'attributes': []})
         except Exception:

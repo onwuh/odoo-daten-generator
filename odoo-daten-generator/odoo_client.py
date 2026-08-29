@@ -1,10 +1,11 @@
+import contextlib
 import json
 import logging
 import random
 import time
 import unicodedata
 import requests
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,47 @@ def _redact_error_body(response: "requests.Response") -> str:
     return f"<Antwortkörper unterdrückt: {len(raw)} Zeichen, {content_type}>"
 
 
+# A logical operation walks a payload-format fallback chain, so most of its HTTP
+# attempts are *planned* probing: the JSON/2 router answers an unknown path shape
+# with a 404 whose body says "Did you mean POST /json/2/<model>/<method>?". Those
+# are never the reason an operation failed and must not be reported as one.
+_ROUTING_HINT = "Did you mean POST /json/2/"
+
+# has_create_access answers a question with three possible outcomes, not two:
+# yes, no, and "could not find out". Only these two statuses mean a definitive
+# no. Everything else — a rate limit, a gateway error, a timeout — is unknown,
+# and unknown must never be reported as "not allowed": callers disable modules on
+# a False, so a 429 during probing would silently switch off half a run.
+_ACCESS_DENIED_STATUSES = (403, 404)
+
+
+def _is_routing_hint(attempt: Dict[str, Any]) -> bool:
+    return (attempt.get("status_code") == 404
+            and _ROUTING_HINT in (attempt.get("body") or ""))
+
+
+def _select_attempt(attempts: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Pick the attempt that actually explains the failure.
+
+    The exception that finally propagates out of the fallback chain is the last,
+    least informative one ("422 Client Error"). The first attempt carrying a
+    structured Odoo message is the one that says "You can not delete a confirmed
+    sales order" — that is what the run summary and the cleanup report need.
+    """
+    if not attempts:
+        return None
+    for attempt in attempts:
+        if _is_routing_hint(attempt):
+            continue
+        body = attempt.get("body") or ""
+        if body and not body.startswith("<"):
+            return attempt
+    for attempt in reversed(attempts):
+        if not _is_routing_hint(attempt):
+            return attempt
+    return attempts[-1]
+
+
 class OdooJson2Client:
     def __init__(self, base_url: str, database: str, api_key: str, user_agent: str = "odoo-daten-generator") -> None:
         self.base_url = base_url.rstrip('/') + "/json/2"
@@ -157,7 +199,15 @@ class OdooJson2Client:
             "Content-Type": "application/json",
             "Accept": "application/json",
         })
-        self.errors: List[Dict[str, Any]] = []  # Track all API errors
+        # One entry per FAILED LOGICAL OPERATION (create, write, call_method …),
+        # not per HTTP attempt: the fallback chain below multiplies every logical
+        # call by up to eight requests, and reporting each of those separately is
+        # what made 8 of 14 reported errors in a live run not be errors at all.
+        self.errors: List[Dict[str, Any]] = []
+        # Stack of in-flight logical operations; each frame collects the HTTP
+        # attempts made inside it. A stack, not a single list, because
+        # create_batch's fallback calls create() inside its own frame.
+        self._attempt_frames: List[List[Dict[str, Any]]] = []
 
     def _send(self, url: str, payload: Dict[str, Any], timeout: int = 60) -> "requests.Response":
         """One POST, retried on a rate-limit/unavailable answer.
@@ -178,39 +228,115 @@ class OdooJson2Client:
             time.sleep(delay)
         return response
 
-    def _post(self, path: str, payload: Dict[str, Any]) -> Any:
-        url = f"{self.base_url}{path}"
-        logger.info(f"[HTTP] POST {url}")
-        logger.info(f"[HTTP] Payload keys: {list(payload.keys())}")
-        response = self._send(url, payload)
-        _reject_redirect(response)
+    # -- failure bookkeeping ---------------------------------------------
+
+    @contextlib.contextmanager
+    def _record_failure(self, model: str, method: str) -> Iterator[List[Dict[str, Any]]]:
+        """Scope one logical operation; on failure record exactly one error.
+
+        The attempts are owned by this frame rather than carried on the raised
+        exception: create/write/call_method each call _post_with_variants several
+        times and only the last exception survives, and call_method swallows its
+        first — most informative — attempt entirely. Collecting here is what keeps
+        run_journal._first_new_error able to name Odoo's real reason.
+        """
+        frame: List[Dict[str, Any]] = []
+        self._attempt_frames.append(frame)
+        errors_before = len(self.errors)
+        try:
+            yield frame
+        except Exception as exc:
+            # An inner frame (create_batch -> create) may already have reported
+            # this failure; recording again would break "one entry per operation".
+            if len(self.errors) == errors_before:
+                self._append_error(model, method, frame, exc)
+            raise
+        finally:
+            self._attempt_frames.pop()
+
+    def _append_error(self, model: str, method: str,
+                      attempts: List[Dict[str, Any]], exc: Exception) -> None:
+        chosen = _select_attempt(attempts) or {}
+        body = chosen.get("body")
+        if not body:
+            # No HTTP attempt to quote: a timeout, a refused redirect, a
+            # connection error. These produced no error entry at all before.
+            body = _printable(str(exc))[:_ERROR_MESSAGE_LIMIT]
+        self.errors.append({
+            "model": model,
+            # The Odoo method name, not the HTTP verb it used to hold — the verb
+            # is always POST and never told anyone anything.
+            "method": method,
+            "url": chosen.get("url"),
+            "status_code": chosen.get("status_code"),
+            "error_message": str(exc)[:_ERROR_MESSAGE_LIMIT],
+            "error_body": body,
+            "attempts": len(attempts),
+        })
+
+    def _note_attempt(self, url: str, status_code: Optional[int], message: str,
+                      body: str, record_error: bool,
+                      noted: List[Dict[str, Any]]) -> None:
+        if not record_error or not self._attempt_frames:
+            return
+        attempt = {"url": url, "status_code": status_code,
+                   "message": message, "body": body}
+        self._attempt_frames[-1].append(attempt)
+        noted.append(attempt)
+
+    def _drop_attempts(self, noted: List[Dict[str, Any]]) -> None:
+        """Forget attempts made by a _post that ultimately succeeded.
+
+        Without this the 401 retry path leaves its failed first attempt in the
+        frame, and a *later* failure in the same operation would be reported with
+        that stale 401 as its reason.
+        """
+        if not noted or not self._attempt_frames:
+            return
+        stale = {id(a) for a in noted}
+        frame = self._attempt_frames[-1]
+        frame[:] = [a for a in frame if id(a) not in stale]
+        noted.clear()
+
+    def _raise_and_note(self, response: "requests.Response", url: str,
+                        record_error: bool, noted: List[Dict[str, Any]]) -> None:
         try:
             response.raise_for_status()
-        except requests.HTTPError as e:
+        except requests.HTTPError as exc:
             error_body = ""
             try:
                 # Redacted once, used for BOTH the log line and the durable copy
-                # in self.errors below — get_errors() feeds the run-summary API,
-                # so redacting only the log would leave the read primitive open
+                # in the frame — get_errors() feeds the run-summary API, so
+                # redacting only the log would leave the read primitive open
                 # through a different pipe.
                 error_body = _redact_error_body(response)
                 if error_body:
-                    logger.warning(f"[HTTP] Error Body: {error_body}")
+                    if record_error:
+                        logger.warning(f"[HTTP] Error Body: {error_body}")
+                    else:
+                        # Access probing expects 404s; a warning per probe would
+                        # be pure noise in the run log.
+                        logger.debug(f"[HTTP] Error Body: {error_body}")
             except Exception:
                 pass
-            
-            # Record the error
-            error_info = {
-                "url": url,
-                "method": "POST",
-                "status_code": response.status_code if response else None,
-                "error_message": str(e),
-                "error_body": error_body,
-                "payload_keys": list(payload.keys())
-            }
-            self.errors.append(error_info)
-            
-            if response is not None and response.status_code == 401:
+            self._note_attempt(url, response.status_code, str(exc),
+                               error_body, record_error, noted)
+            raise
+
+    # -- transport --------------------------------------------------------
+
+    def _post(self, path: str, payload: Dict[str, Any],
+              record_error: bool = True) -> Any:
+        url = f"{self.base_url}{path}"
+        logger.info(f"[HTTP] POST {url}")
+        logger.info(f"[HTTP] Payload keys: {list(payload.keys())}")
+        noted: List[Dict[str, Any]] = []
+        response = self._send(url, payload)
+        _reject_redirect(response)
+        try:
+            self._raise_and_note(response, url, record_error, noted)
+        except requests.HTTPError:
+            if response.status_code == 401:
                 # Retry without X-Odoo-Database (SaaS often infers DB from subdomain)
                 orig_db = self.session.headers.pop("X-Odoo-Database", None)
                 try:
@@ -220,15 +346,13 @@ class OdooJson2Client:
                         self.session.headers["X-Odoo-Database"] = orig_db
                         resp3 = self._send(f"{url}?db={self.database}", payload)
                         _reject_redirect(resp3)
-                        resp3.raise_for_status()
-                        if self.errors and self.errors[-1]["url"] == url:
-                            self.errors.pop()
+                        self._raise_and_note(resp3, url, record_error, noted)
+                        self._drop_attempts(noted)
                         logger.info(f"[HTTP] Success after db query param: {resp3.status_code}")
                         return resp3.json()
                     _reject_redirect(resp2)
-                    resp2.raise_for_status()
-                    if self.errors and self.errors[-1]["url"] == url:
-                        self.errors.pop()
+                    self._raise_and_note(resp2, url, record_error, noted)
+                    self._drop_attempts(noted)
                     logger.info(f"[HTTP] Success after removing X-Odoo-Database: {resp2.status_code}")
                     return resp2.json()
                 finally:
@@ -260,11 +384,12 @@ class OdooJson2Client:
 
     def model_method(self, model: str, method: str, payload: Dict[str, Any]) -> Any:
         # Prefer direct model path first (most endpoints exist there), then call_kw, then call
-        return self._post_with_variants([
-            f"/{model}/{method}",
-            f"/call_kw/{model}/{method}",
-            f"/call/{model}/{method}",
-        ], payload)
+        with self._record_failure(model, method):
+            return self._post_with_variants([
+                f"/{model}/{method}",
+                f"/call_kw/{model}/{method}",
+                f"/call/{model}/{method}",
+            ], payload)
 
     def search(self, model: str, domain: List[Any], context: Optional[Dict[str, Any]] = None) -> List[int]:
         payload: Dict[str, Any] = {"domain": domain}
@@ -294,45 +419,46 @@ class OdooJson2Client:
         return self.model_method(model, "search_read", payload)
 
     def create(self, model: str, values: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> int:
-        # Try documented JSON-2 example format first: vals_list
-        vals_list_payload: Dict[str, Any] = {"vals_list": [values]}
-        if context is not None:
-            vals_list_payload["context"] = context
-        try:
-            result = self._post_with_variants([
-                f"/{model}/create",
-            ], vals_list_payload)
-            if isinstance(result, list):
-                return result[0]
-            return int(result)
-        except requests.HTTPError as e:
-            # Fallback to call variants using args/kwargs
-            if e.response is not None and e.response.status_code in (404, 422):
-                call_payload: Dict[str, Any] = {"args": [values], "kwargs": {}}
-                if context is not None:
-                    call_payload["context"] = context
-                try:
-                    result2 = self._post_with_variants([
-                        f"/call/{model}/create",
-                        f"/call_kw/{model}/create",
-                    ], call_payload)
-                    if isinstance(result2, list):
-                        return result2[0]
-                    return int(result2)
-                except requests.HTTPError as e2:
-                    if e2.response is not None and e2.response.status_code in (404, 422):
-                        # Last fallback to direct {values}
-                        payload: Dict[str, Any] = {"values": values}
-                        if context is not None:
-                            payload["context"] = context
-                        result3 = self._post_with_variants([
-                            f"/{model}/create",
-                        ], payload)
-                        if isinstance(result3, list):
-                            return result3[0]
-                        return int(result3)
-                    raise
-            raise
+        with self._record_failure(model, "create"):
+            # Try documented JSON-2 example format first: vals_list
+            vals_list_payload: Dict[str, Any] = {"vals_list": [values]}
+            if context is not None:
+                vals_list_payload["context"] = context
+            try:
+                result = self._post_with_variants([
+                    f"/{model}/create",
+                ], vals_list_payload)
+                if isinstance(result, list):
+                    return result[0]
+                return int(result)
+            except requests.HTTPError as e:
+                # Fallback to call variants using args/kwargs
+                if e.response is not None and e.response.status_code in (404, 422):
+                    call_payload: Dict[str, Any] = {"args": [values], "kwargs": {}}
+                    if context is not None:
+                        call_payload["context"] = context
+                    try:
+                        result2 = self._post_with_variants([
+                            f"/call/{model}/create",
+                            f"/call_kw/{model}/create",
+                        ], call_payload)
+                        if isinstance(result2, list):
+                            return result2[0]
+                        return int(result2)
+                    except requests.HTTPError as e2:
+                        if e2.response is not None and e2.response.status_code in (404, 422):
+                            # Last fallback to direct {values}
+                            payload: Dict[str, Any] = {"values": values}
+                            if context is not None:
+                                payload["context"] = context
+                            result3 = self._post_with_variants([
+                                f"/{model}/create",
+                            ], payload)
+                            if isinstance(result3, list):
+                                return result3[0]
+                            return int(result3)
+                        raise
+                raise
 
     def create_batch(self, model: str, values_list: List[Dict[str, Any]], context: Optional[Dict[str, Any]] = None) -> List[int]:
         """Create multiple records in one API call using vals_list.
@@ -344,83 +470,138 @@ class OdooJson2Client:
         payload: Dict[str, Any] = {"vals_list": values_list}
         if context is not None:
             payload["context"] = context
-        try:
-            result = self._post_with_variants([f"/{model}/create"], payload)
-            if isinstance(result, list):
-                return [int(r) for r in result]
-            return [int(result)]
-        except requests.HTTPError:
-            # Fallback: create each record individually
-            logger.warning(f"[HTTP] Batch create failed for {model}, falling back to sequential creates")
-            ids = []
-            for values in values_list:
-                ids.append(self.create(model, values, context=context))
-            return ids
+        with self._record_failure(model, "create_batch"):
+            try:
+                result = self._post_with_variants([f"/{model}/create"], payload)
+                if isinstance(result, list):
+                    return [int(r) for r in result]
+                return [int(result)]
+            except requests.HTTPError as e:
+                # Only fall back on "this shape isn't accepted here" (404/422),
+                # same restriction as create()/write() — a 429 that survived
+                # _send's retries must not turn one batched call into N
+                # individual ones, exactly the anti-pattern batching exists to
+                # avoid (CLAUDE.md: never "fix" a 429 by retrying in a loop that
+                # should have been one batched call).
+                if not (e.response is not None and e.response.status_code in (404, 422)):
+                    raise
+                # Fallback: create each record individually. Each self.create()
+                # call opens its own _record_failure frame, so if a record fails
+                # here it is already reported once — this outer frame's own
+                # errors-unchanged check (see _record_failure) then skips
+                # recording it a second time.
+                logger.warning(f"[HTTP] Batch create failed for {model}, falling back to sequential creates")
+                ids = []
+                for values in values_list:
+                    ids.append(self.create(model, values, context=context))
+                return ids
 
     def write(self, model: str, ids: List[int], values: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> bool:
         # Direct JSON-2 expects 'vals' key
         payload: Dict[str, Any] = {"ids": ids, "vals": values}
         if context is not None:
             payload["context"] = context
-        try:
-            result = self._post_with_variants([
-                f"/{model}/write",
-            ], payload)
-            return bool(result)
-        except requests.HTTPError as e:
-            if e.response is not None and e.response.status_code in (404, 422):
-                # Fallback to call variants
-                call_payload: Dict[str, Any] = {"args": [ids, values], "kwargs": {}}
-                if context is not None:
-                    call_payload["context"] = context
-                result2 = self._post_with_variants([
-                    f"/call_kw/{model}/write",
-                    f"/call/{model}/write",
-                ], call_payload)
-                return bool(result2)
-            raise
+        with self._record_failure(model, "write"):
+            try:
+                result = self._post_with_variants([
+                    f"/{model}/write",
+                ], payload)
+                return bool(result)
+            except requests.HTTPError as e:
+                if e.response is not None and e.response.status_code in (404, 422):
+                    # Fallback to call variants
+                    call_payload: Dict[str, Any] = {"args": [ids, values], "kwargs": {}}
+                    if context is not None:
+                        call_payload["context"] = context
+                    result2 = self._post_with_variants([
+                        f"/call_kw/{model}/write",
+                        f"/call/{model}/write",
+                    ], call_payload)
+                    return bool(result2)
+                raise
 
     def call_method(self, model: str, method: str, ids: Optional[List[int]] = None, args: Optional[List[Any]] = None, kwargs: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None) -> Any:
         # Helper to call model methods possibly on recordsets
         args = args or []
         kwargs = kwargs or {}
-        # 1) Try direct endpoint with 'ids' payload (JSON-2 recordset pattern)
-        if ids is not None:
-            direct_payload: Dict[str, Any] = {"ids": ids}
-            direct_payload.update(kwargs)
+        with self._record_failure(model, method):
+            # 1) Try direct endpoint with 'ids' payload (JSON-2 recordset pattern)
+            if ids is not None:
+                direct_payload: Dict[str, Any] = {"ids": ids}
+                direct_payload.update(kwargs)
+                if context is not None:
+                    direct_payload["context"] = context
+                try:
+                    return self._post_with_variants([
+                        f"/{model}/{method}",
+                    ], direct_payload)
+                except requests.HTTPError as e:
+                    if not (e.response is not None and e.response.status_code in (404, 422)):
+                        raise
+            # 2) Try call_kw with args/kwargs
+            call_payload: Dict[str, Any] = {"args": ([] if ids is None else [ids]) + args, "kwargs": kwargs}
             if context is not None:
-                direct_payload["context"] = context
+                call_payload["context"] = context
             try:
                 return self._post_with_variants([
+                    f"/call_kw/{model}/{method}",
+                    f"/call/{model}/{method}",
                     f"/{model}/{method}",
-                ], direct_payload)
+                ], call_payload)
             except requests.HTTPError as e:
-                if not (e.response is not None and e.response.status_code in (404, 422)):
+                # 3) Last fallback: direct without args/kwargs. Only safe when there
+                # was never anything meaningful to send in the first place (B11) —
+                # otherwise this silently drops ids/args/kwargs and fires an empty
+                # call (e.g. message_post() with no message, action_confirm() on
+                # nothing), masking the real error instead of surfacing it.
+                if ids or args or kwargs:
                     raise
-        # 2) Try call_kw with args/kwargs
-        call_payload: Dict[str, Any] = {"args": ([] if ids is None else [ids]) + args, "kwargs": kwargs}
-        if context is not None:
-            call_payload["context"] = context
+                fallback_payload: Dict[str, Any] = {}
+                if context is not None:
+                    fallback_payload["context"] = context
+                return self._post_with_variants([
+                    f"/{model}/{method}",
+                ], fallback_payload)
+
+    def has_create_access(self, model: str) -> bool:
+        """Whether the API-key user may create records on `model`.
+
+        A single POST /{model}/has_access — deliberately NOT routed through
+        model_method/call_method: their fallback chain builds an {"args": [...]}
+        shape on a 404, which this endpoint rejects, costing ~6 extra HTTP
+        attempts per model that doesn't exist on this instance for nothing.
+
+        Returns False only for a DEFINITIVE no: a real 403, or a 404 (the model
+        does not exist here). Every other failure — 429, 5xx, timeout, a refused
+        redirect — is unknown, not "not allowed", and returns True with a
+        warning instead. Callers (odoo_actions.probe_model_access) disable a
+        whole module on a False; treating "could not find out" as "not allowed"
+        would let a rate limit hit during connect silently turn off modules that
+        are actually fine — the exact silent-disable class this probe exists to
+        close, reintroduced by the probe itself.
+        """
         try:
-            return self._post_with_variants([
-                f"/call_kw/{model}/{method}",
-                f"/call/{model}/{method}",
-                f"/{model}/{method}",
-            ], call_payload)
-        except requests.HTTPError as e:
-            # 3) Last fallback: direct without args/kwargs. Only safe when there
-            # was never anything meaningful to send in the first place (B11) —
-            # otherwise this silently drops ids/args/kwargs and fires an empty
-            # call (e.g. message_post() with no message, action_confirm() on
-            # nothing), masking the real error instead of surfacing it.
-            if ids or args or kwargs:
-                raise
-            fallback_payload: Dict[str, Any] = {}
-            if context is not None:
-                fallback_payload["context"] = context
-            return self._post_with_variants([
-                f"/{model}/{method}",
-            ], fallback_payload)
+            result = self._post(f"/{model}/has_access",
+                                {"ids": [], "operation": "create"},
+                                record_error=False)
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if status in _ACCESS_DENIED_STATUSES:
+                return False
+            logger.warning(f"[access] has_access({model}, create) unklar "
+                           f"(HTTP {status}): {exc}")
+            return True
+        except Exception as exc:
+            logger.warning(f"[access] has_access({model}, create) unklar: {exc}")
+            return True
+        # Some endpoints wrap the boolean in {"result": ...} rather than
+        # returning it bare (_post's own comment notes this ambiguity) — a bare
+        # bool(result) would read a non-empty wrapper dict as truthy regardless
+        # of its actual value, turning this probe into a no-op that looks like
+        # it works.
+        if isinstance(result, dict):
+            return bool(result.get("result"))
+        return result is True
 
     def get_errors(self) -> List[Dict[str, Any]]:
         """Return a list of all API errors that occurred during execution."""

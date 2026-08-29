@@ -195,6 +195,16 @@ def create_documents(client, gemini, ctx: RunContext) -> None:
     if not isinstance(doc_config, dict) or not doc_config:
         return
 
+    # documents is a pseudo-module (orchestrator.py hardcodes is_installed=True
+    # for it, see the R10 comment there) with no ir.module.module entry to gate
+    # on — ir.attachment write access is the only real precondition. Default
+    # True: a model missing from ctx.model_access was never probed and must
+    # not be treated as blocked (B1 error class).
+    if not ctx.model_access.get('ir.attachment', True):
+        logger.warning("⚠️  Dokumente übersprungen — keine Schreibrechte auf ir.attachment.")
+        ctx.skipped_modules.add("documents")
+        return
+
     try:
         _create_bill_pdfs(client, ctx)
     except Exception as e:
