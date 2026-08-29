@@ -20,6 +20,12 @@
     runId: null,
     source: null,
     moduleRows: {},
+    // S10/R10 (F3): a LATCH, not a live mirror of state.connect.ok — set once
+    // on the first successful /api/connect and never cleared except by
+    // logout. A live check would lock the user out of their own running run
+    // (and "Diesen Lauf löschen") the moment they navigate back to
+    // Verbindung and a re-connect attempt happens to fail.
+    everConnected: false,
   };
 
   // ---------------------------------------------------------------- helpers
@@ -90,7 +96,14 @@
   var views = document.querySelectorAll(".view");
   var navItems = document.querySelectorAll(".nav-item[data-view]");
 
+  // S10/R10 (F3): only these two are gated. Verbindung is always reachable
+  // (it's where you fix a broken connection from), and the rail-foot "?"
+  // tutorial button (WP6) is not a nav-item at all, so a blanket rail lock
+  // was never the right shape for this.
+  var GATED_VIEWS = { config: true, run: true };
+
   function showView(name) {
+    if (GATED_VIEWS[name] && !state.everConnected) return;
     Array.prototype.forEach.call(views, function (v) {
       v.classList.toggle("active", v.id === "view-" + name);
     });
@@ -105,6 +118,16 @@
     var b = e.target.closest("[data-goto]");
     if (b) showView(b.dataset.goto);
   });
+
+  // Visual lock to match: .nav-item[disabled] already has a greyed-out style
+  // in app.css. Called once at init (starts locked) and again the moment
+  // state.everConnected latches true.
+  function updateNavLock() {
+    Array.prototype.forEach.call(navItems, function (n) {
+      if (GATED_VIEWS[n.dataset.view]) n.disabled = !state.everConnected;
+    });
+  }
+  updateNavLock();
 
   // -------------------------------------------------------------- steppers
   function stepper(id, label, hint, val, min, max) {
@@ -141,7 +164,7 @@
     var v = parseInt(input.value, 10) || 0;
     v += btn.classList.contains("inc") ? 1 : -1;
     input.value = String(Math.max(min, Math.min(max, v)));
-    updateConfigSummary();
+    onConfigChanged();
   });
 
   function slider(id, label, val, min, max, suffix) {
@@ -161,6 +184,10 @@
     input.addEventListener("input", function () {
       out.textContent = input.value + (suffix === undefined ? "%" : suffix);
       if (id === "crm-past" || id === "crm-today") updateFuture();
+      // Debounced (schedulePreflightRefresh), so firing on every drag tick
+      // costs nothing — only the value after the user stops dragging for
+      // 400ms actually reaches the network.
+      onConfigChanged();
     });
     row.appendChild(input);
     return row;
@@ -172,6 +199,7 @@
     box.type = "checkbox";
     box.id = id;
     box.checked = !!isChecked;
+    box.addEventListener("change", onConfigChanged);
     line.appendChild(box);
     line.appendChild(document.createTextNode(" " + label + " "));
     if (sub) line.appendChild(el("span", "sub", sub));
@@ -239,7 +267,7 @@
     box.id = "mod-" + def.key;
     box.checked = !disabled && def.defaultOn !== false;
     box.disabled = disabled;
-    box.addEventListener("change", updateConfigSummary);
+    box.addEventListener("change", onConfigChanged);
     sw.appendChild(box);
     sw.appendChild(el("span", "track"));
     head.appendChild(sw);
@@ -487,7 +515,7 @@
       gridEl.appendChild(buildCard(def, installed, blocked || []));
     });
     updateFuture();
-    updateConfigSummary();
+    onConfigChanged();
   }
 
   // ------------------------------------------------------------ config view
@@ -520,7 +548,7 @@
       c.classList.toggle("active", c === b);
     });
     setHidden("module-section", b.dataset.mode !== "both");
-    updateConfigSummary();
+    onConfigChanged();
   });
 
   // ------------------------------------------------- existing-data consent
@@ -562,7 +590,7 @@
     // Any change re-opens the question; a stale yes must not survive a toggle.
     state.consent = null;
     updateConsentUi();
-    updateConfigSummary();
+    onConfigChanged();
   });
 
   $("btn-consent-yes").addEventListener("click", function () {
@@ -578,7 +606,7 @@
     $("chk-skip-master").checked = false;
     setHidden("master-data-block", false);
     updateConsentUi();
-    updateConfigSummary();
+    onConfigChanged();
   });
 
   $("chk-skip-master").addEventListener("change", function () {
@@ -591,8 +619,10 @@
       $("chk-use-existing").checked = true;
     }
     updateConsentUi();
-    updateConfigSummary();
+    onConfigChanged();
   });
+
+  $("f-industry").addEventListener("input", onConfigChanged);
 
   function activeModuleKeys() {
     if (currentMode() !== "both") return [];
@@ -646,6 +676,9 @@
         setHidden("panel-login", true);
         setHidden("panel-connect", false);
         loadDefaults();
+        // S10/R10 (F1): after login, not on page load — the fields the
+        // tutorial's steps 3+ reference aren't visible before this point.
+        if (!tutorialSeen()) showTutorial();
       })
       .catch(function (err) {
         setText("login-hint", err.message);
@@ -665,7 +698,6 @@
       $("f-url").value = d.url.replace(/\/+$/, "");
       validateUrlField();
     }
-    if (d.db && !$("f-db").value) $("f-db").value = d.db;
     if (d.llm_model) $("f-llmmodel").value = d.llm_model;
     if (d.has_odoo_key) $("f-key").placeholder = "leer lassen → Schlüssel vom Server";
     if (d.has_llm_key) $("f-llmkey").placeholder = "leer lassen → Schlüssel vom Server";
@@ -698,8 +730,68 @@
     $("btn-connect").disabled = !ok;
     return ok;
   }
-  urlField.addEventListener("input", validateUrlField);
+  urlField.addEventListener("input", function () {
+    validateUrlField();
+    updateTutorialLink();
+  });
   validateUrlField();
+
+  // ------------------------------------------------------------- tutorial
+  // S10/R10 (F1): first-time overlay. Not gated by the nav-lock — it must
+  // stay reachable (via the rail-foot "?") even before any connection.
+  var TUTORIAL_SEEN_KEY = "odoo-gen-tutorial-seen";
+
+  function tutorialSeen() {
+    try {
+      return window.localStorage.getItem(TUTORIAL_SEEN_KEY) === "1";
+    } catch (e) {
+      // Private browsing / storage disabled — treat as "not seen" rather
+      // than throwing, since this is a convenience, not a requirement.
+      return false;
+    }
+  }
+
+  function markTutorialSeen() {
+    try { window.localStorage.setItem(TUTORIAL_SEEN_KEY, "1"); } catch (e) { /* see above */ }
+  }
+
+  function updateTutorialLink() {
+    var container = $("tutorial-instance-link");
+    var raw = (urlField.value || "").trim().replace(/\/+$/, "");
+    if (!DEMO_URL_RE.test(raw)) {
+      setHidden(container, true);
+      return;
+    }
+    clear(container);
+    var link = document.createElement("a");
+    // Values a user typed, never a server/LLM value — still routed through a
+    // real anchor rather than string-built HTML, per this file's XSS rule.
+    link.href = raw;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = "Instanz öffnen ↗";
+    container.appendChild(link);
+    setHidden(container, false);
+  }
+
+  function showTutorial() {
+    updateTutorialLink();
+    setHidden("tutorial", false);
+  }
+
+  function hideTutorial() {
+    setHidden("tutorial", true);
+  }
+
+  // "Verstanden" is a permanent acknowledgment; "Später" and the × close
+  // only dismiss for this visit, so the overlay offers itself again next time.
+  $("tutorial-ok").addEventListener("click", function () {
+    markTutorialSeen();
+    hideTutorial();
+  });
+  $("tutorial-later").addEventListener("click", hideTutorial);
+  $("tutorial-close").addEventListener("click", hideTutorial);
+  $("btn-tutorial-reopen").addEventListener("click", showTutorial);
 
   // --------------------------------------------------------------- connect
   function renderChecklist(steps) {
@@ -721,13 +813,17 @@
     button.disabled = true;
     setText("connect-hint", "Verbindung wird geprüft…");
     setHidden("panel-checklist", false);
+    // S10/R10 (F3): re-hidden at the START of every attempt, not just left
+    // over from a previous one — otherwise a bindable "Weiter" button can
+    // sit above an empty, not-yet-answered checklist while this fetch is
+    // still in flight.
+    setHidden("btn-to-config", true);
     clear($("checklist"));
 
     api("/api/connect", {
       method: "POST",
       body: {
         url: urlField.value.trim(),
-        db: $("f-db").value.trim(),
         odoo_key: $("f-key").value,
         llm_key: $("f-llmkey").value,
         llm_model: $("f-llmmodel").value.trim(),
@@ -735,12 +831,24 @@
     }).then(function (data) {
       state.connect = data;
       renderChecklist(data.steps || []);
-      setText("connect-hint", data.ok ? "Verbunden." : "Verbindung unvollständig.");
+      // data.ok = odoo_ok && llm_ok — the two FATAL steps. The other six can
+      // be red (e.g. a blocked module, a stale existing-data read) without
+      // blocking progress: Phase A's whole point is that a module without
+      // write access gets disabled and the run continues, not that the
+      // console goes dark. Gating on "every step green" would turn that
+      // graceful degradation into a hard stop.
+      setText("connect-hint", data.ok
+        ? "Verbunden."
+        : "Verbindung unvollständig — Odoo und LLM müssen erreichbar sein.");
       // Keys are never echoed back and are cleared from the DOM after submit.
       $("f-key").value = "";
       $("f-llmkey").value = "";
+      if (data.ok) {
+        state.everConnected = true;
+        updateNavLock();
+      }
       applyConnectResult(data);
-      $("btn-to-config").disabled = !data.ok;
+      setHidden("btn-to-config", !data.ok);
     }).catch(function (err) {
       setText("connect-hint", err.message);
     }).finally(function () {
@@ -762,6 +870,15 @@
     if (data.language_code) {
       setHidden(lang, false);
       lang.textContent = data.language_code;
+    }
+    // S10/R10 (F2): no input field for this any more — the server derives it
+    // from the URL, so this chip is the only place it's still visible.
+    var db = $("chip-db");
+    if (data.database) {
+      setHidden(db, false);
+      db.textContent = data.database;
+    } else {
+      setHidden(db, true);
     }
     setText("server-tag", (urlField.value || "").replace(/^https:\/\//, ""));
     setText("foot-odoo-text", "Odoo: " + (data.ok ? "verbunden" : "Fehler"));
@@ -785,22 +902,25 @@
     return false;
   }
 
-  $("btn-to-preflight").addEventListener("click", function () {
-    if (!consentSatisfied()) return;
+  // S10/R10 (F3+F5): there is no more separate Prüfen view to fetch this for
+  // on a single click — the summary lives directly in the config view and
+  // stays live, recomputed in the background as the config changes.
+  // /api/preflight is pure arithmetic over the payload (build_context takes
+  // every Odoo-derived value as a parameter; the endpoint itself does no
+  // Odoo I/O), which is what makes calling it on every keystroke safe —
+  // don't "optimise" this away later.
+  var preflightTimer = null;
+  function schedulePreflightRefresh() {
+    // Guard against the initial render firing this before any connect has
+    // happened at all — /api/preflight 409s without a connected session.
+    if (!state.everConnected) return;
+    if (preflightTimer) clearTimeout(preflightTimer);
+    preflightTimer = setTimeout(refreshPreflightSummary, 400);
+  }
+
+  function refreshPreflightSummary() {
     api("/api/preflight", { method: "POST", body: buildPayload() })
       .then(function (data) {
-        var target = $("preflight-target");
-        clear(target);
-        [["Instanz", data.target || "–"],
-         ["Datenbank", data.database || "–"],
-         ["Modus", data.mode === "both" ? "Stammdaten + Bewegungsdaten" : "Nur Stammdaten"],
-         ["Branche", data.industry || "–"],
-         ["Neue Stammdaten", data.skip_master_data ? "nein (nur vorhandene)" : "ja"]]
-          .forEach(function (pair) {
-            target.appendChild(el("span", "k", pair[0]));
-            target.appendChild(el("span", "v", pair[1]));
-          });
-
         var mods = $("preflight-modules");
         clear(mods);
         (data.modules || []).forEach(function (m) {
@@ -814,14 +934,19 @@
           records.appendChild(el("span", "k", label));
           records.appendChild(el("span", "v", estimate[label]));
         });
-
-        setText("preflight-host", (data.target || "").replace(/^https:\/\//, ""));
-        setText("preflight-modcount", (data.modules || []).length + " aktiv");
-        setText("preflight-total", data.record_total);
-        showView("preflight");
+        records.appendChild(el("span", "k total", "Gesamt"));
+        records.appendChild(el("span", "v total", data.record_total));
       })
-      .catch(function (err) { window.alert(err.message); });
-  });
+      // A background refresh that fails (e.g. a session that just lapsed)
+      // must not interrupt typing with an alert — the summary just goes
+      // stale until the next successful refresh.
+      .catch(function () { /* ambient refresh, not user-initiated */ });
+  }
+
+  function onConfigChanged() {
+    updateConfigSummary();
+    schedulePreflightRefresh();
+  }
 
   // -------------------------------------------------------------------- run
   function renderProgressList(modules) {
@@ -857,7 +982,11 @@
   }
 
   $("btn-start-run").addEventListener("click", function () {
-    if (!consentSatisfied()) { showView("config"); return; }
+    // S10/R10 (F3+F5): this button now lives on the config view itself (the
+    // separate Prüfen view is gone), so a failed consent check has nowhere
+    // to navigate to — consentSatisfied() already scrolls the consent block
+    // into view right here.
+    if (!consentSatisfied()) return;
     var button = this;
     button.disabled = true;
     api("/api/runs", { method: "POST", body: buildPayload() })
@@ -971,5 +1100,6 @@
     setHidden("panel-login", true);
     setHidden("panel-connect", false);
     loadDefaults();
+    if (!tutorialSeen()) showTutorial();
   }).catch(function () { /* not logged in yet — the login panel stays */ });
 })();

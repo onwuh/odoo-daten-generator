@@ -20,6 +20,7 @@ from odoo_client import OdooJson2Client
 import odoo_actions
 import run_config
 from logging_setup import configure_logging
+from web import security
 
 configure_logging()
 
@@ -91,7 +92,12 @@ def _load_config():
     else:
         print("[config] ERROR: Neither tests/test_config.ini nor config.ini found.", file=sys.stderr)
         sys.exit(1)
-    return cfg["odoo"]["url"], cfg["odoo"]["db"], cfg["odoo"]["api_key"]
+    url = cfg["odoo"]["url"]
+    # S10/R10 (F2): "db" is optional in config.ini.example now that the web
+    # console derives it from the URL — this loader must not KeyError on a
+    # config file that omits it, or config.ini.example's own comment is a lie.
+    db = cfg["odoo"].get("db") or security.derive_database_name(url)
+    return url, db, cfg["odoo"]["api_key"]
 
 
 def _run_all(client, ctx):

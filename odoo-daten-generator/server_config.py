@@ -20,7 +20,11 @@ and restores the original "bring your own credentials" behaviour. Set it once th
 beta is over.
 
 Secrets never leave this module. `public_defaults()` reports only *whether* a
-default exists, plus the non-secret URL, database and model name.
+default exists, plus the non-secret URL and model name. `db` is resolved here
+too (still readable via `apply("db", ...)`, the self-hoster escape hatch), but
+not part of `public_defaults()`'s own surface since S10/R10 — the frontend no
+longer asks for a database name, it derives one from the URL
+(`web.security.derive_database_name`).
 """
 import configparser
 import logging
@@ -89,12 +93,16 @@ def public_defaults() -> Dict[str, Any]:
     Placeholder values are still real config content — the demo hostname is
     prospect-identifying — so this endpoint is behind the access code like every
     other one. It never carries a key.
+
+    No "db" here (S10/R10): the frontend derives the database name from the
+    URL instead of asking for it, so there is nothing for it to pre-fill. The
+    value is still resolved and applied server-side in /api/connect via
+    apply("db", ...) — see this module's docstring.
     """
     resolved = defaults()
     return {
         "enabled": enabled(),
         "url": resolved.get("url"),
-        "db": resolved.get("db"),
         "llm_model": resolved.get("llm_model"),
         "has_odoo_key": bool(resolved.get("odoo_key")),
         "has_llm_key": bool(resolved.get("llm_key")),

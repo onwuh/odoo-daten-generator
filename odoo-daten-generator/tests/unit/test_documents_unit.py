@@ -14,6 +14,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+import data_factory
 import pdf_factory
 from config import DemoCriteria, ModuleSelections, RunContext
 from fallback_data import FALLBACK_CV_BULLETS
@@ -273,6 +274,86 @@ def run():
         results.append(("create_documents: empty model_access defaults open, not marked skipped (B1 guard)", True, ""))
     except AssertionError as e:
         results.append(("create_documents: empty model_access defaults open, not marked skipped (B1 guard)", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # S10/R10 (F4): every vendor-bill layout variant renders valid, non-empty
+    # PDF bytes — the point of the sprint's "%PDF"/multi_cell-crash class of
+    # bug is that a variant can look fine in one case and raise in another
+    # (a font whose column width doesn't fit, a footer field that KeyErrors).
+    # ------------------------------------------------------------------
+    try:
+        for idx in range(len(pdf_factory._VARIANTS)):
+            pdf_bytes = pdf_factory.build_vendor_bill_pdf(
+                "Variantentest GmbH", "Teststr. 1\n12345 Teststadt", "R-1", "2026-01-01",
+                [{"description": "Ein ziemlich langes Beispiel für eine Positionsbeschreibung",
+                  "quantity": 2, "price_unit": 19.5}],
+                variant=idx,
+                footer_info=data_factory.build_vendor_footer_info("Variantentest GmbH"),
+            )
+            assert isinstance(pdf_bytes, (bytes, bytearray)), f"variant {idx}: not bytes"
+            assert bytes(pdf_bytes).startswith(b"%PDF"), f"variant {idx}: missing PDF header"
+            assert len(pdf_bytes) > 0, f"variant {idx}: empty output"
+        results.append(("pdf_factory: every vendor-bill variant renders valid, non-empty PDF bytes (F4)",
+                        True, f"{len(pdf_factory._VARIANTS)} Varianten"))
+    except AssertionError as e:
+        results.append(("pdf_factory: every vendor-bill variant renders valid, non-empty PDF bytes (F4)", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # S10/R10 (F4): same supplier -> same variant, every time — not
+    # random.seed() based (see pdf_factory._variant_for's own docstring for
+    # why: a global reseed would contaminate every later random draw in the
+    # same process, e.g. this module's own CV-PDF generation).
+    # ------------------------------------------------------------------
+    try:
+        name = "Wiederholbarkeits GmbH"
+        first = pdf_factory._variant_for(name)
+        for _ in range(5):
+            assert pdf_factory._variant_for(name) == first, "variant selection is not deterministic"
+        # Different names may (and, across a big enough sample, will) land on
+        # different variants — not asserted as inequality here since a
+        # collision for any TWO specific names is possible, just unlikely.
+        results.append(("pdf_factory: same supplier -> same variant, repeatably (F4)", True, f"variant={first}"))
+    except AssertionError as e:
+        results.append(("pdf_factory: same supplier -> same variant, repeatably (F4)", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # S10/R10 (F4): the module-global `random` sequence must survive a
+    # vendor-bill render untouched — the exact cross-contamination bug a
+    # random.seed()-based implementation would introduce.
+    # ------------------------------------------------------------------
+    try:
+        import random
+        random.seed(12345)
+        before = [random.random() for _ in range(5)]
+        random.seed(12345)
+        pdf_factory.build_vendor_bill_pdf(
+            "Seeding Test AG", "", "R-2", "2026-01-01", [],
+            footer_info=data_factory.build_vendor_footer_info("Seeding Test AG"),
+        )
+        after = [random.random() for _ in range(5)]
+        assert before == after, (
+            f"build_vendor_bill_pdf perturbed the global random sequence: {before} != {after}"
+        )
+        results.append(("pdf_factory: rendering a bill does not perturb the global random sequence (F4)", True, ""))
+    except AssertionError as e:
+        results.append(("pdf_factory: rendering a bill does not perturb the global random sequence (F4)", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # S10/R10 (F4): data_factory.build_vendor_footer_info is itself
+    # deterministic per name and does not raise on an empty/None name.
+    # ------------------------------------------------------------------
+    try:
+        info1 = data_factory.build_vendor_footer_info("Determinismus GmbH")
+        info2 = data_factory.build_vendor_footer_info("Determinismus GmbH")
+        assert info1 == info2, (info1, info2)
+        assert set(info1.keys()) == {"tax_number", "iban", "payment_terms_days", "customer_number"}, info1
+        empty = data_factory.build_vendor_footer_info("")
+        assert set(empty.keys()) == set(info1.keys()), empty
+        results.append(("data_factory.build_vendor_footer_info: deterministic, no crash on empty name (F4)",
+                        True, f"{info1}"))
+    except AssertionError as e:
+        results.append(("data_factory.build_vendor_footer_info: deterministic, no crash on empty name (F4)",
+                        False, str(e)))
 
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results

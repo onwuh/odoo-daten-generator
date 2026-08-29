@@ -10,11 +10,13 @@ sys.path.insert(0, os.path.dirname(__file__))
 from odoo_client import OdooJson2Client
 import odoo_actions  # kept for create_product
 from modules.mrp import create_workcenter, create_bom_operation, create_manufacturing_order, confirm_manufacturing_order
+from web.security import derive_database_name
 
 cfg = configparser.ConfigParser()
 cfg.read("config.ini")
 url     = cfg["odoo"]["url"]
-db      = cfg["odoo"]["db"]
+# S10/R10 (F2): "db" is optional now that the web console derives it from the URL.
+db      = cfg["odoo"].get("db") or derive_database_name(url)
 api_key = cfg["odoo"]["api_key"]
 client = OdooJson2Client(url, db, api_key)
 

@@ -812,7 +812,7 @@ für mind. einen "Hero"-Datensatz pro Lauf nutzen statt der unabhängigen Zufall
 Nicht Teil von S3/S4 — eigene Aufwandsschätzung vor Einplanung nötig.
 
 
-### R10 🟠 Live-Testphase-Feedback (Sprint S10 — Phase A ✅ 2026-08-29, Phase B offen)
+### R10 ✅ Live-Testphase-Feedback (Sprint S10, abgeschlossen 2026-08-29)
 
 Erste Live-Testphase der S9-Webkonsole auf `demo-test5`. Neun Feedbacks (F1–F9), gesammelt
 vor jeder Umsetzung. Vollständiger Plan mit Umsetzungsdetail:
@@ -864,25 +864,62 @@ unabhängiger** Bug — `hr.job.payment_interval` existiert auf `demo-test5` nic
 Details, Live-Diagnose und die neuen `has_access`/`/call/`-Erkenntnisse: CLAUDE.md Sprint-S10-
 Block und „Odoo API Conventions".
 
-**Phase B — Bedienung** (noch nicht peer-reviewed, Review vor Phase-B-Beginn):
+**Phase B — Status: ✅ abgeschlossen (2026-08-29).** Peer-reviewed (fremder Opus-Agent,
+Plantext + Live-Repo nach dem Phase-A-Merge, keine Konversationshistorie — gleiches
+Verfahren wie Phase A) vor der Umsetzung; 6 Blocker + 9 Should-fix-Befunde eingearbeitet,
+u. a.: die Weiter/Nav-Sperre gatet auf `data.ok`, nicht auf „alle Schritte grün" (sonst
+schwärzt ein einzelner nicht-fataler roter Schritt die ganze Konsole statt nur das
+betroffene Modul zu deaktivieren); die Sperre ist ein Latch (`state.everConnected`), nicht
+Live-Zustand (sonst sperrt ein fehlgeschlagener Re-Connect während eines laufenden Laufs
+die Generierungsansicht und den Löschen-Knopf aus); `config.ini.example` behält `db` als
+optionalen Wert (sonst `KeyError` in `tests/integration/test_suite.py`/`test_mrp_live.py`,
+die ihn bisher hart lasen); die PDF-Determinismus-Umsetzung nutzt einen lokalen
+`random.Random`, nie `random.seed()` (sonst kontaminiert ein globales Reseed die
+nachfolgende CV-PDF-Zufallsziehung im selben Modul). Vollständige Liste im Plan
+(`/Users/paul/.claude/plans/moonlit-napping-whale.md`, „Was die Review geändert hat",
+Punkte 25–42). Die Review markierte WP5 als größten Einzelposten des Sprints — größer als
+Phase A insgesamt — und WP7 als zweitgrößten; beide Einschätzungen bestätigten sich in der
+Umsetzung.
 
-- **F2 / WP4** — Datenbankname entfällt als Eingabefeld; auf SaaS ist er immer das erste
-  Host-Label (live bestätigt: `demo-test5.odoo.com` ↔ `demo-test5`), und Guard A lässt
-  ohnehin nur `demo-*.odoo.com` zu.
-- **F3 + F5 / WP5** — „Weiter zur Konfiguration" erst sichtbar, wenn alle Prüfschritte grün
-  sind (inkl. Sperre der Navigationsleiste); Ansicht 03 „Prüfen" entfällt, ihre
-  Zusammenfassung wandert in die Konfigurations-Fußzeile. `POST /api/preflight` bleibt
-  (reine Arithmetik, null Odoo-I/O). Voraussetzung dafür in Phase A: der Versionsschritt
-  wird auf nicht-fatal umklassifiziert, sonst sackgassiert eine unparsbare Versionsangabe
-  die gesamte Oberfläche.
-- **F1 / WP6** — Einstiegs-Tutorial („Zum ersten Mal hier?") als Overlay über Ansicht 01,
-  mit dem Weg zum Odoo-API-Schlüssel.
-- **F4 / WP7** — Eingangsrechnungs-PDFs mit ~5 Layout-Varianten (Kernschriften, kein
-  eingebettetes Unicode-Font-Asset), deterministisch je Lieferant über `zlib.crc32` —
-  **nicht** `hash()`, das ist pro Prozess randomisiert.
+- **F2 / WP4** ✅ — Datenbankname entfällt als Eingabefeld; `web/security.
+  derive_database_name()` leitet ihn aus dem ersten Host-Label der validierten URL ab.
+  Dreigliedrige Kette (Body → `server_config.apply("db", …)` → Ableitung), nicht zwei
+  Glieder — der mittlere Link bleibt die Selbst-Hoster-Fluchttür. Live im Status-Streifen
+  sichtbar (`connect_service.ConnectResult.database`), da sonst kein Ort mehr existiert, an
+  dem die aufgelöste Datenbank angezeigt wird.
+- **F3 + F5 / WP5** ✅ — „Weiter zur Konfiguration" und die Nav-Punkte Konfiguration/
+  Generierung bleiben gesperrt, bis `data.ok` (Odoo **und** LLM erreichbar) einmal grün war
+  — ein Latch, kein Live-Zustand. Ansicht 03 „Prüfen" entfällt vollständig (drei statt vier
+  Ansichten); ihre Inhalte (aktive Module, Datensatz-Aufschlüsselung inkl. Gesamtsumme, der
+  Hinweis auf Odoos eigene Zusatz-Datensätze) leben jetzt als eigene, live aktualisierte
+  Panels direkt in der Konfigurationsansicht, entprellt (400 ms) bei jeder Eingabeänderung
+  über das weiterhin rein arithmetische `POST /api/preflight`. Ein einzelner „Lauf
+  starten"-Knopf ersetzt die vormals zwei Knöpfe/Handler.
+- **F1 / WP6** ✅ — Einstiegs-Tutorial als Overlay (`.overlay`/`.overlay-card`, `z-index`
+  über der `position: sticky`-Rail), erscheint nach erfolgreichem Login statt beim bloßen
+  Seitenaufruf (die referenzierten Felder sind vorher nicht sichtbar), „?"-Knopf in der
+  Rail-Fußzeile zum erneuten Öffnen — bewusst außerhalb der Nav-Sperre, damit die Anleitung
+  auch vor einer Verbindung erreichbar bleibt. Der genaue Odoo-Menüpfad zum API-Schlüssel
+  blieb unverifiziert (kein Login-Zugriff auf die Zielinstanz) und steht als vorsichtig
+  formulierter Fließtext, kein erratener Deep-Link.
+- **F4 / WP7** ✅ — 5 Layout-Presets (Schriftfamilie × Kopf-/Tabellen-/Fußzeilenstil,
+  `pdf_factory._VARIANTS`), deterministisch je Lieferant über `zlib.crc32` — **nicht**
+  `hash()` (prozessweit randomisiert) und **nicht** `random.seed()` (kontaminiert den
+  globalen Generator). Spaltenbreiten/Kürzung sind pro Schriftfamilie kalibriert (Courier
+  ist als Monospace breiter pro Zeichen als Helvetica/Times); die Seitenzahl-Fußzeile nutzt
+  eine echte `FPDF.footer()`-Unterklasse statt eines Inline-Schreibversuchs. Live per
+  Sichtprüfung bestätigt (zwei Varianten als PDF gerendert und visuell verglichen) —
+  sichtbar unterschiedliche Layouts, gleicher Lieferant zweimal ergab dasselbe Layout.
+  `modules/documents.py`s Aufrufstelle berechnet und übergibt `footer_info`
+  (`data_factory.build_vendor_footer_info`) — `pdf_factory.py` bleibt bewusst frei von
+  `data_factory`-Kopplung.
+
+301/301 Unit- (von 294), 71/76 Live-Integrationsschritte grün — dieselben 5 vorbestehenden,
+unabhängigen Fehlschläge wie in Phase A (siehe oben), keine neuen.
 
 Offen und ausdrücklich nicht in S10: R6, R7, S5 Tier 2, Provenienz-Invariante als
-CI-Prüfung, F8 (siehe oben).
+CI-Prüfung, F8 (siehe oben), sowie der vorbestehende `hr.job.payment_interval`-Bug in
+`modules/recruiting.py` (ausgelagert, siehe CLAUDE.md „Verified field gotchas").
 
 ---
 
@@ -902,7 +939,7 @@ Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-
 | **S7 — Prozessketten-Kontinuität (R8)** ✅ | Universelles Service-Produkt-Tagging, billable-lines-first Zeiterfassung, Wizard-basierte Fakturierung, `orchestrator.py`-Reorder 🔒 (2026-08-05) | Umnummeriert von "S7 = Purchase+Inventory" — Prozessketten-Kontinuität ist Voraussetzung, nicht parallel; siehe R8-Statusblock oben für Details, Peer-Review-Verlauf (2× fremder Opus-Agent, Plan+Repo-Kontext) und den Hero→Universal-Kurswechsel |
 | **S8 — Purchase + Inventory (R2, R3)** ✅ | `modules/purchase.py`, `modules/inventory.py` (neu), `odoo_actions.py`-Erweiterung, `orchestrator.py`-Anhang 🔒 (2026-08-28) | War ursprünglich S7; siehe R2/R3-Statusblöcke oben für Details, zwei Peer-Review-Durchläufe (Plan-Agent + fremder Cold-Review-Agent, gleiches Verfahren wie S5-S7) und live gefundene Bugs (`ctx.company_ids`-Namenskollision, `action_create_invoice`s fehlendes `invoice_date`) |
 | **S9 — Webserver-Deployment (R9)** ✅ | `web/` (FastAPI, Guards, Session, Queue, SSE), `connect_service.py`/`run_config.py` (D4), `run_journal.py` (D7), `static/` (index/app.js/app.css), Docker-Compose, `gui.py` gelöscht (2026-08-28) | Ersetzt den Aufrufer, nicht die Pipeline — `orchestrator.py` bleibt unberührt (kein `mode`-Parameter, 🔒 nicht angefasst). Siehe R9-Statusblock oben für den gestrichenen Vorschau-Umfang, die korrigierte LLM-Invariante und die fünf live gefundenen Punkte |
-| **S10 — Live-Testphase-Feedback (R10)** 🔄 | **Phase A ✅** (2026-08-29): `has_access`-Zugriffsproben (F6), Fehlerbericht-Entrauschung (F7) 🔒, `mrp.py`-`company_ids`-Fix (F9) — 294/294 Unit-, 71/76 Live-Integrationsschritte grün. Phase B offen: DB-Name aus URL (F2), Weiter-Gate + Ansicht 03 streichen (F3/F5), Einstiegs-Tutorial (F1), PDF-Varianten (F4) | Feedback aus dem ersten echten Gebrauch. Phase A ist peer-reviewed (10 Blocker eingearbeitet) und live verifiziert — die 5 verbleibenden Live-Fehlschläge sind ein vorbestehender, unabhängiger `hr.job`-Feldbug (ausgelagert). Phase B braucht die Review noch. F8 (Payload-Form-Memo) zurückgestellt — 🔒-Berührung ohne belegten Nutzen, siehe R10-Statusblock |
+| **S10 — Live-Testphase-Feedback (R10)** ✅ | Phase A (2026-08-29): `has_access`-Zugriffsproben (F6), Fehlerbericht-Entrauschung (F7) 🔒, `mrp.py`-`company_ids`-Fix (F9). Phase B (2026-08-29): DB-Name aus URL (F2), Weiter/Nav-Gate als Latch + Ansicht 03 gestrichen (F3/F5), Einstiegs-Tutorial (F1), 5 PDF-Layout-Varianten (F4) — 301/301 Unit-, 71/76 Live-Integrationsschritte grün | Feedback aus dem ersten echten Gebrauch. Beide Phasen peer-reviewed (je 1 fremder Opus-Agent, Plantext + Live-Repo, keine Konversationshistorie) vor der Umsetzung — Phase A 10 Blocker, Phase B 6 Blocker eingearbeitet. Die 5 verbleibenden Live-Fehlschläge sind durchgängig derselbe vorbestehende, unabhängige `hr.job`-Feldbug (ausgelagert). F8 (Payload-Form-Memo) zurückgestellt — 🔒-Berührung ohne belegten Nutzen, siehe R10-Statusblock |
 
 **Pro Arbeitspaket verbindlich** (aus CLAUDE.md Testing Design Patterns):
 - Empty-Pool-Guards (P1) für jede neue `random.choice/sample`-Stelle

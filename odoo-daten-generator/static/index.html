@@ -19,13 +19,13 @@
 
     <button class="nav-item active" data-view="connect"><span class="num">01</span> Verbindung</button>
     <button class="nav-item" data-view="config"><span class="num">02</span> Konfiguration</button>
-    <button class="nav-item" data-view="preflight"><span class="num">03</span> Prüfen</button>
-    <button class="nav-item" data-view="run"><span class="num">04</span> Generierung</button>
+    <button class="nav-item" data-view="run"><span class="num">03</span> Generierung</button>
 
     <div class="rail-spacer"></div>
     <div class="rail-foot">
       <div class="foot-row"><span class="dot" id="foot-odoo-dot"></span> <span id="foot-odoo-text">Odoo: nicht verbunden</span></div>
       <div class="foot-row"><span class="dot" id="foot-llm-dot"></span> <span id="foot-llm-text">LLM: nicht verbunden</span></div>
+      <button class="rail-help" id="btn-tutorial-reopen" type="button" title="Anleitung anzeigen">?</button>
     </div>
   </nav>
 
@@ -34,6 +34,7 @@
       <span class="chip" id="chip-company"><span class="dot"></span> <span id="chip-company-text">noch nicht verbunden</span></span>
       <span class="chip is-hidden" id="chip-version"></span>
       <span class="chip is-hidden" id="chip-lang"></span>
+      <span class="chip is-hidden" id="chip-db" title="Aufgelöste Datenbank"></span>
       <span class="fill"></span>
       <span class="server-tag" id="server-tag">kein Ziel</span>
     </div>
@@ -84,7 +85,6 @@
               <div class="field-error" id="f-url-error">Diese URL ist keine demo-*.odoo.com-Instanz. Aus Sicherheitsgründen blockiert.</div>
             </div>
           </div>
-          <div class="field-row"><label for="f-db">Datenbank</label><input id="f-db" type="text" autocomplete="off"></div>
           <div class="field-row"><label for="f-key">Odoo API-Schlüssel</label><input id="f-key" type="password" autocomplete="off"></div>
 
           <div class="divider-label">LLM-Verbindung</div>
@@ -103,7 +103,7 @@
           <h2>Umgebungsstatus</h2>
           <div class="checklist" id="checklist"></div>
           <div class="mt-14">
-            <button class="btn" id="btn-to-config" data-goto="config">Weiter zur Konfiguration →</button>
+            <button class="btn is-hidden" id="btn-to-config" data-goto="config">Weiter zur Konfiguration →</button>
           </div>
         </div>
       </div>
@@ -116,7 +116,8 @@
       <div class="view-scroll">
         <div class="view-head">
           <h1>Konfiguration</h1>
-          <p>Umfang und Modulauswahl für den Lauf. Nicht installierte Module bleiben sichtbar, aber deaktiviert.</p>
+          <p>Umfang und Modulauswahl für den Lauf. Nicht installierte Module bleiben sichtbar, aber deaktiviert.
+             Die Zusammenfassung unten aktualisiert sich automatisch — danach schreibt der Lauf direkt nach Odoo.</p>
         </div>
 
         <div class="panel">
@@ -168,30 +169,10 @@
           </div>
           <div class="module-grid" id="module-grid"></div>
         </div>
-      </div>
 
-      <div class="config-footer">
-        <span class="summary" id="config-summary">0 Module aktiv · Modus: Nur Stammdaten</span>
-        <button class="btn" id="btn-to-preflight">Prüfen →</button>
-      </div>
-    </section>
-
-    <!-- ============================================================ -->
-    <!-- VIEW 3 — PRÜFEN (Pre-Flight)                                 -->
-    <!-- ============================================================ -->
-    <section class="view" id="view-preflight">
-      <div class="view-scroll">
-        <div class="view-head">
-          <h1>Prüfen &amp; Starten</h1>
-          <p>Letzte Kontrolle vor dem Schreiben: Ziel, aktive Module und die Anzahl der Datensätze, die dieser Lauf
-             anlegt. Danach schreibt der Lauf direkt nach Odoo.</p>
-        </div>
-
-        <div class="panel">
-          <h2>Ziel</h2>
-          <div class="kv-grid" id="preflight-target"></div>
-        </div>
-
+        <!-- S10/R10 (F3+F5): was its own "Prüfen" view (03); now a live
+             summary that updates in the background as the config above
+             changes, instead of a separate confirm-then-navigate step. -->
         <div class="panel">
           <h2>Aktive Module</h2>
           <div class="chip-row" id="preflight-modules"></div>
@@ -208,13 +189,8 @@
         </div>
       </div>
 
-      <div class="config-footer preflight-footer">
-        <div class="preflight">
-          <span class="preflight-item"><span class="k">Ziel</span><span class="v" id="preflight-host">–</span></span>
-          <span class="preflight-item"><span class="k">Module</span><span class="v" id="preflight-modcount">–</span></span>
-          <span class="preflight-item"><span class="k">Datensätze gesamt</span><span class="v" id="preflight-total">–</span></span>
-        </div>
-        <button class="btn ghost" data-goto="config">← Anpassen</button>
+      <div class="config-footer">
+        <span class="summary" id="config-summary">0 Module aktiv · Modus: Nur Stammdaten</span>
         <button class="btn" id="btn-start-run">Lauf starten →</button>
       </div>
     </section>
@@ -264,6 +240,40 @@
     </section>
   </div>
 </div>
+
+<!-- ============================================================ -->
+<!-- ERSTNUTZER-TUTORIAL (S10/R10, F1) — Overlay, kein eigener     -->
+<!-- Navigationspunkt. Erscheint automatisch nach dem ersten Login, -->
+<!-- über den „?“-Knopf in der Rail-Fußzeile jederzeit erneut.      -->
+<!-- ============================================================ -->
+<div class="overlay is-hidden" id="tutorial">
+  <div class="overlay-card">
+    <button class="overlay-close" id="tutorial-close" type="button" aria-label="Schließen">×</button>
+    <h2>Zum ersten Mal hier?</h2>
+    <ol class="tutorial-steps">
+      <li>In Odoo mit dem Benutzer anmelden, dessen Rechte dieser Lauf nutzen soll.</li>
+      <li>API-Schlüssel erzeugen: im Benutzermenü oben rechts über „Mein Profil“, im Bereich für
+        Kontosicherheit einen neuen API-Schlüssel anlegen und das eigene Passwort bestätigen — der genaue
+        Menüpfad kann je nach Odoo-Version leicht abweichen. Der Schlüssel wird <b>einmalig</b> angezeigt,
+        also sofort kopieren.
+        <div class="tutorial-link-row is-hidden" id="tutorial-instance-link"></div>
+      </li>
+      <li>Instanz-URL hier eintragen (<code class="f">https://demo-….odoo.com</code>) — die Datenbank wird
+        automatisch daraus abgeleitet, kein eigenes Feld nötig.</li>
+      <li>LLM-Schlüssel (Groq <code class="f">gsk_…</code> oder Gemini) und Modell eintragen.</li>
+      <li>„Verbinden“ klicken — die Prüfliste muss vollständig grün sein, bevor es zur Konfiguration
+        weitergeht.</li>
+      <li>Zur Konfiguration wechseln, Umfang und Module festlegen, „Lauf starten“.</li>
+      <li>Fertig? „Diesen Lauf löschen“ in der Generierungsansicht räumt alle von diesem Lauf angelegten
+        Datensätze wieder ab.</li>
+    </ol>
+    <div class="btn-row">
+      <button class="btn" id="tutorial-ok" type="button">Verstanden</button>
+      <button class="btn ghost" id="tutorial-later" type="button">Später</button>
+    </div>
+  </div>
+</div>
+
 <script src="/static/app.js"></script>
 </body>
 </html>

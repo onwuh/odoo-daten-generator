@@ -410,11 +410,11 @@ Aufstellung abgedeckt.
 Idempotenz-Prüfung zählte Root-Handler und testete damit genau das ersetzte Design).
 Live-Integration um `tests/integration/test_run_journal.py` erweitert.
 
-Sprint S10 (2026-08-29) — **Phase A abgeschlossen, Phase B offen**, Live-Testphase-Feedback
-(neues Roadmap-Item **R10**). Plan zweimal peer-reviewed (fremder Opus-Agent, Plan+Live-Repo,
-keine Konversationshistorie — gleiches Verfahren wie S5–S8; 10 Blocker + 11 Should-fix-Befunde
-vor Umsetzung eingearbeitet). Vollständiger Statusblock in `IMPLEMENTIERUNGSPLAN.md`s
-R10-Abschnitt; Kurzfassung hier:
+Sprint S10 (2026-08-29) — **abgeschlossen**, Live-Testphase-Feedback (neues Roadmap-Item
+**R10**). Plan zweimal peer-reviewed, einmal pro Phase (fremder Opus-Agent, Plan+Live-Repo,
+keine Konversationshistorie — gleiches Verfahren wie S5–S8; Phase A 10 Blocker + 11
+Should-fix, Phase B 6 Blocker + 9 Should-fix, jeweils vor Umsetzung eingearbeitet).
+Vollständiger Statusblock in `IMPLEMENTIERUNGSPLAN.md`s R10-Abschnitt; Kurzfassung hier:
 
 `odoo_client.py` 🔒 — Fehleraufzeichnung wandert von `_post` in einen `_record_failure`-
 Frame-Stack, der die öffentlichen Methoden umschließt: ein `errors`-Eintrag pro gescheiterter
@@ -435,21 +435,42 @@ Fortschrittszeile). `modules/hr.py`s `create_leave_data` und `modules/documents.
 `web/jobs.py` neuer Modulstatus `MODULE_SKIPPED` (additiv). Frontend: neuer Checklistenschritt
 „Schreibrechte", Modul-Karten zeigen „keine Schreibrechte" getrennt von „nicht installiert".
 
-**Live bestätigt (2026-08-29, `demo-test5`, mit frischem API-Schlüssel nach zwischenzeitlichem
-Ablauf des vorherigen):** `hr_holidays`/`hr_work_entry` sind auf dieser Instanz tatsächlich
-`state=uninstalled` — genau der Fall, den F6 vermutete. Die neue Sonde/das neue Gate greifen
-korrekt: `tests/integration/test_hr.py`s Urlaubs-Schritte melden sauber SKIP statt eines
-404-Fehlschlags (die Datei rief die low-level Helfer bisher ungegatet auf und musste dafür
-selbst ein `ctx.installed_modules`-Gate bekommen). 294/294 Unit-, 71/76 Live-Integrationsschritte
-grün — die verbleibenden 5 sind ein vorbestehender, unabhängiger Bug (`hr.job.payment_interval`
-existiert auf dieser Instanz nicht, `modules/recruiting.py` unverändert seit vor S10; als eigene
-Aufgabe ausgelagert, nicht Teil von S10).
+**Phase A — live bestätigt (2026-08-29, `demo-test5`, mit frischem API-Schlüssel nach
+zwischenzeitlichem Ablauf des vorherigen):** `hr_holidays`/`hr_work_entry` sind auf dieser
+Instanz tatsächlich `state=uninstalled` — genau der Fall, den F6 vermutete. Die neue
+Sonde/das neue Gate greifen korrekt: `tests/integration/test_hr.py`s Urlaubs-Schritte
+melden sauber SKIP statt eines 404-Fehlschlags (die Datei rief die low-level Helfer bisher
+ungegatet auf und musste dafür selbst ein `ctx.installed_modules`-Gate bekommen). Gemerged
+als [PR #12](https://github.com/pahuodoo/odoo-daten-generator/pull/12).
 
-Phase B (F1–F5: Datenbankfeld weg, Weiter-Gate, Ansicht „Prüfen" streichen, Einstiegs-Tutorial,
-PDF-Varianten) noch **nicht** umgesetzt — braucht vor Beginn eine eigene Peer-Review (siehe Plan).
+**Phase B** (F1–F5: Datenbankfeld weg, Weiter/Nav-Gate, Ansicht „Prüfen" streichen,
+Einstiegs-Tutorial, PDF-Varianten) — Plan vor Umsetzung peer-reviewed; Kernkorrekturen: das
+Gate sperrt auf `data.ok` (Odoo+LLM erreichbar), nicht auf „alle Checklistenschritte grün" —
+sonst würde ein einzelner nicht-fataler roter Schritt (z. B. ein blockiertes Modul aus
+Phase A) die gesamte Konsole schwärzen statt nur dieses eine Modul zu deaktivieren, was
+Phase As eigenem Design widerspräche. Das Gate ist zudem ein **Latch**
+(`state.everConnected`), nicht der Live-Verbindungsstatus — sonst würde ein fehlgeschlagener
+Re-Connect während eines laufenden Laufs die Generierungsansicht und „Diesen Lauf löschen"
+aussperren. `config.ini.example` behält `db` als optionalen Wert, weil
+`tests/integration/test_suite.py`/`test_mrp_live.py` ihn bisher als hartes Dict-Subscript
+lasen und sonst `KeyError` geworfen hätten. Die PDF-Varianten-Determinismus nutzt einen
+lokalen `random.Random(zlib.crc32(...))`, nie `random.seed()` — Letzteres hätte den
+globalen Zufallsgenerator kontaminiert und damit auch die im selben Modul später
+laufende CV-PDF-Erzeugung unbeabsichtigt deterministisch gemacht (per Test verifiziert, dass
+die globale `random`-Sequenz durch einen Rechnungs-PDF-Aufruf unverändert bleibt).
 
-Nächster Sprint (nach S10-Abschluss): offen. Backlog-Kandidaten: R6 (Multi-Country),
-R7 (JSON-Demo-Plan), S5 Tier 2, Provenienz-Invariante (§R9), F8 (Payload-Form merken, siehe oben).
+301/301 Unit- (von 294), 71/76 Live-Integrationsschritte grün — dieselben 5 vorbestehenden
+Fehlschläge wie in Phase A (`hr.job.payment_interval` existiert auf `demo-test5` nicht,
+`modules/recruiting.py` unverändert seit vor S10; als eigene Aufgabe ausgelagert, nicht Teil
+von S10), keine neuen. Live per Browser verifiziert: kompletter Verbindungs→Konfiguration→
+Lauf-Zyklus inkl. Live-Zusammenfassung, Nav-Sperre, Tutorial-Overlay (erscheint einmalig,
+persistiert über `localStorage`, per „?"-Knopf erneut aufrufbar) und PDF-Varianten
+(zwei Layouts als PDF gerendert und visuell verglichen — sichtbar unterschiedlich, gleicher
+Lieferant zweimal ergab dasselbe Layout).
+
+Nächster Sprint: offen. Backlog-Kandidaten: R6 (Multi-Country), R7 (JSON-Demo-Plan),
+S5 Tier 2, Provenienz-Invariante (§R9), F8 (Payload-Form merken, siehe oben), sowie der
+ausgelagerte `hr.job.payment_interval`-Bug.
 
 **Prozess-Hinweis (2026-08-04):** Dieser Abschnitt lag zeitweise eine ganze Session hinter dem
 tatsächlichen Code-Stand zurück — D1/D2/D3/B11/B14/B15 waren bereits implementiert und getestet,
