@@ -1,7 +1,7 @@
 """Master data module: creates products and res.partner records.
 
 Structure (addresses, contacts, prices) is assembled deterministically by
-data_factory.py from name atoms — see IMPLEMENTIERUNGSPLAN.md A1. This module
+data_factory.py from name atoms — see ROADMAP.md A1. This module
 no longer parses free-form LLM structure; it only supplies names.
 """
 

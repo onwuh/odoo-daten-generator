@@ -1,6 +1,8 @@
-# Implementierungsplan — odoo-daten-generator
+# Roadmap — odoo-daten-generator
 
 **Stand:** 2026-07-20 · **Basis:** Code-Review aller Kernmodule (gui.py, orchestrator.py, llm_service.py, odoo_client.py, modules/*, tests/*)
+
+**Umbenannt von `IMPLEMENTIERUNGSPLAN.md`, 2026-08-29:** Inhalt und Historie unverändert — der Name passt seit S1–S10 (10 abgeschlossene Sprints) besser als "Plan". Gleichzeitig um R11–R20 erweitert (Erweiterungen an bestehenden Modulen + vier neue App-Domänen), Peer-reviewed nach dem etablierten S5-S10-Verfahren (fremder Opus-Agent, Plan-Text + Live-Repo, keine Konversationshistorie) vor dem Commit.
 
 Dieses Dokument ist der Implementierungsrahmen für die nächsten Entwicklungszyklen. Es gliedert sich in:
 
@@ -455,7 +457,7 @@ Details, Plan-Review-Verlauf (zwei Durchläufe, gleiches Verfahren wie S5-S7) un
 - **Produktbilder**: Platzhalter-Generierung (farbige Initialen-Kacheln) oder Bild-API; Upload via `image_1920`
 - **Szenario-Presets**: JSON-Presets ("Maschinenbau 50 MA", "IT-Agentur klein") die alle GUI-Regler vorbelegen — ein Klick statt 30
 - **Headless-Modus**: `python3 generate.py --preset maschinenbau.json` für CI/Wiederholbarkeit (Orchestrator ist bereits GUI-frei, fehlt nur ein CLI-Einstieg)
-- **Mehr-Firmen-Support**: aktuell implizit Company 1 (`odoo_actions.get_main_company_name`)
+- ~~**Mehr-Firmen-Support**~~: aktuell implizit Company 1 (`odoo_actions.get_main_company_name`) — **promoted zu R17 (Multicompany, S15)**, siehe unten für Scope und Architektur-Spike-Pflicht
 
 ### R5 🟡 API-Versions-Schicht — Feld-/Methoden-Mapping pro Odoo-Release
 
@@ -941,6 +943,376 @@ in einer parallelen Session gemerged: CI-Lint-Infrastruktur (`ruff.toml`,
 `.github/workflows/ci.yml`, inzwischen auch ein `bandit`-Job) — eigener Commit, nicht Teil
 dieses Fixes.
 
+**⚠️ Implementierungshinweis für R12/R18/R19 (aus dem Peer-Review, gilt für jedes neue
+Modul):** ein neues Odoo-Feature braucht **fünf** Registrierungspunkte, nicht zwei —
+`run_config.py`s `WANTED_MODULES`/`MODULE_LABELS`/`MODULE_RUN_ORDER`/`build_selections`,
+`odoo_actions.py`s `MODEL_ACCESS_PROBES`/`PRIMARY_MODEL_PER_MODULE`, sowie die
+Frontend-Modulkarte (`static/`). Jeden dieser fünf auslassen heißt: Modul läuft nie, ohne
+sichtbaren Fehler (exakt die B1/S8-`stock_avg_qty`-Fehlerklasse, nur eine Stufe höher).
+R12 umgeht das bewusst, indem es in ein bestehendes Modul einzieht statt ein eigenes zu
+werden — R18 und R19 werden echte neue Module und brauchen alle fünf Punkte.
+
+### R11 🆕 Geplant (S11) — Lost Opportunities (CRM)
+
+**Warum:** `modules/crm.py` erzeugt aktuell nur aktive/gewonnene Opportunities — kein
+Trichter-Realismus (jede Demo-Pipeline sieht 100% erfolgreich aus).
+
+**Live bestätigt (`crm.lead`, saas-19.4):** `active` (bool), `probability` (float),
+`won_status` (readonly, selection `won`/`lost`/`pending`, computed), `lost_reason_id`
+(m2n → `crm.lost.reason`).
+
+**Peer-Review-Korrektur — Sequenzierungs-Blocker:** die naheliegende Umsetzung (lost-Anteil
+direkt am Ende von `create_crm_data` markieren) ist falsch. `sale.py:78-96` verknüpft
+Aufträge über `search_read('crm.lead', ...)`, was `active=False`-Leads unsichtbar macht,
+und `sale.py:126-143` schreibt danach die Won-Stage auf verknüpfte Leads — CRM läuft vor
+Sales in der Pipeline (Position 3 vor 4), ein in `crm.py` bereits auf verloren gesetzter
+Lead würde also entweder fälschlich doch verknüpft (wenn die Lost-Markierung erst NACH dem
+Sales-Schritt passiert) oder von `sale.py` schlicht ignoriert (wenn davor) — im schlimmsten
+Fall verloren *und* Won-staged gleichzeitig. Fix: Lost-Pass als eigener, später Aufruf aus
+`orchestrator.py` **nach** `sale.py`, operiert ausschließlich auf den von `sale.py` **nicht**
+verknüpften Lead-IDs (Abgleich der in `crm.py` erzeugten Lead-IDs gegen die von `sale.py`
+verknüpften — ggf. muss `ctx` dafür die crm.py-Lead-IDs zusätzlich additiv exponieren,
+exakt gegen `sale.py:78-96`/`126-143` verifizieren vor Umsetzung).
+
+**Dev Tasks:**
+- Neuer, eigener Aufruf-Schritt nach `sale.py` (nicht Teil von `create_crm_data` selbst,
+  siehe Sequenzierungs-Korrektur oben): konfigurierbarer Anteil per
+  `client.write('crm.lead', [id], {...})` auf verloren setzen.
+- `crm.lost.reason` **suchen, nie erzeugen** — Referenzdaten-Konvention, echtes Vorbild ist
+  `mrp.py:376-379` (`quality.alert.team`/`quality.point.test_type` werden gesucht, bei
+  leerem Ergebnis wird das Feature komplett übersprungen, nichts wird nachgelegt). **Nicht**
+  `hr.skill.level` als Vorbild zitieren — das wird von `recruiting.py:61`
+  (`create_skill_level`) tatsächlich erzeugt, ist also kein Search-only-Beispiel. Leerer
+  `crm.lost.reason`-Pool → Pattern 1 (Lead bleibt aktiv, Warnung loggen, kein Crash).
+- ⚠️ Unverifiziert: ob `probability`/`won_status` beim reinen `write()` serverseitig
+  korrekt nachgezogen werden, oder ob Odoos UI-Aktion `action_set_lost` (falls per JSON2
+  aufrufbar) nötig ist. Vor Umsetzung live gegen `demo-pahu-test1` prüfen — nicht
+  spekulativ `action_set_lost` übernehmen (Lehre aus der `/call`+`/call_kw`-Altlast in
+  CLAUDE.md: nur belegte Methodennamen).
+- `config.py` 🔒 additiv: **eigenes** neues Feld, z. B. `crm_lost: dict = {"pct": int}` —
+  **nicht** `ModuleSelections.crm` (das ist `int = 0`, kein Dict, `crm.get(...)` würde
+  crashen) und **nicht** `crm_chatter` (das wird nur befüllt, wenn Chatter aktiv ist, also
+  kein zuverlässiger Träger für ein unabhängiges Feature).
+
+**Tests:** Pattern 1 (leerer `crm.lost.reason`-Pool), Pattern 3 (`pct=0` → keine
+zusätzlichen `write`-Calls), Pattern 7 (Verteilung über 200 Samples: sowohl aktive als
+auch verlorene Leads vorhanden).
+
+**Komplexität:** Niedrig-Mittel (die Sequenzierungs-Korrektur macht es weniger trivial als
+zunächst geschätzt) · **Benefit:** Mittel
+
+### R12 🆕 Geplant (S13) — Nachbestellregeln / Replenishment-Planung
+
+**Annahme zur Bezeichnung "MRP Planung":** interpretiert als Odoos Nachbestellregeln
+(`stock.warehouse.orderpoint`, im deutschen Inventory-Menü unter "Planung"/"Nachbestellung"),
+**nicht** MPS (Master Production Schedule, separates Enterprise-Widget ohne eigenes
+Kern-Modell in dieser Feldliste). Falls anders gemeint: vor S13-Start korrigieren.
+
+**Live bestätigt (`stock.warehouse.orderpoint`, saas-19.4):** vollständiges Feldschema
+gezogen — u. a. `warehouse_id`/`location_id`/`product_id` (alle `required`),
+`product_min_qty`/`product_max_qty` (`required`, float), `trigger` (`auto`/`manual`),
+`route_id`, `company_id` (`required`).
+
+**Dev Tasks:**
+- **In `inventory.py` einziehen, kein neues Modul** (siehe Implementierungshinweis oben) —
+  Orderpoints als weiterer Zweig im bereits vorhandenen `ModuleSelections.stock`-Dict
+  (`stock: dict = {"avg_qty": int, "orderpoints_pct": int, ...}`), keine neuen Einträge in
+  `run_config.py`/`odoo_actions.py`/Frontend nötig.
+- Orderpoints für einen konfigurierbaren Produkt-Anteil (Storables aus
+  `ctx.product_ids`/`ctx.component_ids`), `location_id` = Lagerort aus R15 (oder Fallback
+  `warehouse["stock_location_id"]` wie bisher), `company_id` via
+  `odoo_actions.get_main_company_id` (nicht `ctx.company_ids[0]` — bekannte Falle, siehe
+  CLAUDE.md).
+- **`trigger='manual'`, nicht `'auto'`** (Peer-Review-Korrektur): `purchase.py` legt
+  aktuell kein `product.supplierinfo`/`seller_ids` an — mit `trigger='auto'` würde Odoos
+  Scheduler auf jedem betroffenen Produkt eine "kein Lieferant"-Procurement-Exception
+  werfen. Erst mit Lieferanten-Zuordnung (nicht Teil von R12) wäre `'auto'` sicher.
+- **Sicherer Minimal-Scope:** nur die Orderpoint-Records anlegen (bereits ein sichtbarer,
+  echter Demo-Artefakt in Odoos Inventory-App). Odoos eigener Scheduler-Cron zieht sie auf
+  der Ziel-SaaS-Instanz von selbst (mit `trigger='manual'` löst er allerdings nicht
+  automatisch aus — genau deshalb hier unkritisch).
+- **Stretch, nicht S13-Pflicht:** sofortiger Replenishment-Trigger per API. Methodenname
+  unverifiziert (`action_replenish`? ein Wizard?) — vor Umsetzung live per
+  `has_access`-Probe oder Testaufruf klären, sonst nicht spekulativ einbauen.
+
+**Tests:** Pattern 1 (keine Storables → skip), Pattern 5 (kein Warehouse → skip, analog
+S8), Pattern 4 (Read-back `product_min_qty`/`product_max_qty`).
+
+**Komplexität:** Mittel (Minimal-Scope) · **Benefit:** Mittel-Hoch
+
+### R13 🆕 Geplant (S12) — Seriennummern-/Chargenverfolgung
+
+**Live bestätigt (`stock.lot`, saas-19.4):** vollständiges Feldschema — `product_id`
+(`required`), `name` (`required`, "Lot/Serial Number"), `company_id`, `location_id`.
+`stock.quant` (S8, bereits im Code) hat laut vorherigem Sprint bereits einen `lot_id`-fähigen
+Schreibpfad (nicht explizit genutzt bisher).
+
+**Dev Tasks:**
+- `master_data.py` (oder `mrp.py` für Fertigprodukte): `product.template.tracking` auf
+  einen konfigurierbaren Anteil der Storables setzen (`'lot'`/`'serial'`/`'none'`) —
+  Feldname vor Umsetzung gegen `product.template` (nicht `product.product`) verifizieren.
+- `inventory.py`: für **`tracking='lot'`**-Produkte vor/bei `stock.quant`-Erzeugung
+  passenden `stock.lot` anlegen (`product_id`, `name` z. B. fortlaufend `LOT-0001`,
+  `company_id`) und `lot_id` auf den Quant setzen. Kein Move-basierter Umbau nötig —
+  Quant-Ansatz aus S8 bleibt, nur um `lot_id` ergänzt.
+- **`tracking='serial'` NICHT über denselben Pfad** (Peer-Review-Korrektur): der
+  bestehende Quant-Code (`inventory.py:62-70`) schreibt einen Quant mit Menge 5–15 pro
+  Produkt — für Serial-Tracking ist eine Menge > 1 pro Lot ungültig (jede Seriennummer ist
+  genau 1 Stück). Serial-getrackte Produkte brauchen eine eigene Schleife: N einzelne
+  Quants (Menge je 1) mit je eigenem `stock.lot`, statt eines Bulk-Quants.
+- **MRP-Anbindung (`lot_producing_id` bei Fertigungsauftrag-Abschluss) aus dem Scope
+  gestrichen** (Peer-Review-Korrektur): `modules/mrp.py` hat aktuell **keinen**
+  Abschluss-Call für Fertigungsaufträge — Produktionen werden nur `action_confirm`t, nie
+  fertiggemeldet (kein `button_mark_done`/`mark_done` im gesamten `modules/`-Baum). Ohne
+  einen Abschlussschritt gibt es keinen Ort, an dem `lot_producing_id` gesetzt würde — R13
+  bleibt bei einer echten MRP-Fertigmeldung als Voraussetzung offen (eigenes künftiges
+  Item, nicht Teil von S12).
+- `purchase.py`: bewusst **nicht** in S12-Scope — Wareneingang läuft dort weiterhin ohne
+  Lot-Zuordnung (Move-basierter Pfad, größerer Umbau, kein Demo-Mehrwert ggü. dem
+  Quant-Ansatz für den ersten Wurf).
+
+**Tests:** Pattern 1 (keine getrackten Produkte → normaler Quant-Pfad wie bisher, kein
+Crash), Pattern 4 (Read-back `stock.lot.product_id`/`name`), Pattern 6 (m2o-Tupel bei
+`lot_id`-Read-back).
+
+**Komplexität:** Mittel · **Benefit:** Mittel
+
+### R14 🆕 Geplant (S12) — Multi-Warehouse
+
+**Live bestätigt (`stock.warehouse`, saas-19.4):** vollständiges Feldschema — `name`/`code`
+(`required`), `view_location_id`/`lot_stock_id` (`required`, m2o → `stock.location`),
+`reception_steps`/`delivery_steps`/`manufacture_steps` (Selections für 1-3-stufige Routen),
+`resupply_wh_ids` (m2m, für automatische Resupply-Routen zwischen Lagern).
+
+**Dev Tasks:**
+- `inventory.py`: optional ein zweites `stock.warehouse` anlegen (`name`, `code` z. B.
+  "WH2"). ⚠️ Unverifiziert, ob `view_location_id`/`lot_stock_id` beim `create()` trotz
+  `required: true` serverseitig automatisch befüllt werden (Odoo-Core-Verhalten bei realen
+  Warehouses) oder explizit mitgegeben werden müssen — kurzer Live-Spike vor Umsetzung.
+- `purchase.py`/`inventory.py`: konfigurierbarer Anteil der Wareneingänge/Quants aufs
+  zweite Lager statt immer `get_default_warehouse`.
+- `ModuleSelections.stock` (Dict, bereits vorhanden) additiv um `"second_warehouse": bool`
+  erweitern.
+
+**Tests:** Pattern 3 (Flag aus → nur ein Warehouse wie bisher, keine zusätzlichen Calls),
+Pattern 4 (Read-back zweites Warehouse `code`/`lot_stock_id`).
+
+**Komplexität:** Mittel · **Benefit:** Mittel
+
+### R15 🆕 Geplant (S12) — Lagerplätze (Sub-Locations, Putaway)
+
+**Live bestätigt (`stock.location`, saas-19.4):** vollständiges Feldschema — `usage`
+(Selection: `supplier`/`view`/`internal`/`customer`/`inventory`/`production`/`transit`),
+`location_id` (Parent), `barcode` (char, R16-Anknüpfung), `putaway_rule_ids`,
+`storage_category_id`.
+
+**Dev Tasks:**
+- `inventory.py`: mehrere `stock.location`-Kindknoten unter `warehouse["stock_location_id"]`
+  anlegen (`usage='internal'`, z. B. "Regal A/Fach 1" … "Regal A/Fach 3"), `barcode` setzen
+  (R16).
+- Bestehende `stock.quant`-Erzeugung (S8) auf diese Sub-Locations verteilen statt immer
+  auf die Warehouse-Root-Location.
+- Optional/Stretch: 1-2 `stock.putaway.rule`-Demo-Records (Kategorie → Ziel-Sub-Location) —
+  nicht S12-Pflicht.
+
+**Tests:** Pattern 1 (kein Warehouse → skip, bereits vorhandener Guard erweitern),
+Pattern 4 (Read-back `complete_name`/`location_id`-Hierarchie).
+
+**Komplexität:** Mittel · **Benefit:** Mittel-Hoch
+
+### R16 🆕 Geplant (S11 Produkt-Ebene, S12 Location-Ebene) — Barcode
+
+**Live bestätigt:** `product.product.barcode` (char) **und** `stock.location.barcode`
+(char) existieren beide auf saas-19.4.
+
+**Dev Tasks:**
+- Reine Python-Hilfsfunktion (`data_factory.py`, kein Odoo-/Netzwerk-Call, analog
+  `pdf_factory.py`-Philosophie): valide EAN-13 generieren (12 Zufallsziffern + Prüfziffer
+  nach Standardalgorithmus).
+- **Kollisionsvermeidung über Läufe hinweg, nicht nur lauf-lokal** (Peer-Review-Korrektur):
+  `product.product.barcode` ist in Odoo eindeutig, und `odoo_client.create_batch` fällt bei
+  einem Fehler nur pro Einzelsatz auf 404/422 zurück (`odoo_client.py:408-421`) — ein
+  einziges Duplikat lässt sonst den **gesamten** Produkt-Batch scheitern. Ein rein
+  lauf-lokaler Zähler/Präfix reicht nicht (zweiter Lauf gegen dieselbe Demo-DB kollidiert).
+  Präfix aus `run_id` ableiten **oder** bestehende `product.product.barcode`-Werte einmal
+  zu Laufbeginn lesen und dagegen deduplizieren.
+- `master_data.py`: `barcode` bei Produkterzeugung mitschreiben (S11).
+- `inventory.py`: `barcode` bei den R15-Sub-Locations mitschreiben (S12, da Locations
+  vorher nicht existieren).
+
+**Tests:** reiner Unit-Test ohne Odoo-Mock — EAN-13-Prüfziffer-Validierung auf N generierten
+Werten.
+
+**Komplexität:** Niedrig · **Benefit:** Niedrig-Mittel (zahlt sich nur aus, wenn later
+Odoos eigene Barcode-App/ein Scanner gegen die Demo-DB verwendet wird)
+
+### R17 🆕 Geplant (S15, Architektur-Spike zuerst) — Multicompany
+
+**Live bestätigt:** `res.company.parent_id`/`child_ids` (Firmenhierarchie),
+`res.users.company_id`/`company_ids` (Default- + erlaubte Firmen) — Standard-Odoo-Multi-
+Company-Modell ist auf dieser Instanz vorhanden und nutzbar.
+
+**⚠️ Warum eigener Architektur-Spike vor Code (🔒-adjacent):** `RunContext.company_ids`
+heißt trotz seines Namens **niemals** `res.company`, sondern hält `res.partner`-IDs
+(Kunden-/Firmenkontakte aus `master_data.py`) — diese Verwechslung hat bereits einen
+echten, monatelang unbemerkten Bug in `mrp.py` verursacht (S8, gefixt in S10). Eine zweite
+echte Firma vervielfacht die Gelegenheiten für exakt diese Fehlerklasse über praktisch
+jedes Modul hinweg (`sale.py`, `purchase.py`, `inventory.py`, `mrp.py` nutzen `company_id`
+an vielen Stellen).
+
+**Empfohlener Minimal-Scope für den ersten Wurf (bewusst klein, nicht die volle
+Pipeline verdoppeln):**
+- **Nicht** den kompletten 8-Module-Durchlauf pro Firma wiederholen — bei
+  ~1 req/s Live-Rate-Limit (siehe CLAUDE.md) und bereits heute mehrstufigen Läufen wäre das
+  ein Laufzeit- und Fehlerbudget-Vielfaches ohne klar proportionalen Demo-Mehrwert.
+- Stattdessen: **eine** zusätzliche `res.company` anlegen. **Peer-Review-Korrektur:**
+  ihr NUR frisch für sie selbst erzeugte Records zuweisen (neue Partner/Produkte/ein neues
+  Warehouse aus R14) — **nicht** bereits bestehende, von Company-1-Belegen referenzierte
+  Partner/Produkte per `company_id`-Write umhängen (Odoo verweigert das bei referenzierten
+  Records ohnehin). Zusätzlich zu klären: eine neue `res.company` hat zunächst **keinen**
+  Kontenplan — ob/wie ein Chart-of-Accounts-Setup für sie per JSON2 auslösbar ist, ist Teil
+  des Architektur-Spikes, nicht selbstverständlich gegeben.
+- **Vor Umsetzung zwingend:** `RunContext.company_ids` entweder umbenennen oder ein neues,
+  eindeutig benanntes Feld (`RunContext.res_company_ids`) einführen, um die bestehende
+  Verwechslungsgefahr nicht in einer zweiten echten Firma zu verschärfen — das ist eine
+  Config-Schema-Änderung 🔒, braucht Architekten-Freigabe nach demselben Verfahren wie
+  jede andere 🔒-Stelle.
+
+**Prozess:** wie S5–S10 — Plan zuerst als eigenständiges Dokument, zweimal peer-reviewed
+(unabhängiger Opus-Agent, nur Plantext + Live-Repo, keine Konversationshistorie) **vor**
+dem ersten Codezeilen.
+
+**Komplexität:** Hoch · **Benefit:** Hoch (langfristig), aber bewusst klein für den
+Minimal-Scope des ersten Wurfs — der volle Nutzen hängt vom tatsächlich freigegebenen
+Umfang ab, nicht von dieser Schätzung allein.
+
+### R18 🆕 Geplant (S13) — Quality Checks
+
+**🚨 Peer-Review-Blocker — das gibt es schon:** `modules/mrp.py:86-89`
+(`create_quality_point`) und `:369-432` erzeugen bereits `quality.point`-Records, suchen
+bereits `quality.alert.team`/`quality.point.test_type` (search-only, kein Anlegen bei
+leerem Pool — **das** ist das echte Vorbild für "suchen, nie erzeugen" in diesem Repo, nicht
+`hr.skill.level`) und sind bereits gegatet auf `mrp_config.get("create_quality_points",
+False)` + `ctx.feature_flags['quality']` + `ctx.model_access['quality.point']`
+(`run_config.py:282`). R18 ist also **kein neues Modul**, sondern eine Erweiterung/ein
+Bugfix des bestehenden `mrp.py`-Pfads — die ursprüngliche Fassung dieses Punktes ("neue
+Datei `modules/quality.py`") war schlicht falsch und hätte den existierenden Code dupliziert.
+
+**Nebenbefund — bestehender Live-Bug, im Zuge von R18 mitfixen:** `mrp.py:427` sendet
+`"test_report_type": "none"` — laut Live-Feldschema ist `test_report_type` **required**
+mit Selection **nur** `pdf`/`zpl` (kein `none`). Bleibt bisher unbemerkt, weil
+`create_quality_points` in `tests/integration/test_mrp.py:163` auf `False` steht (der Pfad
+läuft in keinem Test). Fix: `"pdf"` setzen.
+
+**Live bestätigt (`quality.point`/`quality.check`, saas-19.4):** `quality.point`:
+zusätzlich zu `team_id`/`test_type_id`/`apply_to`/`picking_type_ids`/`operation_id`
+(→ `mrp.routing.workcenter`) auch `measure_on` **required**. `quality.check`: `team_id`,
+`test_type_id`, `company_id` sind **required** (bisher in `mrp.py`s Erzeugung nicht
+vollständig abgedeckt — vor Erweiterung gegen den aktuellen `qp_vals_list`-Aufbau in
+`mrp.py:418-432` genau abgleichen, welche Felder dort schon gesetzt werden und welche
+fehlen), `measure_on` ist dort **required + readonly** (vom `point_id` abgeleitet).
+
+**Dev Tasks:**
+- Bestehenden Pfad in `mrp.py:369-432` reparieren (`test_report_type`-Bug oben) und um
+  fehlende Required-Felder auf `quality.check`-Erzeugung ergänzen, statt parallel etwas
+  Neues zu bauen.
+- **`operation_id`/Workorder-Anbindung als Stretch, nicht v1**: `ctx.workcenter_ids` ist
+  der falsche Pool dafür (das sind `mrp.workcenter`-IDs, `mrp.py:320`) — `operation_id`
+  braucht `mrp.routing.workcenter`-IDs, die `create_bom_operation` aktuell gar nicht
+  zurückgibt/speichert. Diese IDs additiv festzuhalten ist eine eigene kleine Vorarbeit;
+  bis dahin bleibt R18 v1 auf `apply_to='products'` + `picking_type_ids`
+  (Wareneingangs-Kontrolle über die Warehouse-`in_type_id`, unabhängig von R12/S12
+  verfügbar seit S8) beschränkt.
+- Quality Checks mit verteiltem `quality_state` (Pattern 7: überwiegend `pass`, ein
+  konfigurierbarer Fail-Anteil), `lot_ids` aus R13 wenn vorhanden (sonst leer — keine harte
+  Abhängigkeit zwischen R18 und R13).
+- Falls über den `mrp.py`-Pfad hinaus ein eigenständiges Feature draus wird (z. B.
+  eigene GUI-Karte), dann **alle fünf** Registrierungspunkte aus dem Implementierungshinweis
+  oben beachten — nicht nur `orchestrator.py`/`config.py`.
+
+**Tests:** Pattern 1 (kein `test_type_id`/Team → skip, bereits vorhanden), Pattern 3 (Flag
+aus → keine Calls, bereits vorhanden), Pattern 7 (Pass/Fail-Verteilung, neu), plus ein
+Regressionstest, der `create_quality_points=True` tatsächlich laufen lässt (bisher deckt
+`test_mrp.py` das mit `False` ab und hätte den `test_report_type`-Bug nie gefangen).
+
+**Komplexität:** Mittel (kleiner als ursprünglich geschätzt — Fundament existiert bereits)
+· **Benefit:** Mittel-Hoch (nutzt die MRP-Investition aus S1 weiter aus, guter visueller
+Payoff im Quality-App-Dashboard)
+
+### R19 🆕 Geplant (S11) — Expenses
+
+**Live bestätigt (`hr.expense`, saas-19.4):** `state` (Selection:
+`draft`/`submitted`/`approved`/`posted`/`in_payment`/`paid`/`refused` — **kein**
+separates `hr.expense.sheet`-Modell mehr auf dieser Version, Status läuft direkt auf
+`hr.expense`), aber **`state` selbst ist readonly** — der schreibbare Parallel-Workflow
+läuft über `approval_state` (Selection `submitted`/`approved`/`refused`). `employee_id`
+(`required`), `analytic_distribution` (json, R20-Anknüpfung), `payment_mode`
+(`own_account`/`company_account`/`payslip_account`), `total_amount`.
+
+**Dev Tasks:**
+- Neue Datei `modules/expenses.py` — `create_expense_data(client, gemini, ctx)`.
+- Ausgabenkategorien (`product.product` mit `can_be_expensed=True`) **suchen, nie
+  erzeugen** — Odoo liefert Standardkategorien vorinstalliert; leerer Pool → Pattern 1.
+- Kein LLM-Call nötig (LLM-Minimalismus-Prinzip: Beschreibung per Template
+  `f"{kategorie} – {ort}"`, keine kreative Textgenerierung erforderlich) — hält das Modul
+  praktisch kostenlos.
+- Workflow für einen konfigurierbaren genehmigten Anteil — **`approval_state`
+  schreiben, nicht `state`** (`state` ist readonly, siehe oben). ⚠️ Unverifiziert, ob
+  direktes `write(approval_state=...)` akzeptiert wird oder ob
+  `action_submit`/`action_approve`-Methoden nötig sind — **immer erst den aktuellen Status
+  lesen**, nie blind transitionieren (gleiche Fallenklasse wie `hr.leave/action_approve`,
+  siehe CLAUDE.md).
+- `config.py`: additiv `ModuleSelections.expenses: dict = {"count_per_employee": int,
+  "approved_pct": int}` (Dict-Form, nicht Skalar — siehe S8-Lehre bei `stock`).
+- `orchestrator.py`: additiver Anhang ans Ende von `module_order`.
+
+**Tests:** Pattern 1 (keine Expense-Kategorien → skip), Pattern 3 (Flag aus → keine
+Calls), Pattern 5 (keine Mitarbeiter → skip), Pattern 7 (Approved-Anteil-Verteilung).
+
+**Komplexität:** Niedrig-Mittel · **Benefit:** Hoch
+
+### R20 🆕 Geplant (S14) — Analytic Accounting
+
+**Live bestätigt:** `account.analytic.plan` (Hierarchie via `parent_id`/`children_ids`),
+`account.analytic.account` (`plan_id` `required`), `analytic_distribution` (json-Feld,
+Format vermutlich `{"<analytic_account_id>": <prozent>}`) bereits bestätigt auf
+`account.analytic.line` **und** `hr.expense` — auf `sale.order.line`/`purchase.order.
+line`/`account.move.line` mit hoher Wahrscheinlichkeit identisch (Odoo-weit
+vereinheitlichtes Muster seit Version 17), aber **vor Umsetzung live gegenprüfen, nicht
+annehmen**.
+
+**Dev Tasks:**
+- Bestehenden Default-Plan **suchen** (`account.analytic.line.account_id`-Domain zeigt
+  `plan_id child_of 1` — vermutlich existiert bereits ein Default-Plan id=1 für die
+  Projekt-Zeiterfassung aus S7/R8) statt blind einen neuen anzulegen.
+- Eine Handvoll `account.analytic.account`-Kostenstellen anlegen (z. B. "Vertrieb",
+  "Produktion", "Verwaltung") — optional 1:1 an bestehende `hr.department`-Records aus
+  `hr.py` gekoppelt.
+- `analytic_distribution` auf einem konfigurierbaren Anteil von Sale-Order-**Zeilen**
+  setzen, **bevor** `accounting.py` läuft (Pipeline-Position 4 vs. 8, siehe
+  Objekt-Pipeline oben) — Rechnungszeilen übernehmen die Distribution serverseitig vom
+  verknüpften `sale.order.line` über den bestehenden `sale.advance.payment.inv`-Wizard
+  (S7/R8). **Peer-Review-Korrektur:** `analytic_distribution` lässt sich auf bereits
+  **gebuchten** `account.move.line`s nicht mehr schreiben — `accounting.post_invoices`
+  bucht sie (Position 8); ein direkter Nachtrag auf Invoice-Zeilen nach dem Post-Schritt
+  ist also kein gangbarer Fallback, es muss vorher über die SO-Zeile laufen.
+- `analytic_distribution` zusätzlich auf einem Anteil der Purchase-Order-Zeilen und (falls
+  R19 bereits gelandet) Expense-Zeilen setzen — beide unabhängig vom Sale/Invoice-Pfad.
+- **Explizit NICHT anfassen:** `project.py`s bestehende Timesheet-Analytic-Anbindung
+  (S7/R8). **Peer-Review-Korrektur zur Begründung:** `project.py:210-244` setzt beim
+  Anlegen von `account.analytic.line`-Timesheet-Einträgen nur `project_id`/`task_id`/
+  `so_line` — **nicht** `account_id` selbst (Odoo leitet die Analytic-Account serverseitig
+  aus dem Projekt ab). Der Grund, das nicht anzufassen, ist also nicht "wäre bereits
+  korrekt gesetzt", sondern: ein zusätzlicher expliziter `account_id`-Write würde die
+  bestehende, funktionierende serverseitige Ableitung überschreiben/duplizieren, ohne
+  Mehrwert — dieses Item bleibt additiv auf andere Belegarten beschränkt.
+
+**Tests:** Pattern 3 (Flag aus → keine `analytic_distribution`-Writes), Pattern 4
+(Read-back `analytic_distribution`-JSON-Struktur pro Belegzeile).
+
+**Komplexität:** Hoch (4+ Dateien: `sale.py`, `purchase.py`, `accounting.py`,
+`expenses.py`) · **Benefit:** Mittel-Hoch
+
 ---
 
 ## 5. Umsetzungsreihenfolge
@@ -960,6 +1332,11 @@ Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-
 | **S8 — Purchase + Inventory (R2, R3)** ✅ | `modules/purchase.py`, `modules/inventory.py` (neu), `odoo_actions.py`-Erweiterung, `orchestrator.py`-Anhang 🔒 (2026-08-28) | War ursprünglich S7; siehe R2/R3-Statusblöcke oben für Details, zwei Peer-Review-Durchläufe (Plan-Agent + fremder Cold-Review-Agent, gleiches Verfahren wie S5-S7) und live gefundene Bugs (`ctx.company_ids`-Namenskollision, `action_create_invoice`s fehlendes `invoice_date`) |
 | **S9 — Webserver-Deployment (R9)** ✅ | `web/` (FastAPI, Guards, Session, Queue, SSE), `connect_service.py`/`run_config.py` (D4), `run_journal.py` (D7), `static/` (index/app.js/app.css), Docker-Compose, `gui.py` gelöscht (2026-08-28) | Ersetzt den Aufrufer, nicht die Pipeline — `orchestrator.py` bleibt unberührt (kein `mode`-Parameter, 🔒 nicht angefasst). Siehe R9-Statusblock oben für den gestrichenen Vorschau-Umfang, die korrigierte LLM-Invariante und die fünf live gefundenen Punkte |
 | **S10 — Live-Testphase-Feedback (R10)** ✅ | Phase A (2026-08-29): `has_access`-Zugriffsproben (F6), Fehlerbericht-Entrauschung (F7) 🔒, `mrp.py`-`company_ids`-Fix (F9). Phase B (2026-08-29): DB-Name aus URL (F2), Weiter/Nav-Gate als Latch + Ansicht 03 gestrichen (F3/F5), Einstiegs-Tutorial (F1), 5 PDF-Layout-Varianten (F4) — 301/301 Unit-, 71/76 Live-Integrationsschritte grün | Feedback aus dem ersten echten Gebrauch. Beide Phasen peer-reviewed (je 1 fremder Opus-Agent, Plantext + Live-Repo, keine Konversationshistorie) vor der Umsetzung — Phase A 10 Blocker, Phase B 6 Blocker eingearbeitet. Die 5 verbleibenden Live-Fehlschläge sind durchgängig derselbe vorbestehende, unabhängige `hr.job`-Feldbug (ausgelagert). F8 (Payload-Form-Memo) zurückgestellt — 🔒-Berührung ohne belegten Nutzen, siehe R10-Statusblock |
+| **S11 — Quick Wins** 🆕 | R11 (Lost Opportunities), R16 Produkt-Ebene (Barcode), R19 (Expenses) | Drei kleine, in sich unabhängige Erweiterungen — guter Einstiegssprint nach S10. R11 und R19 sind additiv 🔒 (`config.py`-Felder, R19 zusätzlich ein `orchestrator.py`-Anhang) — gleiches Muster wie jeder bisherige Sprintanhang seit S6, Freigabe ist Formsache, kein Blocker (Peer-Review-Korrektur: "ohne 🔒-Berührung" war zu pauschal formuliert) |
+| **S12 — Lager-Tiefe** 🆕 | R14 (Multi-Warehouse), R15 (Lagerplätze, inkl. R16 Location-Ebene), R13 (Seriennummern-/Chargenverfolgung, MRP-Anbindung gestrichen — siehe R13) | Alle drei bauen auf `inventory.py`/`stock.*`-Modellen auf. R13 braucht R15 nicht zwingend (`stock.lot.location_id` ist optional), profitiert aber von den gleichzeitig entstehenden Sub-Locations — ein Sprint für den gesamten Lager-Realismus-Ausbau |
+| **S13 — Prozess-Tiefe** 🆕 | R12 (Nachbestellregeln, in `inventory.py`), R18 (Quality Checks, Erweiterung des bestehenden `mrp.py`-Pfads) | Beide sind eher "MRP/Inventory-Investition aus S1/S8 weiter ausnutzen" als "auf S12 aufbauen" (Peer-Review-Korrektur: `quality.point` hat kein Location-Feld, "an `wh_qc_stock_loc_id` andocken" war keine reale Mechanik) — dennoch sinnvoll in einem Sprint gebündelt, da beide dieselbe operative Prozess-Ebene vertiefen |
+| **S14 — Analytic Accounting (R20)** 🆕 | `account.analytic.plan`/`account.analytic.account` + `analytic_distribution`-Wiring über `sale.py`/`purchase.py`/`accounting.py`/`expenses.py` | Cross-cutting (4+ Dateien) bewusst isoliert in eigenem Sprint, damit der Review-Diff überschaubar bleibt; profitiert von R19 (Expenses, S11), falls dessen Zeilen mit-verkabelt werden sollen |
+| **S15 — Multicompany (R17)** 🆕 | Architektur-Spike (Pflicht vor Code) + Minimal-Scope: zweite `res.company`, `RunContext.company_ids`-Namenskonflikt auflösen 🔒 | Höchste Komplexität/Blast-Radius aller neuen Items — bewusst zuletzt, damit alle anderen Module (Warehouses, Quality, Analytic) schon stehen, wenn die zweite Firma befüllt wird. Eigener Architekten-Freigabe-Schritt vor S15-Start, gleiches Zwei-Pass-Peer-Review-Verfahren wie S5-S10 |
 
 **Pro Arbeitspaket verbindlich** (aus CLAUDE.md Testing Design Patterns):
 - Empty-Pool-Guards (P1) für jede neue `random.choice/sample`-Stelle

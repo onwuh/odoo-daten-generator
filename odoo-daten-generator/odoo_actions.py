@@ -309,6 +309,40 @@ def get_main_company_name(client) -> Optional[str]:
     return None
 
 
+def get_main_company_info(client) -> Dict[str, Any]:
+    """Address/VAT snapshot of the main res.company, for documents that need
+    to print a "bill to" block — the vendor-bill PDF's recipient is this
+    run's own company (see modules/documents.py).
+
+    Best-effort: returns {} on total failure. Callers must degrade
+    gracefully rather than assume street/zip/city are populated — on a
+    freshly provisioned demo SaaS tenant they're typically empty strings
+    (live-confirmed on demo-test5's id=1 company), not missing keys.
+    """
+    fields = ["name", "street", "street2", "zip", "city", "country_id", "vat"]
+    try:
+        companies = client.search_read('res.company', [["id", "=", 1]], fields=fields, limit=1)
+        if not companies:
+            companies = client.search_read('res.company', [], fields=fields, limit=1)
+        if not companies:
+            return {}
+        comp = companies[0]
+        country = comp.get("country_id")
+        country_name = country[1] if isinstance(country, (list, tuple)) and len(country) > 1 else None
+        return {
+            "name": comp.get("name"),
+            "street": comp.get("street") or "",
+            "street2": comp.get("street2") or "",
+            "zip": comp.get("zip") or "",
+            "city": comp.get("city") or "",
+            "country_name": country_name,
+            "vat": comp.get("vat") or None,
+        }
+    except Exception as e:
+        logger.warning(f"-> Warning: Could not fetch main company info: {e}")
+        return {}
+
+
 def get_server_version(client) -> Optional[str]:
     """Returns the normalized 'MAJOR.MINOR' Odoo server version (e.g. '19.4'), or
     None if it can't be determined/parsed.
@@ -368,7 +402,7 @@ FIELD_COMPAT_WHITELIST: Dict[str, Tuple[Optional[str], List[str]]] = {
     'hr.leave': ('hr_holidays', ['employee_id', 'work_entry_type_id', 'date_from', 'date_to',
                  'request_date_from', 'request_date_to']),
     'hr.leave.allocation': ('hr_holidays', ['employee_id', 'work_entry_type_id']),
-    'hr.work.entry.type': ('hr_work_entry', ['name', 'code', 'count_as', 'shortcut_behavior',
+    'hr.work.entry.type': ('hr_work_entry', ['name', 'code', 'count_as',
                             'requires_allocation', 'employee_requests']),
     'hr.applicant': ('hr_recruitment', ['partner_name', 'email_from', 'partner_phone', 'job_id',
                       'schedule_pay', 'applicant_skill_ids']),

@@ -1,6 +1,6 @@
 """Unit tests for modules/accounting.py — D3 batch-creation call-count guard.
 
-The real N+1 D3 targets (per IMPLEMENTIERUNGSPLAN.md): standalone customer
+The real N+1 D3 targets (per ROADMAP.md): standalone customer
 invoices, invoices-from-orders, and vendor bills must each go through exactly
 one create_batch call, and vendor-bill creation must be decoupled from
 posting (create_batch once, then a single post_invoices/action_post call —

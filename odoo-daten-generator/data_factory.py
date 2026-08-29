@@ -2,7 +2,7 @@
 
 No LLM access, no Odoo client dependency — pure functions, fully unit-testable
 offline. This is the single source of address/pricing assembly logic (see
-IMPLEMENTIERUNGSPLAN.md A1): callers pass in names, this module fills in
+ROADMAP.md A1): callers pass in names, this module fills in
 everything structural (addresses, emails, phones, prices) from static_data.py.
 """
 
@@ -106,11 +106,29 @@ def price_for_product() -> Tuple[float, float]:
     return list_price, standard_price
 
 
+_FAKE_BANKS = [
+    ("Deutsche Bank", "DEUTDEFF"),
+    ("Commerzbank", "COBADEFF"),
+    ("Sparkasse", "GENODEF1"),
+    ("Volksbank Raiffeisenbank", "GENODED1"),
+    ("Postbank", "PBNKDEFF"),
+    ("DKB", "BYLADEM1"),
+]
+
+
 def build_vendor_footer_info(supplier_name: str) -> Dict[str, Any]:
-    """Deterministic fake footer data for a vendor-bill PDF (tax number, IBAN,
-    payment terms, customer number) — S10/R10 (F4). No LLM call: these fields
-    exist to make different suppliers' bills look distinct, not to be
-    individually meaningful.
+    """Deterministic fake footer data for a vendor-bill PDF (VAT ID, bank
+    details, payment terms, customer number) — S10/R10 (F4), extended for a
+    realistic invoice footer. No LLM call: these fields exist to make
+    different suppliers' bills look distinct, not to be individually
+    meaningful. "tax_number" is a USt-IdNr. despite the key name (DE + 9
+    digits is that format, not the separate local Steuernummer) — pdf_factory
+    labels it accordingly. "skonto_percent"/"skonto_days" are an early-payment
+    discount clause (e.g. "2% Skonto bei Zahlung innerhalb 7 Tagen") — a
+    detail real invoicing-software exports carry that a bare "N Tage netto"
+    line doesn't; skonto_days is always drawn from a pool below every
+    possible payment_terms_days value so the discount window is always
+    shorter than the plain due date, as it has to be to make sense.
 
     Uses a LOCAL random.Random instance seeded from the supplier name's
     CRC32, never the module-global `random` this file uses everywhere else:
@@ -124,12 +142,39 @@ def build_vendor_footer_info(supplier_name: str) -> Dict[str, Any]:
     correctness, but there's no reason to hand them the exact same stream.
     """
     rng = random.Random(zlib.crc32((supplier_name or "").encode("utf-8")) ^ 0x1BADB002)
+    bank_name, bic = rng.choice(_FAKE_BANKS)
     return {
         "tax_number": f"DE{rng.randint(100000000, 999999999)}",
         "iban": (f"DE{rng.randint(10, 99)} {rng.randint(10000000, 99999999):08d} "
                 f"{rng.randint(1000000000, 9999999999):010d}"),
+        "bic": bic,
+        "bank_name": bank_name,
         "payment_terms_days": rng.choice([14, 21, 30, 45]),
         "customer_number": f"K-{rng.randint(10000, 99999)}",
+        "skonto_percent": rng.choice([2, 3, 5]),
+        "skonto_days": rng.choice([7, 10]),
+    }
+
+
+def build_recipient_fallback_address(company_name: str) -> Dict[str, str]:
+    """Deterministic fake DE street/zip/city for the invoice recipient block
+    when the real res.company record has no address configured.
+
+    Vendor-bill PDFs are addressed to this run's own company — but on a
+    freshly provisioned demo SaaS tenant that company record is typically
+    still blank (street/zip/city all empty strings, live-confirmed on
+    demo-test5's default "id=1" company), so without this the recipient
+    block would either be omitted or print nothing useful. Same LOCAL-rng
+    pattern as build_vendor_footer_info, seeded from the company name with a
+    different XOR constant so the two don't draw the same stream.
+    """
+    rng = random.Random(zlib.crc32((company_name or "").encode("utf-8")) ^ 0x5A17ADDA)
+    city_entry = rng.choice(static_data.CITIES["DE"])
+    zip_code = str(rng.randint(city_entry["zip_min"], city_entry["zip_max"])).zfill(static_data.ZIP_LEN["DE"])
+    return {
+        "street": f"{rng.choice(static_data.STREET_NAMES)} {rng.randint(1, 199)}",
+        "zip": zip_code,
+        "city": city_entry["city"],
     }
 
 
