@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   # Offline unit suite only (tests/unit/, mocked Odoo). The live integration
   # suite (tests/integration/test_suite.py) needs a real Odoo instance + LLM
