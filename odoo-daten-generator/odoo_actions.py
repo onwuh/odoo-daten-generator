@@ -368,7 +368,7 @@ FIELD_COMPAT_WHITELIST: Dict[str, Tuple[Optional[str], List[str]]] = {
     'hr.leave': ('hr_holidays', ['employee_id', 'work_entry_type_id', 'date_from', 'date_to',
                  'request_date_from', 'request_date_to']),
     'hr.leave.allocation': ('hr_holidays', ['employee_id', 'work_entry_type_id']),
-    'hr.work.entry.type': ('hr_work_entry', ['name', 'code', 'count_as', 'shortcut_behavior',
+    'hr.work.entry.type': ('hr_work_entry', ['name', 'code', 'count_as',
                             'requires_allocation', 'employee_requests']),
     'hr.applicant': ('hr_recruitment', ['partner_name', 'email_from', 'partner_phone', 'job_id',
                       'schedule_pay', 'applicant_skill_ids']),
