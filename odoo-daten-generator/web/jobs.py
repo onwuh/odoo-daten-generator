@@ -37,6 +37,14 @@ MODULE_PENDING = "pending"
 MODULE_RUNNING = "running"
 MODULE_DONE = "done"
 MODULE_FAILED = "failed"
+# A module that returned without error but did no work because a write-access
+# probe blocked it (S10/R10) — e.g. "documents" when ir.attachment isn't
+# creatable. orchestrator.py hardcodes documents' is_installed=True (it isn't
+# gated on ctx.installed_modules like every other module), so on_done(ok=True)
+# fires unconditionally and the row would otherwise read "fertig" with nothing
+# created. Set from ctx.skipped_modules AFTER orchestrator.run() returns —
+# module code has no channel back to on_done() to say "I skipped", only to ctx.
+MODULE_SKIPPED = "skipped"
 
 
 def _int_env(name: str, default: int) -> int:
@@ -160,6 +168,7 @@ class JobQueue:
             llm_model_name=session.llm_model or "",
             installed_modules=connect.installed_modules,
             feature_flags=connect.feature_flags,
+            model_access=connect.model_access,
             existing_company_ids=connect.existing_company_ids,
             existing_product_ids=connect.existing_product_ids,
         )
@@ -300,6 +309,16 @@ class JobQueue:
 
                 orchestrator.run(client, llm, job["ctx"],
                                  on_module_start=on_start, on_module_done=on_done)
+                # A module can return normally (on_done(ok=True) already fired)
+                # yet have done nothing, because a write-access probe blocked
+                # it partway through. ctx.skipped_modules is the only channel
+                # for that — module code has no way to tell on_done() apart
+                # from a genuine success, and orchestrator.py's on_done
+                # signature (name, ok) is locked.
+                for key in job["ctx"].skipped_modules:
+                    if record.modules.get(key) == MODULE_DONE:
+                        record.modules[key] = MODULE_SKIPPED
+                        self._publish(run_id, "module", {"key": key, "status": MODULE_SKIPPED})
                 record.status = STATUS_DONE
             except Exception as exc:
                 record.status = STATUS_FAILED

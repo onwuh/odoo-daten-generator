@@ -117,6 +117,21 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
     if num_mrp_products <= 0:
         return
 
+    # A6/R10: lazy + memoized. ctx.company_ids holds res.partner ids (customer
+    # contacts from master_data.py), never a real res.company id — the
+    # long-masked bug both work-center and manufacturing-order creation used
+    # to have (a broad try/except turned a wrong id into a quiet skip, not a
+    # crash). get_main_company_id(client) is the real thing, but it's still one
+    # extra request: lazy so a products/BOMs-only run (mrp_routings off, no
+    # manufacturing orders requested) never pays for it, memoized so a run
+    # that needs it for both sections below only pays once.
+    _company_id_cache = []
+
+    def _get_company_id():
+        if not _company_id_cache:
+            _company_id_cache.append(odoo_actions.get_main_company_id(client))
+        return _company_id_cache[0]
+
     logger.info("\n--- MANUFACTURING: Erstelle Fertigungsprodukte und Stücklisten ---")
     product_name_bank = list(ctx.name_banks.get('product_names', []))
     industry = ctx.industry
@@ -265,7 +280,14 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
     wc_data: dict = {}
     # B15: default aligned with the UI's routings_on default — a missing
     # mrp_routings flag must not mean "off in the GUI, on in the module".
-    mrp_routings_ok = ctx.feature_flags.get('mrp_routings', False)
+    # feature_flags['mrp_routings'] is itself has_create_access-backed since
+    # S10 (R10/WP1), but ctx.model_access is checked again directly here too:
+    # feature_flags defaults CLOSED on a missing key (this module's own
+    # pre-existing B15 convention, not model_access's — the two intentionally
+    # differ), so this is the actual open-by-default guard against a probe
+    # that never ran (parent module not in installed_modules at connect time).
+    mrp_routings_ok = (ctx.feature_flags.get('mrp_routings', False)
+                       and ctx.model_access.get('mrp.workcenter', True))
     if mrp_routings_ok and num_workcenters > 0:
         try:
             logger.info("\n--- MANUFACTURING: Erstelle Arbeitszentren ---")
@@ -279,7 +301,7 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
                     }
                     for i in range(num_workcenters)
                 }
-            company_id = ctx.company_ids[0] if ctx.company_ids else None
+            company_id = _get_company_id()
             for seq, (wc_name, wc_info) in enumerate(list(wc_data.items())[:num_workcenters], start=1):
                 slug = "".join(c for c in wc_name.upper() if c.isalnum())[:8]
                 wc_vals = {
@@ -331,7 +353,7 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
     if num_manufacturing_orders > 0 and created_bom_ids:
         try:
             logger.info("\n--- MANUFACTURING: Erstelle Fertigungsauftraege ---")
-            company_id = ctx.company_ids[0] if ctx.company_ids else None
+            company_id = _get_company_id()
             picking_type_id = (
                 get_manufacturing_picking_type_id(client, company_id)
                 if company_id else None
@@ -344,7 +366,12 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
                 # Pre-fetch quality references once (only if needed)
                 qp_team_id = None
                 qp_test_type_id = None
-                if create_quality_points and ctx.feature_flags.get('quality', False):
+                # Same open-by-default reasoning as mrp_routings_ok above:
+                # feature_flags['quality'] defaults closed on a missing key,
+                # ctx.model_access.get(..., True) is the guard against a probe
+                # that simply never ran.
+                if (create_quality_points and ctx.feature_flags.get('quality', False)
+                        and ctx.model_access.get('quality.point', True)):
                     try:
                         teams = client.search_read('quality.alert.team', [], fields=["id"], limit=1)
                         qp_team_id = teams[0]["id"] if teams else None

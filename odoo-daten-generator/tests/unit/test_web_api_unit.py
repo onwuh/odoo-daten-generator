@@ -36,6 +36,9 @@ def _fake_connect_result():
     result.language_name = "German"
     result.installed_modules = {"crm", "sale", "purchase", "stock"}
     result.feature_flags = {"crm_leads": True, "mrp_routings": True, "quality": False}
+    result.model_access = {"crm.lead": True, "sale.order": True,
+                           "purchase.order": True, "stock.quant": True}
+    result.blocked_modules = set()
     result.odoo_version = "saas-19.4"
     result.existing_company_ids = [1, 2, 3]
     result.existing_product_ids = [10, 11]
@@ -175,11 +178,47 @@ def run():
             assert data["feature_flags"]["mrp_routings"] is True, data["feature_flags"]
             assert "purchase" in data["installed_modules"], data["installed_modules"]
             assert "stock" in data["installed_modules"], data["installed_modules"]
+            # S10/R10: model_access (raw per-model probe) and blocked_modules
+            # (effective_installed_modules' decision) must both surface — the
+            # frontend module grid renders blocked_modules directly rather
+            # than re-deriving it from model_access.
+            assert data["model_access"]["crm.lead"] is True, data["model_access"]
+            assert data["blocked_modules"] == [], data["blocked_modules"]
             # No credential is ever returned.
             assert "gsk_key" not in response.text
         results.append(("Connect: feature_flags + purchase/stock im Ergebnis", True, ""))
     except Exception as e:
         results.append(("Connect: feature_flags + purchase/stock im Ergebnis", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # S10/R10 — a blocked module's model_access reaches build_context via
+    # /api/preflight, exactly as feature_flags already does: the same
+    # silent-disable class (B1) applies to write access, not just to
+    # installed-module state.
+    # ------------------------------------------------------------------
+    try:
+        with TestClient(web_app.app) as client:
+            csrf = _login(client)
+            blocked_result = _fake_connect_result()
+            blocked_result.installed_modules = {"crm", "sale"}
+            blocked_result.model_access = {"crm.lead": False, "sale.order": True}
+            blocked_result.blocked_modules = {"crm"}
+            with patch.object(connect_service, "probe",
+                              return_value=(blocked_result, MagicMock(), MagicMock())):
+                client.post("/api/connect", headers=_auth_headers(csrf), json={
+                    "url": "https://demo-unit-test.odoo.com", "db": "demo-unit-test",
+                    "odoo_key": "key", "llm_key": "gsk_key", "llm_model": "m",
+                })
+            response = client.post("/api/preflight", headers=_auth_headers(csrf), json={
+                "mode": "both", "modules": {"crm": {"enabled": True, "count": 5}},
+            })
+            assert response.status_code == 200, response.text
+            modules = [m["key"] for m in response.json()["modules"]]
+            assert "crm" not in modules, \
+                f"crm has no write access and must not appear as an active module: {modules}"
+        results.append(("Preflight: Modul ohne Schreibrechte erscheint nicht als aktiv", True, ""))
+    except Exception as e:
+        results.append(("Preflight: Modul ohne Schreibrechte erscheint nicht als aktiv", False, str(e)))
 
     # ------------------------------------------------------------------
     # Session isolation: one session cannot read another session's run

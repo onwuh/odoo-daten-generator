@@ -212,7 +212,14 @@ def run():
     try:
         src = open(os.path.join(_ROOT, "odoo_client.py"), encoding="utf-8").read()
         assert "response.text[:500]" not in src, "roher Antwortkörper wird noch gespeichert"
-        assert '"error_body": error_body' in src, "error_body-Feld fehlt"
+        # S10/R10: error_body wird nicht mehr direkt in _post ins Fehler-Dict
+        # geschrieben, sondern über einen _record_failure-Frame gesammelt und in
+        # _append_error ausgewählt. Die Invariante, die zählt, bleibt dieselbe:
+        # _redact_error_body ist die einzige Quelle, die je in ein "error_body"-
+        # Feld fließt — nicht die wortgleiche Zeile aus der alten _post-Fassung.
+        assert "error_body = _redact_error_body(response)" in src, \
+            "_redact_error_body wird nicht mehr aufgerufen"
+        assert '"error_body":' in src, "error_body-Feld fehlt"
         results.append(("Redaktion: keine rohe response.text-Kopie mehr in self.errors", True, ""))
     except Exception as e:
         results.append(("Redaktion: keine rohe response.text-Kopie mehr in self.errors", False, str(e)))

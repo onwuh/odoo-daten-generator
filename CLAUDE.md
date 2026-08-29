@@ -140,7 +140,9 @@ tasks claim the timesheet budget first).
 - Odoo's JSON/2 **error object** is `{"name", "message", "arguments", "timestamp", "context", "debug"}` — `debug` carries a full server-side traceback with `/home/odoo/src/...` paths. `odoo_client._redact_error_body` takes only `message`; nothing else crosses into the log or `self.errors`.
 - Odoo SaaS prefixes some error messages with runs of **invisible characters** (zero-width joiners, variation selectors `U+FE00–FE0F`, tag characters `U+E0000–E007F` — a tracing watermark). They make the real message unreadable in a log; `odoo_client._printable` strips them (category `Cf` alone is not enough — variation selectors are `Mn`).
 - `requests.Session` has **no** `allow_redirects` attribute (`__attrs__` carries `max_redirects` only), so a session-level assignment is a silent no-op — it must be a per-request kwarg at every `session.post` call site. Also note `raise_for_status()` ignores 3xx: an unfollowed redirect falls through to `response.json()` as an opaque JSONDecodeError unless explicitly rejected (`odoo_client._reject_redirect`).
-- `client.call_method` walks a payload-format fallback chain, so the exception that finally propagates is the **last, least informative** attempt (`422 Client Error`), not the first (`You can not delete a confirmed sales order`). When the real reason matters, read it out of `client.errors` from a mark taken before the call — see `run_journal._first_new_error`.
+- `client.call_method`/`create`/`write`/`model_method`/`create_batch` walk a payload-format fallback chain, so the *Python exception* that finally propagates out of a bare, uncaught call is still the **last, least informative** attempt (`422 Client Error` or a routing 404) — that part is inherent to the fallback design and unchanged. But since S10/R10, `client.errors` no longer mirrors that: each logical operation records **exactly one** entry there (`odoo_client._record_failure`), and `odoo_client._select_attempt` picks the **first** attempt across the whole chain that carries a structured Odoo message over a bare routing hint — so `client.errors[-1]["error_body"]` already says `You can not delete a confirmed sales order`, not `422 Client Error`. `run_journal._first_new_error` (mark-and-diff over `client.errors`) still exists and still works, just against entries that are now one-per-operation instead of one-per-HTTP-attempt (previously up to 8 for one failed call — the reason 8 of 14 errors in a live report turned out to be planned 404 probing, not real failures).
+- `POST /json/2/<model>/has_access` with `{"ids": [], "operation": "create"}` (a **named** payload key — `args=[...]` is rejected) answers whether the API-key user may create records on `model`: `true`/`false` for a real model, `404` if the model doesn't exist. `check_access_rights` is gone on saas-19.4; `has_access` is the successor. It answers a *write*-access question that `search_read`/`fields_get` cannot: on `demo-test5`, a **read** probe on `mrp.workcenter` reported `True` while the "Work Orders" setting checkbox was off, so a run started and was guaranteed to fail on its first work-center create. `odoo_client.has_create_access(model)` wraps this as a single POST with no variant fallback — routing it through `model_method`/`call_method` instead would build the `args=[...]` shape this endpoint rejects, burning ~6 extra HTTP attempts per nonexistent model. Only a real `403`/`404` counts as a definitive "no"; a `429`/`5xx`/timeout must read as "unknown" (default open), or a rate limit hit while probing silently disables a module that was actually fine.
+- On saas-19.4, `POST /json/2/call/<model>/<method>` and `POST /json/2/call_kw/<model>/<method>` are **not real routes at all** — they 404 with `"Did you mean POST /json/2/<model>/<method>?"` regardless of authentication, even with a fully valid API key (confirmed live: the direct `/<model>/<method>` form 401s on a bad key, while `/call/...` and `/call_kw/...` 404 unconditionally, before Odoo's own auth check even runs). Only the direct form is a live route on this instance; the other two in the fallback chain exist for instances where they might be.
 - Odoo refuses `unlink` on a lot of what a full run creates: posted `account.move` and every `res.partner`/`product.product` it references ("restricted audit trail"), confirmed `sale.order` ("must first cancel it"), invoiced `account.analytic.line`, `stock.quant` (no delete group for the API user), `project.task.type` still referenced by tasks. Cancel first where Odoo names it (`sale.order.action_cancel`, `account.move.button_draft`+`button_cancel`); expect the rest to stay.
 - **Groq retires models without notice.** `llama-3.3-70b-versatile` 404s as of 2026-08-28; the repo default is now `qwen/qwen3.8-27b`. `openai/gpt-oss-120b` pings fine but truncates the JSON responses `fetch_name_suggestions` needs, so a working ping is not proof a model is usable.
 - The live SaaS instance **rate-limits with HTTP 429**: sustained write rate is about **1 req/s**, with a token bucket absorbing a burst on top (~150 requests in ~15s measured 2026-08-28), answered by a bare HTML 429 with no `Retry-After`. This is *the* reason the codebase batches everywhere — `create_batch`, D3, test Pattern 8. **Never answer a 429 by retrying inside a loop that should have been one batched call.** `odoo_client._send` adds a bounded exponential backoff (5 attempts, `Retry-After` honoured when sent) as the safety net for the calls batching cannot remove; without it every module after the ceiling fails with `429 Client Error` in a way that reads like a code defect. Space heavy runs out before blaming the code.
@@ -408,8 +410,46 @@ Aufstellung abgedeckt.
 Idempotenz-Prüfung zählte Root-Handler und testete damit genau das ersetzte Design).
 Live-Integration um `tests/integration/test_run_journal.py` erweitert.
 
-Nächster Sprint: offen. Backlog-Kandidaten: R6 (Multi-Country), R7 (JSON-Demo-Plan),
-S5 Tier 2, Provenienz-Invariante (§R9), `mrp.py`s `ctx.company_ids`-Bug.
+Sprint S10 (2026-08-29) — **Phase A abgeschlossen, Phase B offen**, Live-Testphase-Feedback
+(neues Roadmap-Item **R10**). Plan zweimal peer-reviewed (fremder Opus-Agent, Plan+Live-Repo,
+keine Konversationshistorie — gleiches Verfahren wie S5–S8; 10 Blocker + 11 Should-fix-Befunde
+vor Umsetzung eingearbeitet). Vollständiger Statusblock in `IMPLEMENTIERUNGSPLAN.md`s
+R10-Abschnitt; Kurzfassung hier:
+
+`odoo_client.py` 🔒 — Fehleraufzeichnung wandert von `_post` in einen `_record_failure`-
+Frame-Stack, der die öffentlichen Methoden umschließt: ein `errors`-Eintrag pro gescheiterter
+*logischer Operation* statt einer pro HTTP-Versuch (die Kettenreihenfolge selbst bleibt
+unverändert — siehe die zwei neuen Gotchas oben zu `has_access` und `/call/`+`/call_kw/`).
+Neue `has_create_access(model)`-Methode. F8 (Payload-Form merken) bewusst **nicht** gebaut —
+hätte die 🔒-Kettenreihenfolge geändert, Nutzen unbelegt; siehe R10-Statusblock.
+`odoo_actions.py` — `probe_model_access`/`MODEL_ACCESS_PROBES`/`PRIMARY_MODEL_PER_MODULE`,
+`get_enabled_features`s `mrp_routings`/`quality` jetzt `has_create_access`-gestützt,
+`check_field_compatibility` auf `installed_modules` gegatet (spart die Mehrheit der
+Connect-Anfragen). `run_config.py` — `effective_installed_modules()` filtert
+`ctx.installed_modules` auf schreibbare Module, eine Funktion für Server und Frontend;
+`GATE_ONLY_MODULES` (`hr_holidays`/`hr_work_entry` — probiert, beschriftet, nie eine
+Fortschrittszeile). `modules/hr.py`s `create_leave_data` und `modules/documents.py`s
+`create_documents` gaten zusätzlich auf `ctx.model_access`; `modules/mrp.py`s
+`ctx.company_ids`-Bug (Backlog seit S8) gefixt — `get_main_company_id(client)` statt
+`ctx.company_ids[0]`. `config.py` 🔒 additiv: `RunContext.model_access`/`skipped_modules`.
+`web/jobs.py` neuer Modulstatus `MODULE_SKIPPED` (additiv). Frontend: neuer Checklistenschritt
+„Schreibrechte", Modul-Karten zeigen „keine Schreibrechte" getrennt von „nicht installiert".
+
+**Live bestätigt (2026-08-29, `demo-test5`, mit frischem API-Schlüssel nach zwischenzeitlichem
+Ablauf des vorherigen):** `hr_holidays`/`hr_work_entry` sind auf dieser Instanz tatsächlich
+`state=uninstalled` — genau der Fall, den F6 vermutete. Die neue Sonde/das neue Gate greifen
+korrekt: `tests/integration/test_hr.py`s Urlaubs-Schritte melden sauber SKIP statt eines
+404-Fehlschlags (die Datei rief die low-level Helfer bisher ungegatet auf und musste dafür
+selbst ein `ctx.installed_modules`-Gate bekommen). 294/294 Unit-, 71/76 Live-Integrationsschritte
+grün — die verbleibenden 5 sind ein vorbestehender, unabhängiger Bug (`hr.job.payment_interval`
+existiert auf dieser Instanz nicht, `modules/recruiting.py` unverändert seit vor S10; als eigene
+Aufgabe ausgelagert, nicht Teil von S10).
+
+Phase B (F1–F5: Datenbankfeld weg, Weiter-Gate, Ansicht „Prüfen" streichen, Einstiegs-Tutorial,
+PDF-Varianten) noch **nicht** umgesetzt — braucht vor Beginn eine eigene Peer-Review (siehe Plan).
+
+Nächster Sprint (nach S10-Abschluss): offen. Backlog-Kandidaten: R6 (Multi-Country),
+R7 (JSON-Demo-Plan), S5 Tier 2, Provenienz-Invariante (§R9), F8 (Payload-Form merken, siehe oben).
 
 **Prozess-Hinweis (2026-08-04):** Dieser Abschnitt lag zeitweise eine ganze Session hinter dem
 tatsächlichen Code-Stand zurück — D1/D2/D3/B11/B14/B15 waren bereits implementiert und getestet,

@@ -20,7 +20,7 @@ from fallback_data import FALLBACK_CV_BULLETS
 from modules import documents
 
 
-def _make_ctx(documents_sel=None, bill_ids=None, applicant_ids=None):
+def _make_ctx(documents_sel=None, bill_ids=None, applicant_ids=None, model_access=None):
     criteria = DemoCriteria(
         mode="both", industry="IT", num_companies=0,
         num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
@@ -30,6 +30,7 @@ def _make_ctx(documents_sel=None, bill_ids=None, applicant_ids=None):
         criteria=criteria,
         module_selections=ModuleSelections(documents=documents_sel if documents_sel is not None else {}),
         industry="IT", language_name="German", language_code="de", gemini_model_name="test",
+        model_access=model_access if model_access is not None else {},
     )
     ctx.bill_ids = bill_ids or []
     ctx.applicant_ids = applicant_ids or []
@@ -234,6 +235,44 @@ def run():
         ))
     except (AssertionError, Exception) as e:
         results.append(("_create_cv_pdfs: gemini=None and gemini returning None -> fallback bullets, no crash (Pattern 2)", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # S10/R10 (Pattern 3): model_access={'ir.attachment': False} must block
+    # create_documents entirely — "documents" is a pseudo-module with no
+    # ir.module.module entry (orchestrator.py hardcodes is_installed=True),
+    # so this write-access probe is its only real precondition. Must also
+    # mark ctx.skipped_modules so the progress row can read "übersprungen"
+    # instead of "fertig" (web/jobs.py has no other way to tell the two apart,
+    # since on_done(ok=True) already fired by the time this matters).
+    # ------------------------------------------------------------------
+    try:
+        client = _mock_client()
+        ctx = _make_ctx(
+            documents_sel={"bill_pdfs_enabled": True, "cv_pdfs_enabled": True},
+            bill_ids=[1], applicant_ids=[2],
+            model_access={"ir.attachment": False},
+        )
+        documents.create_documents(client, gemini=None, ctx=ctx)
+        client.create_batch.assert_not_called()
+        client.search_read.assert_not_called()
+        assert "documents" in ctx.skipped_modules, ctx.skipped_modules
+        results.append(("create_documents: model_access blocks ir.attachment -> no calls, marked skipped (Pattern 3)",
+                        True, ""))
+    except AssertionError as e:
+        results.append(("create_documents: model_access blocks ir.attachment -> no calls, marked skipped (Pattern 3)",
+                        False, str(e)))
+
+    try:
+        # The converse — an EMPTY model_access (never probed) must default
+        # open (B1 guard), same as everywhere else this dict is read.
+        client = _mock_client()
+        ctx = _make_ctx(documents_sel={"bill_pdfs_enabled": False, "cv_pdfs_enabled": False},
+                        model_access={})
+        documents.create_documents(client, gemini=None, ctx=ctx)
+        assert "documents" not in ctx.skipped_modules, ctx.skipped_modules
+        results.append(("create_documents: empty model_access defaults open, not marked skipped (B1 guard)", True, ""))
+    except AssertionError as e:
+        results.append(("create_documents: empty model_access defaults open, not marked skipped (B1 guard)", False, str(e)))
 
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results

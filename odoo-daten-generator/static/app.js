@@ -214,11 +214,18 @@
     return span;
   }
 
-  function buildCard(def, installed) {
+  function buildCard(def, installed, blocked) {
     // "documents" is not an Odoo module: it writes ir.attachment records, which
-    // are core, so it is never gated on the installed set.
+    // are core, so it is never gated on the installed set (but it CAN still be
+    // in `blocked` — S10/R10 — if this API key can't write ir.attachment).
     var isPseudo = def.key === "documents";
-    var disabled = !isPseudo && installed.indexOf(def.key) === -1;
+    var notInstalled = !isPseudo && installed.indexOf(def.key) === -1;
+    // S10/R10: a module can be installed and still unusable — the server
+    // already decided this (run_config.effective_installed_modules, the same
+    // function a run itself uses), so this renders that decision rather than
+    // re-deriving it from installed/feature_flags on its own.
+    var isBlocked = !notInstalled && blocked && blocked.indexOf(def.key) !== -1;
+    var disabled = notInstalled || isBlocked;
 
     var cardEl = el("div", "m-card" + (disabled ? " disabled" : "") + (def.span2 ? " span2" : ""));
     var head = el("div", "m-head");
@@ -238,9 +245,12 @@
     head.appendChild(sw);
     cardEl.appendChild(head);
 
-    if (disabled) {
+    if (notInstalled) {
       cardEl.appendChild(el("div", "m-note",
         "Nicht installiert in dieser Odoo-Instanz — die Karte bleibt sichtbar, damit erkennbar ist, was fehlt."));
+    } else if (isBlocked) {
+      cardEl.appendChild(el("div", "m-note",
+        "Installiert, aber dieser API-Schlüssel hat keine Schreibrechte dafür — siehe Schritt „Schreibrechte“ in Verbindung."));
     } else if (def.note) {
       cardEl.appendChild(el("div", "m-note", def.note));
     }
@@ -470,11 +480,11 @@
     },
   ];
 
-  function renderModuleGrid(installed) {
+  function renderModuleGrid(installed, blocked) {
     var gridEl = $("module-grid");
     clear(gridEl);
     MODULE_DEFS.forEach(function (def) {
-      gridEl.appendChild(buildCard(def, installed));
+      gridEl.appendChild(buildCard(def, installed, blocked || []));
     });
     updateFuture();
     updateConfigSummary();
@@ -760,7 +770,7 @@
       "(" + (data.existing_companies || 0) + " Kunden, " + (data.existing_products || 0) + " Produkte gefunden)");
     state.consent = null;
     updateConsentUi();
-    renderModuleGrid(data.installed_modules || []);
+    renderModuleGrid(data.installed_modules || [], data.blocked_modules || []);
   }
 
   // -------------------------------------------------------------- preflight
@@ -832,6 +842,10 @@
     if (status === "running") return "Läuft…";
     if (status === "done") return "Fertig";
     if (status === "failed") return "Fehler";
+    // S10/R10: set only after the fact, once orchestrator.run() has returned
+    // and ctx.skipped_modules says a module did nothing despite on_done(ok=true) —
+    // e.g. "documents" with no write access on ir.attachment.
+    if (status === "skipped") return "Übersprungen (keine Rechte)";
     return "Ausstehend";
   }
 

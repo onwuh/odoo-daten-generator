@@ -811,6 +811,79 @@ für mind. einen "Hero"-Datensatz pro Lauf nutzen statt der unabhängigen Zufall
 `create_project_data`), (c) ggf. Timesheet→Task→Order-Linie für Delivered-Qty-Invoicing.
 Nicht Teil von S3/S4 — eigene Aufwandsschätzung vor Einplanung nötig.
 
+
+### R10 🟠 Live-Testphase-Feedback (Sprint S10 — Phase A ✅ 2026-08-29, Phase B offen)
+
+Erste Live-Testphase der S9-Webkonsole auf `demo-test5`. Neun Feedbacks (F1–F9), gesammelt
+vor jeder Umsetzung. Vollständiger Plan mit Umsetzungsdetail:
+`/Users/paul/.claude/plans/moonlit-napping-whale.md`.
+
+**Phase A — Korrektheit** (peer-reviewed durch fremden Opus-Agenten, nur Plantext +
+Live-Repo, kein Konversationskontext — Verfahren wie S5–S8; 10 Blocker + 11
+Should-fix-Befunde eingearbeitet):
+
+- **F6 / WP1 — Zugriffsproben auf die richtige Operation.** `get_enabled_features` prüft
+  *Lesbarkeit*, die Module machen aber `create`; auf `demo-test5` meldete die Sonde
+  `mrp_routings = True` trotz ausgeschaltetem Einstellungshaken, der Lauf startete und
+  scheiterte garantiert. Neu: `POST /json/2/<model>/has_access {"ids": [], "operation":
+  "create"}` (live verifiziert; `check_access_rights` existiert nicht mehr, `operation` muss
+  benannter Payload-Schlüssel sein, `args=[…]` scheitert). Ein Aufruf deckt drei heute
+  getrennt behandelte Fälle ab: Modul nicht installiert · Einstellungshaken aus · Benutzer
+  ohne Rechtegruppe. **Nur eine eindeutige Antwort ergibt `False`** — 429/5xx/Timeout →
+  `True` plus WARNING, sonst schaltet ein Rate-Limit während der Sondierung ganze Module
+  still ab (B1-Fehlerklasse durch die eigene Korrektur wieder eingeführt).
+  Zweiter, unabhängiger Teil: `hr.leave`/`hr.work.entry.type` stammen aus
+  `hr_holidays`/`hr_work_entry`, nicht aus `hr` — bisher ohne jede Sonde, Ursache der
+  Live-Fehler [9]–[14].
+- **F7 / WP2 — Fehlerbericht entrauschen.** 8 von 14 gemeldeten Fehlern waren keine: die
+  Fallback-Kette probiert 3 Pfadformen × 2 Schrägstrich-Varianten, jeder echte Fehler
+  erschien ~6×, geplante 404-Abtastungen als eigene Fehler. Künftig ein Eintrag pro
+  gescheiterter *logischer Operation*, mit der ersten strukturierten Odoo-Meldung statt des
+  letzten, nichtssagenden 422.
+- **F8 — Payload-Form merken: zurückgestellt, erst messen.** Die Review zeigte, dass ein
+  Memo die 🔒-gesperrte Kettenreihenfolge ändern müsste und der Nutzen unbelegt ist (auf dem
+  Erfolgspfad gewinnt bereits das erste Kettenglied). Die belegte Verschwendung liegt in
+  `check_field_compatibility`: 17 Modelle, 6 POSTs je nicht installiertem Modell — wird in
+  S10 gegated. WP2 liefert den Versuchszähler als Messgrundlage.
+- **F9 / WP3 — `mrp.py`s `ctx.company_ids`-Bug** (`:282`, `:334`) vorgezogen, weil WP1
+  dieselbe Datei anfasst. Nicht „zwei Zeilen": mit einer echten `res.company`-ID liefert
+  `get_manufacturing_picking_type_id` erstmals wieder einen Wert, wodurch `mrp.py:339-394`
+  nach längerer Zeit wieder live läuft — neue Live-Befunde einplanen.
+
+**Phase A — Status: ✅ abgeschlossen (2026-08-29).** Alle WP1–WP3 umgesetzt exakt wie oben
+und im vollen Plan detailliert; 294/294 Unit-Schritte grün (von 237). Live-Integrationslauf
+gegen `demo-test5` bestätigte das Kernproblem live: `hr_holidays`/`hr_work_entry` stehen dort
+tatsächlich auf `state=uninstalled` — genau der von F6 vermutete Fall. Die neue Sonde/das neue
+Gate reagieren korrekt (sauberer Skip statt 404), einzig `tests/integration/test_hr.py` rief
+die low-level Urlaubs-Helfer bisher ungegatet auf und musste selbst ein
+`ctx.installed_modules`-Gate bekommen (nicht im ursprünglichen Plan vorgesehen, live entdeckt).
+71/76 Live-Integrationsschritte grün; die verbleibenden 5 sind ein **vorbestehender, von S10
+unabhängiger** Bug — `hr.job.payment_interval` existiert auf `demo-test5` nicht,
+`modules/recruiting.py` wurde in S10 nicht angefasst — als eigene Aufgabe ausgelagert
+(siehe CLAUDE.md, Abschnitt „Verified field gotchas" für den Befund; Fix nicht Teil von S10).
+Details, Live-Diagnose und die neuen `has_access`/`/call/`-Erkenntnisse: CLAUDE.md Sprint-S10-
+Block und „Odoo API Conventions".
+
+**Phase B — Bedienung** (noch nicht peer-reviewed, Review vor Phase-B-Beginn):
+
+- **F2 / WP4** — Datenbankname entfällt als Eingabefeld; auf SaaS ist er immer das erste
+  Host-Label (live bestätigt: `demo-test5.odoo.com` ↔ `demo-test5`), und Guard A lässt
+  ohnehin nur `demo-*.odoo.com` zu.
+- **F3 + F5 / WP5** — „Weiter zur Konfiguration" erst sichtbar, wenn alle Prüfschritte grün
+  sind (inkl. Sperre der Navigationsleiste); Ansicht 03 „Prüfen" entfällt, ihre
+  Zusammenfassung wandert in die Konfigurations-Fußzeile. `POST /api/preflight` bleibt
+  (reine Arithmetik, null Odoo-I/O). Voraussetzung dafür in Phase A: der Versionsschritt
+  wird auf nicht-fatal umklassifiziert, sonst sackgassiert eine unparsbare Versionsangabe
+  die gesamte Oberfläche.
+- **F1 / WP6** — Einstiegs-Tutorial („Zum ersten Mal hier?") als Overlay über Ansicht 01,
+  mit dem Weg zum Odoo-API-Schlüssel.
+- **F4 / WP7** — Eingangsrechnungs-PDFs mit ~5 Layout-Varianten (Kernschriften, kein
+  eingebettetes Unicode-Font-Asset), deterministisch je Lieferant über `zlib.crc32` —
+  **nicht** `hash()`, das ist pro Prozess randomisiert.
+
+Offen und ausdrücklich nicht in S10: R6, R7, S5 Tier 2, Provenienz-Invariante als
+CI-Prüfung, F8 (siehe oben).
+
 ---
 
 ## 5. Umsetzungsreihenfolge
@@ -829,6 +902,7 @@ Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-
 | **S7 — Prozessketten-Kontinuität (R8)** ✅ | Universelles Service-Produkt-Tagging, billable-lines-first Zeiterfassung, Wizard-basierte Fakturierung, `orchestrator.py`-Reorder 🔒 (2026-08-05) | Umnummeriert von "S7 = Purchase+Inventory" — Prozessketten-Kontinuität ist Voraussetzung, nicht parallel; siehe R8-Statusblock oben für Details, Peer-Review-Verlauf (2× fremder Opus-Agent, Plan+Repo-Kontext) und den Hero→Universal-Kurswechsel |
 | **S8 — Purchase + Inventory (R2, R3)** ✅ | `modules/purchase.py`, `modules/inventory.py` (neu), `odoo_actions.py`-Erweiterung, `orchestrator.py`-Anhang 🔒 (2026-08-28) | War ursprünglich S7; siehe R2/R3-Statusblöcke oben für Details, zwei Peer-Review-Durchläufe (Plan-Agent + fremder Cold-Review-Agent, gleiches Verfahren wie S5-S7) und live gefundene Bugs (`ctx.company_ids`-Namenskollision, `action_create_invoice`s fehlendes `invoice_date`) |
 | **S9 — Webserver-Deployment (R9)** ✅ | `web/` (FastAPI, Guards, Session, Queue, SSE), `connect_service.py`/`run_config.py` (D4), `run_journal.py` (D7), `static/` (index/app.js/app.css), Docker-Compose, `gui.py` gelöscht (2026-08-28) | Ersetzt den Aufrufer, nicht die Pipeline — `orchestrator.py` bleibt unberührt (kein `mode`-Parameter, 🔒 nicht angefasst). Siehe R9-Statusblock oben für den gestrichenen Vorschau-Umfang, die korrigierte LLM-Invariante und die fünf live gefundenen Punkte |
+| **S10 — Live-Testphase-Feedback (R10)** 🔄 | **Phase A ✅** (2026-08-29): `has_access`-Zugriffsproben (F6), Fehlerbericht-Entrauschung (F7) 🔒, `mrp.py`-`company_ids`-Fix (F9) — 294/294 Unit-, 71/76 Live-Integrationsschritte grün. Phase B offen: DB-Name aus URL (F2), Weiter-Gate + Ansicht 03 streichen (F3/F5), Einstiegs-Tutorial (F1), PDF-Varianten (F4) | Feedback aus dem ersten echten Gebrauch. Phase A ist peer-reviewed (10 Blocker eingearbeitet) und live verifiziert — die 5 verbleibenden Live-Fehlschläge sind ein vorbestehender, unabhängiger `hr.job`-Feldbug (ausgelagert). Phase B braucht die Review noch. F8 (Payload-Form-Memo) zurückgestellt — 🔒-Berührung ohne belegten Nutzen, siehe R10-Statusblock |
 
 **Pro Arbeitspaket verbindlich** (aus CLAUDE.md Testing Design Patterns):
 - Empty-Pool-Guards (P1) für jede neue `random.choice/sample`-Stelle
