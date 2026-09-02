@@ -329,6 +329,13 @@
         tag.id = "crm-future-tag";
         actSub.appendChild(tag);
         body.appendChild(actSub);
+
+        body.appendChild(checkLine("crm-lost-toggle", "Verlorene Opportunities markieren", "", false));
+        var lostSub = el("div", "sub-block");
+        lostSub.appendChild(slider("crm-lost-pct", "Anteil verloren %", 20, 0, 100));
+        lostSub.appendChild(el("div", "field-hint",
+          "Wirkt nur auf Opportunities ohne verknüpften Auftrag — läuft nach dem Verkauf-Schritt."));
+        body.appendChild(lostSub);
       },
       collect: function () {
         var block = { enabled: true, count: intVal("crm-opp", 0), leads: intVal("crm-leads", 0) };
@@ -346,6 +353,9 @@
             past_pct: intVal("crm-past", 30),
             today_pct: intVal("crm-today", 20),
           };
+        }
+        if (checked("crm-lost-toggle")) {
+          block.lost = { enabled: true, pct: intVal("crm-lost-pct", 20) };
         }
         return block;
       },

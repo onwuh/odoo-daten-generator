@@ -232,6 +232,16 @@ def build_selections(payload: Dict[str, Any]) -> Tuple[ModuleSelections, Set[str
             today = min(_as_pct(activities.get("today_pct"), "crm.activities.today_pct", 20),
                         100 - past)
             sel.crm_activities = {"enabled": True, "past_pct": past, "today_pct": today}
+        # R11: crm_lost only settable when crm itself is enabled — a crm.py
+        # sub-feature (like chatter/activities above), not its own module.
+        # Set here, inside `if _enabled(crm)`, so "CRM installed but not
+        # selected" can never leave crm_lost active with an empty
+        # ctx.opportunity_ids (modules/crm.py's mark_lost_opportunities also
+        # guards this independently, but this is the cleaner place to
+        # prevent it).
+        lost = _as_dict(crm.get("lost"), "crm.lost")
+        if _enabled(lost):
+            sel.crm_lost = {"pct": _as_pct(lost.get("pct"), "crm.lost.pct", 20)}
 
     sale = _as_dict(modules.get("sale"), "modules.sale")
     if _enabled(sale):
@@ -464,6 +474,11 @@ def estimate_record_counts(ctx: RunContext, selected: Set[str]) -> Dict[str, int
             counts["Chatter-Nachrichten"] = sel.crm * int(sel.crm_chatter.get("messages_per_opp", 0))
         if sel.crm_activities:
             counts["Aktivitäten"] = sel.crm
+        if sel.crm_lost:
+            # Upper bound, not exact: the actual share is applied only to
+            # opportunities sale.py leaves unlinked, which this arithmetic
+            # pre-flight can't know ahead of the run.
+            counts["Verlorene Opportunities (max.)"] = round(sel.crm * sel.crm_lost.get("pct", 0) / 100)
     if "sale" in selected and sel.sale:
         counts["Aufträge"] = sel.sale
     if "account" in selected:

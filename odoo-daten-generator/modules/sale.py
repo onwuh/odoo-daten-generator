@@ -92,6 +92,14 @@ def create_sale_data(client, gemini, ctx: RunContext) -> None:
             if candidates:
                 opp_id = candidates.pop(0)  # round-robin: each opportunity linked at most once
                 link_order_to_opportunity(client, oid, opp_id)
+                # R11: mark_lost_opportunities (crm.py, runs later) reads this
+                # to find opportunities NOT linked here. Only appended on a
+                # successful call above — if the whole function raises
+                # mid-loop, some already-linked opportunities may be missing
+                # from this list (swallowed by orchestrator._run_module),
+                # making them eligible for "lost" too; low-probability, not
+                # guarded against.
+                ctx.linked_opportunity_ids.append(opp_id)
             # else: no opportunity for this order's partner — leave unlinked
             # rather than linking it to an unrelated customer's opportunity.
 

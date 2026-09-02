@@ -443,7 +443,7 @@ FIELD_COMPAT_WHITELIST: Dict[str, Tuple[Optional[str], List[str]]] = {
                         'invoice_policy', 'is_storable', 'service_tracking', 'service_type',
                         'standard_price', 'tracking', 'barcode']),
     'crm.lead': ('crm', ['type', 'partner_id', 'name', 'date_deadline', 'expected_revenue',
-                 'stage_id', 'user_id']),
+                 'stage_id', 'user_id', 'active', 'probability', 'lost_reason_id']),
     'mail.activity': (None, ['res_id', 'res_model_id', 'activity_type_id', 'date_deadline', 'summary']),
     'sale.order': ('sale', ['partner_id', 'opportunity_id', 'order_line']),
     'account.move': ('account', ['move_type', 'partner_id', 'invoice_line_ids', 'invoice_date', 'ref']),

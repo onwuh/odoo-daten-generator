@@ -28,7 +28,8 @@ _FULL = {
     "modules": {
         "crm": {"enabled": True, "count": 6, "leads": 2,
                 "chatter": {"enabled": True, "style": "full_email", "messages_per_opp": 5},
-                "activities": {"enabled": True, "past_pct": 40, "today_pct": 30}},
+                "activities": {"enabled": True, "past_pct": 40, "today_pct": 30},
+                "lost": {"enabled": True, "pct": 25}},
         "sale": {"enabled": True, "count": 7, "confirm_pct": 80},
         "account": {"enabled": True, "count": 5, "bills": 3, "bank_transactions": True},
         "hr": {"enabled": True, "count": 9,
@@ -109,6 +110,7 @@ def run():
         assert sel.crm_chatter == {"enabled": True, "style": "full_email",
                                    "messages_per_opp": 5, "use_db_names": True}, sel.crm_chatter
         assert sel.crm_activities == {"enabled": True, "past_pct": 40, "today_pct": 30}
+        assert sel.crm_lost == {"pct": 25}, sel.crm_lost
         assert sel.sale == 7 and sel.sale_confirm_pct == 80
         assert sel.account == 5 and sel.account_bills == 3 and sel.create_bank_transactions is True
         assert sel.hr == 9 and sel.hr_timeoff["validate_pct"] == 90
@@ -157,6 +159,23 @@ def run():
         results.append(("Pattern 3: abgeschaltetes Modul erzeugt keine Auswahl", True, ""))
     except Exception as e:
         results.append(("Pattern 3: abgeschaltetes Modul erzeugt keine Auswahl", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # R11: crm_lost only ever settable when crm itself is enabled — sending
+    # modules.crm.lost.enabled=True with modules.crm.enabled=False must not
+    # leak crm_lost into the selection (build_selections never reads "lost"
+    # outside the `if _enabled(crm)` block).
+    # ------------------------------------------------------------------
+    try:
+        payload = dict(_FULL)
+        payload["modules"] = dict(_FULL["modules"])
+        payload["modules"]["crm"] = {"enabled": False, "lost": {"enabled": True, "pct": 90}}
+        ctx, selected = _build(payload)
+        assert "crm" not in selected, selected
+        assert ctx.module_selections.crm_lost == {}, ctx.module_selections.crm_lost
+        results.append(("R11: crm_lost cannot be set while crm itself is disabled", True, ""))
+    except Exception as e:
+        results.append(("R11: crm_lost cannot be set while crm itself is disabled", False, str(e)))
 
     # ------------------------------------------------------------------
     # B10: installed AND selected gates the progress rows
