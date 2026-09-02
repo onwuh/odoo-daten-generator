@@ -43,12 +43,13 @@ _FULL = {
                            "create_skills": True, "num_skill_types": 2, "skills_per_type": 3},
         "purchase": {"enabled": True, "count": 6, "confirm_pct": 55},
         "stock": {"enabled": True, "avg_qty": 42},
+        "hr_expense": {"enabled": True, "count_per_employee": 4, "approved_pct": 60},
         "documents": {"enabled": True, "bill_pdfs": True, "cv_pdfs": False},
     },
 }
 
 _ALL_INSTALLED = {"crm", "sale", "account", "hr", "project", "hr_timesheet",
-                  "mrp", "hr_recruitment", "purchase", "stock"}
+                  "mrp", "hr_recruitment", "purchase", "stock", "hr_expense"}
 
 
 def _build(payload, installed=None, flags=None, model_access=None):
@@ -118,6 +119,7 @@ def run():
         assert sel.hr_recruitment["num_candidates"] == 8
         assert sel.purchase == 6 and sel.purchase_confirm_pct == 55
         assert sel.stock == {"avg_qty": 42}, sel.stock
+        assert sel.hr_expense == {"count_per_employee": 4, "approved_pct": 60}, sel.hr_expense
         assert sel.documents == {"bill_pdfs_enabled": True, "cv_pdfs_enabled": False}
         assert selected == _ALL_INSTALLED | {"documents"}, selected
         results.append(("Vollständiges Payload füllt alle ModuleSelections-Felder", True, ""))

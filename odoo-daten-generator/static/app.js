@@ -234,6 +234,7 @@
     recruit: '<rect x="2" y="6" width="12" height="7" rx="1"/><rect x="6" y="3.3" width="4" height="2.7" rx="0.5"/><line x1="2" y1="9.5" x2="14" y2="9.5"/>',
     purchase: '<path d="M2.5 3h2l1.6 7.2h6.3"/><circle cx="6.8" cy="12.6" r="1"/><circle cx="11.6" cy="12.6" r="1"/><path d="M5 5.4h8.5l-1 4H5.9"/>',
     stock: '<rect x="2.4" y="6.6" width="4.6" height="4.6"/><rect x="9" y="6.6" width="4.6" height="4.6"/><rect x="5.7" y="2.2" width="4.6" height="4.4"/>',
+    expense: '<rect x="3" y="4" width="10" height="9" rx="1"/><line x1="3" y1="7" x2="13" y2="7"/><circle cx="8" cy="10.3" r="1.3"/>',
     docs: '<path d="M4.5 2h4l3 3v9h-7V2z"/><path d="M8.5 2v3h3"/><line x1="6" y1="8.3" x2="10.5" y2="8.3"/><line x1="6" y1="10.6" x2="10.5" y2="10.6"/>',
   };
 
@@ -495,6 +496,18 @@
       },
       collect: function () {
         return { enabled: true, avg_qty: intVal("stock-qty", 50) };
+      },
+    },
+    {
+      key: "hr_expense", icon: "expense", title: "Spesen",
+      build: function (body) {
+        body.appendChild(grid([stepper("exp-count", "Spesen je Mitarbeiter", "", 3, 0, 50)]));
+        body.appendChild(slider("exp-approved", "Genehmigt %", 70, 0, 100));
+        body.appendChild(el("div", "field-hint",
+          "Braucht Mitarbeiter (Personal-Modul) — ohne die wird dieser Schritt übersprungen."));
+      },
+      collect: function () {
+        return { enabled: true, count_per_employee: intVal("exp-count", 3), approved_pct: intVal("exp-approved", 70) };
       },
     },
     {

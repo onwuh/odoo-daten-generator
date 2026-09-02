@@ -49,6 +49,12 @@ class ModuleSelections:
     # since ModuleSelections.get(module_code) is getattr(self, module_code) below and the
     # gate is `elif not sel: continue` — a scalar int field named e.g. stock_avg_qty paired
     # with module_code "stock" would look up a nonexistent attribute and always skip silently.
+    hr_expense: dict = field(default_factory=dict)
+    # hr_expense shape: {"count_per_employee": int, "approved_pct": int} (R19).
+    # Field name must be "hr_expense", not "expenses" — matches WANTED_MODULES'
+    # Odoo technical module name and orchestrator.py's module_order key, same
+    # convention as hr_recruitment/hr_timesheet (see run_config.py's own note
+    # on this).
 
     def get(self, key: str, default=None):
         return getattr(self, key, default)

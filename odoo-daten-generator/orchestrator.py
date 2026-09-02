@@ -24,7 +24,10 @@ Module execution order is important:
 11. stock          — stock.quant on-hand seeding (R3); independent of
                       purchase (no shared state), placed after for narrative
                       order (procure → stock) only
-12. documents      — PDF attachments for vendor bills (needs bill_ids) and
+12. hr_expense     — expense records per employee (R19); needs ctx.employee_ids
+                      (hr) only, placed here (not right after hr) so it doesn't
+                      disturb the existing hr→project→timesheet→account chain
+13. documents      — PDF attachments for vendor bills (needs bill_ids) and
                       applicant CVs (needs applicant_ids); always runs last
 """
 
@@ -34,7 +37,7 @@ from config import RunContext
 from llm_service import LLMService
 from odoo_client import OdooJson2Client
 from logging_setup import configure_logging
-from modules import master_data, crm, sale, accounting, hr, project, mrp, recruiting, documents, purchase, inventory
+from modules import master_data, crm, sale, accounting, hr, project, mrp, recruiting, documents, purchase, inventory, expenses
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -75,6 +78,7 @@ def run(client: OdooJson2Client, gemini: LLMService, ctx: RunContext,
         ("hr_recruitment", "hr_recruitment" in ctx.installed_modules,   recruiting.create_recruiting_data),
         ("purchase",       "purchase" in ctx.installed_modules,          purchase.create_purchase_data),
         ("stock",          "stock" in ctx.installed_modules,             inventory.create_inventory_data),
+        ("hr_expense",     "hr_expense" in ctx.installed_modules,        expenses.create_expense_data),
         # "documents" is not a real Odoo-probed module — ir.attachment is core,
         # always available, hence hardcoded True (not gated on installed_modules,
         # which would incorrectly tie this to Odoo's unrelated real "Documents"

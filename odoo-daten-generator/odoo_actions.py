@@ -207,6 +207,7 @@ MODEL_ACCESS_PROBES: Dict[str, List[str]] = {
     "hr_recruitment": ["hr.job", "hr.applicant", "hr.skill.type"],
     "purchase": ["purchase.order"],
     "stock": ["stock.quant"],
+    "hr_expense": ["hr.expense"],
     "documents": ["ir.attachment"],  # always probed (pseudo-module, see run_config)
 }
 
@@ -227,6 +228,7 @@ PRIMARY_MODEL_PER_MODULE: Dict[str, str] = {
     "hr_recruitment": "hr.applicant",
     "purchase": "purchase.order",
     "stock": "stock.quant",
+    "hr_expense": "hr.expense",
 }
 
 
@@ -475,6 +477,8 @@ FIELD_COMPAT_WHITELIST: Dict[str, Tuple[Optional[str], List[str]]] = {
     'mrp.production': ('mrp', ['product_id', 'date_start', 'bom_id', 'product_qty']),
     'mrp.bom': ('mrp', ['product_tmpl_id', 'type', 'product_qty', 'bom_line_ids', 'code', 'product_id']),
     'ir.attachment': (None, ['res_model', 'res_id', 'raw', 'mimetype', 'type', 'name']),
+    'hr.expense': ('hr_expense', ['employee_id', 'product_id', 'name', 'payment_mode',
+                   'total_amount', 'date', 'currency_id', 'approval_state']),
 }
 
 
