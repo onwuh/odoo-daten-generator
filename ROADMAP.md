@@ -28,93 +28,6 @@ Kennzeichnung: 🔴 kritisch · 🟠 hoch · 🟡 mittel · ⚪ niedrig · 🔒 
 - Strukturfehler (fehlende Pflichtfelder, falsche Kontakt-Typen) unmöglich, weil Struktur im Code liegt
 - Reproduzierbarkeit und Testbarkeit steigen (Struktur ist unit-testbar ohne LLM)
 
-### 1.1 Ist-Analyse der LLM-Calls
-
-| Call (`llm_service.py`) | Liefert heute | Bewertung |
-|---|---|---|
-| `fetch_creative_data` (Z. 183) | **Komplette Importstruktur**: Firmen mit voller Adresse, verschachtelte Kontakte (delivery/invoice/contact) mit Adressen, Produkte mit Preisen | ❌ Hauptverstoß gegen die Maxime — umbauen (→ 1.2) |
-| `fetch_recruiting_data` (Z. 272) | Jobtitel ✅, Kandidatennamen ✅, **E-Mails ❌, Telefonnummern ❌**, Skill-Taxonomie ✅ | Teilverstoß: E-Mails/Telefone sind aus Namen ableitbar bzw. rein zufällig generierbar |
-| `fetch_name_suggestions` | Namensbanken (atomar) | ✅ konform |
-| `fetch_job_summaries_batch` | Fließtext-Beschreibungen | ✅ echte Kreativleistung, behalten |
-| `fetch_all_project_stages` | Phasennamen-Sets | ✅ konform |
-| `fetch_workcenter_data` | Stationsnamen + Beschreibung + Operationsnamen | ✅ konform (atomar genug) |
-| `fetch_crm_chatter_messages` | E-Mail-/Notiztexte | ✅ echte Kreativleistung, behalten |
-| `fetch_all_bom_components` | Komponentennamen | ✅ konform |
-| `determine_industry_from_company_name` | Ein Wort | ✅ konform |
-
-### 1.2 Arbeitspaket A1 — `fetch_creative_data` ersetzen 🟠
-
-**Neu:** `fetch_creative_atoms(criteria)` liefert nur noch:
-
-```json
-{
-  "company_names": ["...", "..."],
-  "street_names": ["Industriestraße", "Am Technologiepark", "..."],
-  "product_names": {"services": [...], "consumables": [...], "storables": [...]},
-  "product_descriptions": {"Produktname": "1 Satz Beschreibung"}
-}
-```
-
-(Optional lassen sich `street_names` sogar aus einer statischen Liste ziehen — dann entfällt auch das.)
-
-**Neu:** Modul `data_factory.py` (kein LLM-Zugriff!) baut daraus die Records:
-
-```python
-# data_factory.py — deterministische Record-Assemblierung
-def build_company(name: str, street: str, city_entry: dict) -> dict:
-    """city_entry aus static_data.CITIES: {"city": "Köln", "zip_prefix": "50", "country_code": "DE"}"""
-    return {
-        "name": name,
-        "street": f"{street} {random.randint(1, 199)}",
-        "zip": f"{city_entry['zip_prefix']}{random.randint(100, 999)}",
-        "city": city_entry["city"],
-        "email": _email_from_name(name),          # "info@<slug>.example.com"
-        "phone": _phone_for_country(city_entry),  # "+49 221 ..."
-        "website": f"https://www.{_slug(name)}.example.com",
-        "is_company": True,
-    }
-
-def build_contacts(company: dict, n_delivery, n_invoice, n_other, name_bank) -> list:
-    """Kontaktstruktur ist reine Regel-Logik — heute steht sie als Prosa im Prompt (llm_service.py Z. 193-204)."""
-    ...
-```
-
-**Neu:** `static_data.py` mit konsistenten Stadt/PLZ-Paaren (DACH, ~50 Einträge), Vorwahlen, Straßen-Fallbacks. Wichtig: PLZ muss zur Stadt passen — genau das kann eine statische Tabelle garantieren, das LLM nicht zuverlässig.
-
-**Preise:** vollständig in `data_factory` (die Logik existiert bereits als Fallback in `master_data.py:47-50` — sie wird zur einzigen Quelle).
-
-**Erwartete Ersparnis:** ~70–80 % der Output-Tokens des größten Calls; `_INVALID_PRODUCT_FIELDS`-Filterung und `vals.pop('vat')`-Kaskaden in `master_data.py` entfallen.
-
-**Tests (Pflicht, gem. Testing Design Patterns):**
-- Unit: `build_company` liefert nur valide Felder (Abgleich gegen Whitelist), PLZ passt zum City-Entry
-- Unit: Pattern 2 (LLM `None`/`{}` → Fallback auf statische Namen, kein Crash)
-- Integration: Pattern 4 Read-Back auf `res.partner` (street/zip/city gesetzt)
-
-### 1.3 Arbeitspaket A2 — Recruiting-Prompt verschlanken 🟡
-
-`fetch_recruiting_data`: Felder `candidate_emails` und `candidate_phones` aus dem Prompt entfernen. Stattdessen in `recruiting.py`:
-
-```python
-def _email_from_name(name: str) -> str:
-    slug = re.sub(r'[^a-z0-9]+', '.', name.lower()).strip('.')
-    return f"{slug}@example.com"
-
-def _random_phone_de() -> str:
-    return f"+49 {random.randint(150, 179)} {random.randint(1000000, 9999999)}"
-```
-
-Die Fallback-Auffüllung in `_create_applicants` (Z. 330-335) macht das für Fehlfälle bereits genau so — es wird zur Hauptlogik.
-
-### 1.4 Arbeitspaket A3 — Cache-Konsistenz ⚪
-
-CLAUDE.md-Konvention: "always check cache before LLM call". Heute gecacht: `name_suggestions`, `job_summaries`. Nicht gecacht: `recruiting_data`, `workcenter_data`, `project_stages`, `bom_components`.
-
-- `workcenter_data`, `project_stages`, `bom_components`: cachen (Key: industry + language + Parameter-Hash + `_PROMPT_VERSION`) 🔒 *Seed-Cache-Namenskonvention beachten*
-- `chatter_messages`: bewusst **nicht** cachen (Varianz erwünscht) — als Kommentar im Code dokumentieren
-- `creative_atoms`: Namenslisten cachen, Assemblierung ist eh im Code
-
----
-
 ## 3. Architektur- & Design-Verbesserungen
 
 ### D5 🟡 Typisierte Modul-Configs statt roher Dicts 🔒
@@ -129,11 +42,13 @@ Parameter heißt in allen Modulsignaturen `gemini`, Provider ist primär Groq; `
 
 ### D8 ⚪ Kleinigkeiten
 
-- `test_mrp_live.py` im Wurzelverzeichnis → nach `tests/integration/` verschieben oder löschen
-- `odoo_client._post:46`: `response is not None` ist im `except requests.HTTPError` immer wahr — vereinfachen 🔒
-- `gui.py` Screen 2 nutzt `self.llm._call(...)` (privat) für den Verbindungstest → öffentliche Methode `LLMService.ping()` einführen
-- Provider-Erkennung `llm_key.startswith("gsk_")` (gui.py:383): explizites Dropdown "Groq / Gemini" ist robuster
-- `orchestrator.run`: `fetch_name_suggestions` auch im reinen Stammdaten-Modus ausgeführt — nur laden, wenn Module aktiv sind oder Fallbacks es brauchen
+**Teilstatus, verifiziert 2026-09-02** — 2 von 5 erledigt, 3 offen:
+
+- ⚪ **Offen:** `test_mrp_live.py` steht weiterhin im Wurzelverzeichnis von `odoo-daten-generator/` → nach `tests/integration/` verschieben oder löschen.
+- ✅ **Erledigt (durch Umbau, nicht gezielt):** die ursprüngliche `odoo_client._post:46`-Stelle mit dem immer-wahren `response is not None`-Check existiert so nicht mehr — `odoo_client.py`s Fehlerbehandlung wurde in S9/S10 komplett umgebaut (`_record_failure`-Frame-Stack). Die verbleibenden `response is not None`-Checks (z. B. `create_batch`s HTTPError-Handler, `has_create_access`) sind echte Null-Checks, keine toten Bedingungen mehr.
+- ✅ **Erledigt:** `LLMService.ping()` existiert (`llm_service.py:262`) und wird von `connect_service.py:245` verwendet — ohnehin gegenstandslos, da `gui.py` seit S9 komplett entfernt ist.
+- ⚪ **Offen:** Provider-Erkennung ist weiterhin Prefix-Sniffing — `connect_service.py:126`: `"groq" if llm_key.startswith("gsk_") else "gemini"`. Kein explizites Dropdown/Feld für die Provider-Wahl im Web-Frontend.
+- ⚪ **Offen:** `orchestrator.py:54` — `gemini.fetch_name_suggestions(...)` läuft weiterhin unconditional bei jedem Lauf, außerhalb des `skip_master_data`-Gates (Zeile 46). Lädt Namensbänke auch dann, wenn kein Modul sie braucht.
 
 ---
 
@@ -730,7 +645,7 @@ Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-
 |---|---|---|
 | **S1 — Bugfixes kritisch** ✅ | B1, B2, B3 (+ B16 als Beifang) | Kleine, isolierte Fixes; B1 schaltet verlorene Features frei — abgeschlossen, verifiziert 2026-09-02 (siehe `ROADMAP_ARCHIVE.md`) |
 | **S2 — Datenqualität** ✅ | B4, B5, B6, B9, B12, B13 | Sichtbare Qualität der Demo-Daten; keine Strukturänderungen — abgeschlossen, verifiziert 2026-09-02 (siehe `ROADMAP_ARCHIVE.md`) |
-| **S3 — LLM-Minimalismus** | A1 (`data_factory` + `static_data`), A2, A3 | Kern-Maxime; baut auf stabilem Fundament aus S1/S2 |
+| **S3 — LLM-Minimalismus** ✅ | A1 (`data_factory` + `static_data`), A2, A3 | Kern-Maxime; baut auf stabilem Fundament aus S1/S2 — abgeschlossen, verifiziert 2026-09-02 (siehe `ROADMAP_ARCHIVE.md`) |
 | **S4 — Architektur** ✅ | D1, D2, D3, B11, B14, B15 (2026-08-03/04); B7/B8 GUI-Config-Felder + B10-Architekten-Entscheidung (2026-08-04, Folgesprint) | Callback + Logging + Batching vor weiterem Feature-Ausbau — abgeschlossen |
 | **S5 — API-Versions-Schicht (R5), Tier 1** ✅ | Versions-Erkennung (`get_server_version`), `fields_get`-Warnliste (`check_field_compatibility`) (2026-08-04) | Beide ohne 🔒-Berührung, unabhängig testbar; siehe R5-Statusblock für die Tier-2-Zurückstellungs-Begründung |
 | S5 Tier 2 (zurückgestellt) | `api_versions/*.json`, Client-Adapter (🔒) | Erst mit einem echten, belegten Rename zwischen zwei Live-Versionen — siehe R5 |

@@ -4,6 +4,107 @@ Abgeschlossene Bugs/Design-Punkte/Roadmap-Items aus `ROADMAP.md`, hier archivier
 
 ---
 
+## 1. Leitprinzip: LLM-Minimalismus
+
+### 1.1 Ist-Analyse der LLM-Calls
+
+_(Analyse-Grundlage für A1-A3, alle drei inzwischen umgesetzt — siehe unten.)_
+
+| Call (`llm_service.py`) | Liefert heute | Bewertung |
+|---|---|---|
+| `fetch_creative_data` (Z. 183) | **Komplette Importstruktur**: Firmen mit voller Adresse, verschachtelte Kontakte (delivery/invoice/contact) mit Adressen, Produkte mit Preisen | ❌ Hauptverstoß gegen die Maxime — umbauen (→ 1.2) |
+| `fetch_recruiting_data` (Z. 272) | Jobtitel ✅, Kandidatennamen ✅, **E-Mails ❌, Telefonnummern ❌**, Skill-Taxonomie ✅ | Teilverstoß: E-Mails/Telefone sind aus Namen ableitbar bzw. rein zufällig generierbar |
+| `fetch_name_suggestions` | Namensbanken (atomar) | ✅ konform |
+| `fetch_job_summaries_batch` | Fließtext-Beschreibungen | ✅ echte Kreativleistung, behalten |
+| `fetch_all_project_stages` | Phasennamen-Sets | ✅ konform |
+| `fetch_workcenter_data` | Stationsnamen + Beschreibung + Operationsnamen | ✅ konform (atomar genug) |
+| `fetch_crm_chatter_messages` | E-Mail-/Notiztexte | ✅ echte Kreativleistung, behalten |
+| `fetch_all_bom_components` | Komponentennamen | ✅ konform |
+| `determine_industry_from_company_name` | Ein Wort | ✅ konform |
+
+
+### 1.2 Arbeitspaket A1 — `fetch_creative_data` ersetzen ✅ Erledigt
+
+**Neu:** `fetch_creative_atoms(criteria)` liefert nur noch:
+
+```json
+{
+  "company_names": ["...", "..."],
+  "street_names": ["Industriestraße", "Am Technologiepark", "..."],
+  "product_names": {"services": [...], "consumables": [...], "storables": [...]},
+  "product_descriptions": {"Produktname": "1 Satz Beschreibung"}
+}
+```
+
+(Optional lassen sich `street_names` sogar aus einer statischen Liste ziehen — dann entfällt auch das.)
+
+**Neu:** Modul `data_factory.py` (kein LLM-Zugriff!) baut daraus die Records:
+
+```python
+# data_factory.py — deterministische Record-Assemblierung
+def build_company(name: str, street: str, city_entry: dict) -> dict:
+    """city_entry aus static_data.CITIES: {"city": "Köln", "zip_prefix": "50", "country_code": "DE"}"""
+    return {
+        "name": name,
+        "street": f"{street} {random.randint(1, 199)}",
+        "zip": f"{city_entry['zip_prefix']}{random.randint(100, 999)}",
+        "city": city_entry["city"],
+        "email": _email_from_name(name),          # "info@<slug>.example.com"
+        "phone": _phone_for_country(city_entry),  # "+49 221 ..."
+        "website": f"https://www.{_slug(name)}.example.com",
+        "is_company": True,
+    }
+
+def build_contacts(company: dict, n_delivery, n_invoice, n_other, name_bank) -> list:
+    """Kontaktstruktur ist reine Regel-Logik — heute steht sie als Prosa im Prompt (llm_service.py Z. 193-204)."""
+    ...
+```
+
+**Neu:** `static_data.py` mit konsistenten Stadt/PLZ-Paaren (DACH, ~50 Einträge), Vorwahlen, Straßen-Fallbacks. Wichtig: PLZ muss zur Stadt passen — genau das kann eine statische Tabelle garantieren, das LLM nicht zuverlässig.
+
+**Preise:** vollständig in `data_factory` (die Logik existiert bereits als Fallback in `master_data.py:47-50` — sie wird zur einzigen Quelle).
+
+**Erwartete Ersparnis:** ~70–80 % der Output-Tokens des größten Calls; `_INVALID_PRODUCT_FIELDS`-Filterung und `vals.pop('vat')`-Kaskaden in `master_data.py` entfallen.
+
+**Tests (Pflicht, gem. Testing Design Patterns):**
+- Unit: `build_company` liefert nur valide Felder (Abgleich gegen Whitelist), PLZ passt zum City-Entry
+- Unit: Pattern 2 (LLM `None`/`{}` → Fallback auf statische Namen, kein Crash)
+- Integration: Pattern 4 Read-Back auf `res.partner` (street/zip/city gesetzt)
+
+
+**Verifiziert 2026-09-02:** `llm_service.py:266 fetch_creative_atoms` (ersetzt `fetch_creative_data` vollständig), `data_factory.py` (`build_company`/`build_contacts`/`build_products`), `static_data.py`, genutzt von `modules/master_data.py` — behoben.
+
+### 1.3 Arbeitspaket A2 — Recruiting-Prompt verschlanken ✅ Erledigt
+
+`fetch_recruiting_data`: Felder `candidate_emails` und `candidate_phones` aus dem Prompt entfernen. Stattdessen in `recruiting.py`:
+
+```python
+def _email_from_name(name: str) -> str:
+    slug = re.sub(r'[^a-z0-9]+', '.', name.lower()).strip('.')
+    return f"{slug}@example.com"
+
+def _random_phone_de() -> str:
+    return f"+49 {random.randint(150, 179)} {random.randint(1000000, 9999999)}"
+```
+
+Die Fallback-Auffüllung in `_create_applicants` (Z. 330-335) macht das für Fehlfälle bereits genau so — es wird zur Hauptlogik.
+
+
+**Verifiziert 2026-09-02:** `fetch_recruiting_data`-Prompt enthält keine `candidate_emails`/`candidate_phones`-Keys mehr; `modules/recruiting.py` erzeugt beides lokal (`text_utils.email_from_name`, `_random_phone_de`) — behoben.
+
+### 1.4 Arbeitspaket A3 — Cache-Konsistenz ✅ Erledigt
+
+CLAUDE.md-Konvention: "always check cache before LLM call". Heute gecacht: `name_suggestions`, `job_summaries`. Nicht gecacht: `recruiting_data`, `workcenter_data`, `project_stages`, `bom_components`.
+
+- `workcenter_data`, `project_stages`, `bom_components`: cachen (Key: industry + language + Parameter-Hash + `_PROMPT_VERSION`) 🔒 *Seed-Cache-Namenskonvention beachten*
+- `chatter_messages`: bewusst **nicht** cachen (Varianz erwünscht) — als Kommentar im Code dokumentieren
+- `creative_atoms`: Namenslisten cachen, Assemblierung ist eh im Code
+
+---
+
+
+**Verifiziert 2026-09-02:** `workcenter_data`/`project_stages`/`bom_components`/`creative_atoms` laufen alle über `_cached_llm_call`; `fetch_crm_chatter_messages` ist explizit unkgecacht mit Begründungskommentar — behoben.
+
 ## 2. Bugs & Logikfehler
 
 ### B1 ✅ Erledigt — `gui.py:360` — Feature-Flags werden nie erkannt
