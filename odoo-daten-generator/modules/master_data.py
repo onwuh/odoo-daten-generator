@@ -52,6 +52,16 @@ def _create_products(client, atoms: Dict[str, Any], ctx: RunContext) -> None:
         logger.info("-> Keine Produkte zu erstellen.")
         return
 
+    # R16: EAN-13 barcodes, deduped against barcodes already on the target DB
+    # (not just within this run) — a duplicate would fail product.product's
+    # unique constraint and, per odoo_client.create_batch, is outside the
+    # 404/422 fallback window, taking the whole batch down with it.
+    existing = client.search_read(
+        'product.product', [["barcode", "!=", False]], fields=["barcode"], limit=0,
+    )
+    existing_barcodes = {rec["barcode"] for rec in existing if rec.get("barcode")}
+    data_factory.assign_barcodes(all_vals, existing_barcodes)
+
     # R8: tag every service product so Odoo's own automation creates a
     # Project+Task on order confirmation and drives invoicing from delivered
     # (timesheet) quantity — gated on app installation, not per-run selection,

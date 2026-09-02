@@ -6,12 +6,15 @@ ROADMAP.md A1): callers pass in names, this module fills in
 everything structural (addresses, emails, phones, prices) from static_data.py.
 """
 
+import logging
 import random
 import zlib
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import static_data
 import text_utils
+
+logger = logging.getLogger(__name__)
 
 _PRODUCT_TYPE_MAP = {
     'services': {'type': 'service'},
@@ -202,3 +205,35 @@ def build_products(product_names: Dict[str, List[str]], descriptions: Optional[D
                 vals["description"] = descriptions[name]
             all_vals.append(vals)
     return all_vals
+
+
+def _ean13_check_digit(digits12: str) -> str:
+    """Standard EAN-13 check digit: positions 1,3,5.. (1-indexed, odd) weight 1,
+    positions 2,4,6.. weight 3, check = (10 - sum % 10) % 10."""
+    total = sum(int(d) * (1 if i % 2 == 0 else 3) for i, d in enumerate(digits12))
+    return str((10 - total % 10) % 10)
+
+
+def _random_ean13() -> str:
+    digits12 = "".join(str(random.randint(0, 9)) for _ in range(12))
+    return digits12 + _ean13_check_digit(digits12)
+
+
+def assign_barcodes(vals_list: List[dict], existing_barcodes: Set[str], max_attempts: int = 20) -> None:
+    """Mutates each dict in vals_list in place, adding a unique 'barcode' (EAN-13).
+
+    existing_barcodes should be pre-seeded by the caller with barcodes already
+    present in the target Odoo DB (R16: collisions must be avoided across runs,
+    not just within one) — this function also adds every barcode it assigns, so
+    within-run duplicates are impossible too. Pattern 1: an empty vals_list is a
+    no-op.
+    """
+    for vals in vals_list:
+        for _ in range(max_attempts):
+            candidate = _random_ean13()
+            if candidate not in existing_barcodes:
+                existing_barcodes.add(candidate)
+                vals["barcode"] = candidate
+                break
+        else:
+            logger.warning("EAN-13-Kollisionslimit erreicht, überspringe Barcode für ein Produkt.")

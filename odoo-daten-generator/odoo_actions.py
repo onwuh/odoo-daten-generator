@@ -439,7 +439,7 @@ FIELD_COMPAT_WHITELIST: Dict[str, Tuple[Optional[str], List[str]]] = {
                     'country_id', 'parent_id', 'type', 'supplier_rank']),
     'product.product': (None, ['name', 'list_price', 'type', 'sale_ok', 'purchase_ok',
                         'invoice_policy', 'is_storable', 'service_tracking', 'service_type',
-                        'standard_price', 'tracking']),
+                        'standard_price', 'tracking', 'barcode']),
     'crm.lead': ('crm', ['type', 'partner_id', 'name', 'date_deadline', 'expected_revenue',
                  'stage_id', 'user_id']),
     'mail.activity': (None, ['res_id', 'res_model_id', 'activity_type_id', 'date_deadline', 'summary']),

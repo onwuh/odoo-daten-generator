@@ -108,5 +108,49 @@ def run():
     except Exception as e:
         results.append(("Pattern 7: build_company city distribution (n=100)", False, str(e)))
 
+    # ------------------------------------------------------------------
+    # R16 — assign_barcodes: EAN-13 checksum validity + collision dedup
+    # ------------------------------------------------------------------
+
+    def _ean13_valid(code: str) -> bool:
+        if len(code) != 13 or not code.isdigit():
+            return False
+        total = sum(int(d) * (1 if i % 2 == 0 else 3) for i, d in enumerate(code[:12]))
+        return str((10 - total % 10) % 10) == code[12]
+
+    try:
+        random.seed(1)
+        vals_list = [{"name": f"P{i}"} for i in range(200)]
+        existing = set()
+        data_factory.assign_barcodes(vals_list, existing)
+        codes = [v["barcode"] for v in vals_list]
+        assert all(_ean13_valid(c) for c in codes), "invalid EAN-13 checksum found"
+        assert len(set(codes)) == len(codes), "duplicate barcodes within one run"
+        results.append(("R16: assign_barcodes produces valid, unique EAN-13 (n=200)", True, ""))
+    except Exception as e:
+        results.append(("R16: assign_barcodes produces valid, unique EAN-13 (n=200)", False, str(e)))
+
+    try:
+        random.seed(2)
+        vals_list = [{"name": "P1"}]
+        seeded_barcode = "1234567890128"  # valid EAN-13 checksum
+        pre_existing = {seeded_barcode}
+        data_factory.assign_barcodes(vals_list, pre_existing)
+        assigned = vals_list[0]["barcode"]
+        assert assigned != seeded_barcode, "assigned the pre-seeded barcode itself"
+        assert pre_existing == {seeded_barcode, assigned}, "pre-seeded set not extended correctly"
+        results.append(("R16: assign_barcodes respects pre-seeded existing_barcodes", True, ""))
+    except Exception as e:
+        results.append(("R16: assign_barcodes respects pre-seeded existing_barcodes", False, str(e)))
+
+    try:
+        # Pattern 1: empty vals_list is a no-op, no crash.
+        existing = set()
+        data_factory.assign_barcodes([], existing)
+        assert existing == set()
+        results.append(("Pattern 1: assign_barcodes empty vals_list, no crash", True, ""))
+    except Exception as e:
+        results.append(("Pattern 1: assign_barcodes empty vals_list, no crash", False, str(e)))
+
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

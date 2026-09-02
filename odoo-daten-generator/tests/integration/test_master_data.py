@@ -153,5 +153,28 @@ def run(client, ctx):
     except Exception as e:
         results.append(("master_data: R8 — service product tagged for native automation", False, str(e)))
 
+    # Step 7 — R16: products created via _create_products get a unique,
+    # valid EAN-13 barcode, deduped against barcodes already on this DB.
+    try:
+        rctx = _make_rctx()
+        atoms = {"product_names": {"services": ["R16 Testservice A", "R16 Testservice B"]},
+                 "product_descriptions": {}}
+        master_data._create_products(client, atoms, rctx)
+        assert len(rctx.product_ids) == 2, f"expected 2 products, got {len(rctx.product_ids)}"
+        rec = client.search_read(
+            'product.product', [["id", "in", rctx.product_ids]],
+            fields=["barcode"], limit=0,
+        )
+        codes = [r["barcode"] for r in rec]
+        assert all(codes), f"missing barcode on at least one product: {rec}"
+        assert len(set(codes)) == len(codes), f"duplicate barcodes assigned: {codes}"
+        for code in codes:
+            assert len(code) == 13 and code.isdigit(), f"not a 13-digit code: {code!r}"
+            total = sum(int(d) * (1 if i % 2 == 0 else 3) for i, d in enumerate(code[:12]))
+            assert str((10 - total % 10) % 10) == code[12], f"bad EAN-13 checksum: {code!r}"
+        results.append(("master_data: R16 — products get unique, valid EAN-13 barcodes", True, codes))
+    except Exception as e:
+        results.append(("master_data: R16 — products get unique, valid EAN-13 barcodes", False, str(e)))
+
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results
