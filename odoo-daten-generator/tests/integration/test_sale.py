@@ -190,6 +190,11 @@ def run(client, ctx):
                 f"order for partner {order_partner} linked to opp {order_opp}, "
                 f"expected {expected[order_partner]} (cross-partner link — B14 regressed)"
             )
+        # R11: mark_lost_opportunities (crm.py, runs after sale.py) trusts
+        # ctx.linked_opportunity_ids to know which opportunities NOT to
+        # touch — must actually be populated by the real linking code, not
+        # just correct in the sale.order write itself.
+        assert sorted(rctx.linked_opportunity_ids) == sorted([opp_a, opp_b]), rctx.linked_opportunity_ids
         results.append(("sale: create_sale_data links orders to same-partner opportunity (B14)", True, "2/2 matched"))
     except Exception as e:
         results.append(("sale: create_sale_data links orders to same-partner opportunity (B14)", False, str(e)))

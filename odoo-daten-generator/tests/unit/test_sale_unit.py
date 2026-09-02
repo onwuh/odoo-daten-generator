@@ -132,6 +132,12 @@ def run():
         sale.create_sale_data(client, gemini=None, ctx=ctx)
         write_calls = [c for c in client.write.call_args_list if c.args[0] == 'sale.order']
         assert not write_calls, f"B14 regressed: linked mismatched-partner order/opportunity: {write_calls}"
+        # R11: an opportunity that was NOT linked must not show up in
+        # ctx.linked_opportunity_ids — mark_lost_opportunities (crm.py, runs
+        # after sale.py) treats anything missing from this list as eligible
+        # for "lost", so a false entry here would make it permanently
+        # unmarkable-lost.
+        assert ctx.linked_opportunity_ids == [], ctx.linked_opportunity_ids
         results.append(("create_sale_data: no cross-partner order/opportunity link (B14)", True, ""))
     except AssertionError as e:
         results.append(("create_sale_data: no cross-partner order/opportunity link (B14)", False, str(e)))
@@ -157,6 +163,10 @@ def run():
         write_calls = [c for c in client.write.call_args_list if c.args[0] == 'sale.order']
         assert len(write_calls) == 1, f"expected 1 link write, got {len(write_calls)}"
         assert write_calls[0].args[2] == {"opportunity_id": 500}, write_calls[0].args
+        # R11's ctx.linked_opportunity_ids is the ONLY thing that keeps
+        # mark_lost_opportunities from marking a Won-staged opportunity lost
+        # — this is the real production code path, not a hand-set list.
+        assert ctx.linked_opportunity_ids == [500], ctx.linked_opportunity_ids
         results.append(("create_sale_data: same-partner order/opportunity gets linked (B14)", True, ""))
     except AssertionError as e:
         results.append(("create_sale_data: same-partner order/opportunity gets linked (B14)", False, str(e)))

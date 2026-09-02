@@ -30,7 +30,10 @@ def create_expense_data(client, gemini, ctx: RunContext) -> None:
     then submits+approves a configurable share (write(approval_state=...) —
     live-verified S12/WP3, no action method needed)."""
     sel = ctx.module_selections.hr_expense
-    if not sel or not ctx.employee_ids:
+    if not sel:
+        return
+    if not ctx.employee_ids:
+        logger.info("-> Keine Mitarbeiter vorhanden — Expenses übersprungen")
         return
 
     logger.info("\n--- EXPENSES: Erstelle Spesenabrechnungen ---")

@@ -221,6 +221,16 @@ CANCEL_BEFORE_UNLINK = {
     "sale.order": ["action_cancel"],
     "purchase.order": ["button_cancel"],
     "account.move": ["button_draft", "button_cancel"],
+    # hr.expense: approved/posted/paid records reject unlink outright ("Sie
+    # können gebuchte oder genehmigte Spesen nicht löschen") — unlike the
+    # other three models here, this isn't a single-record refusal, it's
+    # fatal for the whole batch: delete_run unlinks one model group in one
+    # call, so ONE approved expense in the group fails deletion for every
+    # expense in it (draft/submitted included), which in turn leaves
+    # hr.employee referenced and blocks employee cleanup too. Live-verified
+    # (S12/WP5): action_reset takes approval_state back to draft, after
+    # which unlink succeeds.
+    "hr.expense": ["action_reset"],
 }
 
 
