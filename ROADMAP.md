@@ -115,6 +115,42 @@ Schlüsselmenge `{run_id, status, modules, api_error_count}` im an `create_githu
 bekommt — und sie muss "das automatische Kontext-Objekt", nicht "das Freitextfeld `message`"
 meinen, das der Nutzer selbst befüllt).
 
+### D10 🟡 Neu (2026-09-02) — Proaktives Rate-Limiting in `odoo_client.py` 🔒
+
+**Herkunft:** während S12/WP1 (Barcode) beobachtet — 3 aufeinanderfolgende volle
+`test_suite.py`-Läufe gegen `demo-test5.odoo.com`, jedes Mal genau 1 Fehlschlag im
+`ODOO_ACTIONS`-Live-Testblock (`tests/integration/test_odoo_actions.py`), aber jeweils eine
+**andere** der beiden "exakt N POSTs"-Assertionen (`has_create_access`s Ein-POST-Check
+einmal, `probe_model_access`s Drei-POST-Check ein anderes Mal) — Muster passt zu
+Netzwerk-Timing, nicht zu einem deterministischen Regressions-Bug. Beide betroffenen
+Assertionen zählen echte `session.post`-Aufrufe; ein zusätzlicher Aufruf entsteht nur, wenn
+`odoo_client._send` (Zeile 225-241) auf einen `429`/`503` mit einem Retry reagiert
+(`_RETRY_STATUSES`, Zeile 41). Die Retry-Logik selbst ist **reaktiv** — sie greift erst,
+nachdem ein Request bereits mit 429 abgelehnt wurde; es gibt aktuell **keinen** proaktiven
+Drosselungspunkt, der verhindert, dass Anfragen überhaupt zu schnell aufeinanderfolgen.
+CLAUDE.md dokumentiert das Instanz-Verhalten selbst: "Demo SaaS instances rate-limit at
+~1 req/s sustained (burst ~150 req), bare HTML 429, no Retry-After" — ein voller Testlauf
+(80+ Live-Schritte, viele mit mehreren API-Calls) feuert deutlich dichter als 1 req/s,
+sobald mehrere Module kurz hintereinander laufen.
+
+**Vorschlag:** ein einfacher proaktiver Drosselpunkt in `odoo_client.py` — z. B. ein
+Mindestabstand (Token-Bucket oder simples "letzter Request war vor < X ms, dann schlafen")
+direkt vor jedem `session.post`-Aufruf in `_send`, konfigurierbar, Default ~1 req/s passend
+zur dokumentierten Instanz-Grenze. Reduziert/eliminiert die 429-Retry-induzierte Flakiness
+bei den exakten POST-Zähl-Assertionen **und** verbessert die Robustheit echter Nutzer-Läufe
+gegen Demo-SaaS-Instanzen allgemein (weniger 429-Fehlschläge im Fehlerbericht, nicht nur in
+Tests) — zwei Nutzen für eine kleine, additive Änderung.
+
+**🔒-Hinweis:** `odoo_client.py` steht auf der "Do Not Touch"-Liste (JSON2-Payload-Format),
+aber diese Änderung berührt nur das Timing vor dem Senden, kein Payload-Format — analog zu
+S10 Phase A, wo `has_create_access`s Zugriffsproben additiv in `odoo_client.py` ergänzt
+wurden, ohne das Payload-Format anzufassen (die eigentlich geschützte Sache). Vor Umsetzung
+trotzdem kurz beim Architekten bestätigen, reiner Formsache-Fall (kein Verhaltensrisiko),
+aber die Datei ist gelistet.
+
+**Komplexität:** Niedrig · **Benefit:** Mittel (Test-Stabilität) + Niedrig-Mittel
+(Produktions-Robustheit) — noch nicht in einen Sprint eingeplant, siehe §5.
+
 ---
 
 ## 4. Weiterentwicklung / Roadmap
