@@ -1,20 +1,19 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code when working with this repository.
+Guidance for Claude Code, this repo.
 
 ## Running the tool
 
-Web application since S9 (`gui.py` is deleted, not kept alongside):
+Web app since S9 (`gui.py` deleted, not kept alongside):
 
 ```bash
 cd odoo-daten-generator && ODOO_GENERATOR_ACCESS_CODE=choose-a-code python3 -m uvicorn web.app:app --host localhost --port 8000
 ```
 
 `--host localhost`, not `--host 127.0.0.1`: `localhost` resolves to both `::1` and
-`127.0.0.1`, and browsers try IPv6 first. An IPv4-only bind therefore looks
-healthy to `curl` (which silently falls back) and dead to Safari.
+`127.0.0.1`, browsers try IPv6 first. IPv4-only bind look healthy to `curl` (silent fallback), dead to Safari.
 
-Or in Docker (`cp .env.example .env` first, fill in the access code):
+Or Docker (`cp .env.example .env` first, fill access code):
 
 ```bash
 cd odoo-daten-generator && docker compose up -d --build
@@ -29,23 +28,23 @@ pip install -r odoo-daten-generator/requirements.txt
 ```
 
 Configure `odoo-daten-generator/config.ini` with Odoo connection defaults.
-API keys via environment variables:
+API keys via env vars:
 - `GROQ_API_KEY` (primary LLM)
 - `GEMINI_API_KEY` (fallback LLM)
 - `ODOO_API_KEY`
-- `GITHUB_TOKEN` (server-only, feedback → GitHub issue creation — no server_config.py fallback, unlike the three above)
+- `GITHUB_TOKEN` (server-only, feedback → GitHub issue creation — no server_config.py fallback, unlike other three)
 
 ## Planning Documents
 
-- **`ROADMAP.md`** (repo root, renamed from `IMPLEMENTIERUNGSPLAN.md` 2026-08-29) — open/planned work only as of 2026-09-02: LLM-minimalism redesign, prioritized bug list (B1–B16), architecture work (D1–D8), roadmap (R1–R20), sprint order (S1–S15, S1–S10 done). Read it before starting any implementation work; reference its item IDs in commits and discussions.
-- **`ROADMAP_ARCHIVE.md`** (repo root) — completed items pulled out of `ROADMAP.md` to keep that file to open work. Same item IDs (B7, D1, R2, …); check here before assuming something is still open.
-- **`odoo-daten-generator/SPRINT_LOG.md`** — full sprint-by-sprint narrative (peer-review process, live-found bugs, test counts per sprint), pulled out of this file's old "Current Sprint" section. Read on demand, not part of the per-session load.
-- **`odoo-daten-generator/ODOO_GOTCHAS.md`** — live-tested Odoo field/behavior quirks, pulled out of "Odoo API Conventions" below. Read before touching any field it covers.
+- **`ROADMAP.md`** (repo root, renamed from `IMPLEMENTIERUNGSPLAN.md` 2026-08-29) — open/planned work only as of 2026-09-02: LLM-minimalism redesign, prioritized bug list (B1–B16), architecture work (D1–D8), roadmap (R1–R20), sprint order (S1–S15, S1–S10 done). Read before any implementation work; reference item IDs in commits/discussions.
+- **`ROADMAP_ARCHIVE.md`** (repo root) — completed items pulled from `ROADMAP.md`, keeps that file open-work-only. Same item IDs (B7, D1, R2, …); check here before assuming something still open.
+- **`odoo-daten-generator/SPRINT_LOG.md`** — full sprint narrative (peer-review process, live-found bugs, test counts per sprint), pulled from this file's old "Current Sprint" section. Read on demand, not part of per-session load.
+- **`odoo-daten-generator/ODOO_GOTCHAS.md`** — live-tested Odoo field/behavior quirks, pulled from "Odoo API Conventions" below. Read before touching any field it covers.
 
 ## Architecture
 
-Generates AI-powered demo data and writes it to Odoo via JSON 2 REST API.
-Single entry point: `web/app.py` (FastAPI; the browser UI in `static/` is a
+Generates AI-powered demo data, writes to Odoo via JSON 2 REST API.
+Single entry point: `web/app.py` (FastAPI; browser UI in `static/` is
 4-view console — Verbindung, Konfiguration, Prüfen, Generierung).
 
 **Core Modules** (all inside `odoo-daten-generator/`):
@@ -61,7 +60,7 @@ Single entry point: `web/app.py` (FastAPI; the browser UI in `static/` is a
 | `connect_service.py` | Connection probe checklist (D4, ex-`gui.py` screen 2) |
 | `run_config.py` | Request payload → `DemoCriteria`/`ModuleSelections`; `WANTED_MODULES` |
 | `run_journal.py` | D7 run markers (`seeds/runs/<run_id>.json`) + best-effort cleanup |
-| `static/` | `index.html` / `app.js` / `app.css` — split apart because CSP forbids inline |
+| `static/` | `index.html` / `app.js` / `app.css` — split apart, CSP forbids inline |
 | `config.py` | Dataclasses: DemoCriteria, ModuleSelections, RunContext |
 | `llm_service.py` | LLMService: Groq (primary) + Gemini (fallback), seed caching |
 | `odoo_client.py` | Low-level HTTP wrapper, JSON2 API, payload-format fallbacks |
@@ -78,33 +77,33 @@ Single entry point: `web/app.py` (FastAPI; the browser UI in `static/` is a
 Execution order (respect dependencies, never change without architect approval):
 Stammdaten → MRP → CRM → Sales → HR → Projects → Timesheets → Accounting → Recruiting
 
-(Reordered 2026-08-05, Sprint S7/R8: Accounting moved from position 5 to position 8 —
-a confirmed service-line's invoiced quantity is delivered-qty-based and computed from
+(Reordered 2026-08-05, Sprint S7/R8: Accounting moved position 5 → 8 —
+confirmed service-line's invoiced quantity delivered-qty-based, computed from
 timesheets that must already exist, which in turn need employees/the order's
 auto-created task to exist first.)
 
-Critical: `ctx.company_ids` and `ctx.product_ids` are the single source of truth for all
-downstream modules. They are seeded by `master_data` + orchestrator fallbacks; when
-`skip_master_data` is set, the caller (GUI) must fill them with existing IDs before
+Critical: `ctx.company_ids` and `ctx.product_ids` single source of truth, all
+downstream modules. Seeded by `master_data` + orchestrator fallbacks; when
+`skip_master_data` set, caller (GUI) must fill them with existing IDs before
 `orchestrator.run()`. `ctx.component_ids` holds purchased parts (MRP) — vendor bills draw
-from it, sale orders never do. `ctx.confirmed_order_ids` (populated by `sale.py`) is also
+from it, sale orders never do. `ctx.confirmed_order_ids` (populated by `sale.py`) also
 read by `project.py`'s `create_timesheet_data` since Sprint S7/R8 (billable order-linked
-tasks claim the timesheet budget first).
+tasks claim timesheet budget first).
 
 ## LLM Layer
 
-- **Leitprinzip (LLM-Minimalismus):** The LLM supplies only *atomic creative tokens* —
+- **Leitprinzip (LLM-Minimalismus):** LLM supplies only *atomic creative tokens* —
   names, street names, text bodies (chatter, job summaries). Never request complete import
-  structures (nested records, addresses, emails, phones, prices, dates). All structure and
-  derivable values are assembled deterministically in code. See ROADMAP.md §1.
+  structures (nested records, addresses, emails, phones, prices, dates). All structure/
+  derivable values assembled deterministically in code. See ROADMAP.md §1.
 - **Primary:** Groq (`llama-3.3-70b-versatile`), OpenAI-compatible endpoint
 - **Fallback:** Google Gemini
 - **Caching:** `seeds/cache/<slug-parts>_<_PROMPT_VERSION>.json` (e.g.
-  `it_dienstleistung_german_name_suggestions_v3.json`). Always check cache before an LLM
+  `it_dienstleistung_german_name_suggestions_v3.json`). Always check cache before LLM
   call. Bump `_PROMPT_VERSION` in `llm_service.py` whenever prompt wording changes —
-  otherwise stale cache masks the new prompt. Chatter messages are deliberately uncached
+  else stale cache masks new prompt. Chatter messages deliberately uncached
   (variance wanted).
-- **Batching:** Never call the LLM once per record in a loop. Always batch: one call → JSON
+- **Batching:** Never call LLM once per record in loop. Always batch: one call → JSON
   array/object (enforced by test Pattern 8).
 - **Format:** All LLM responses expect clean JSON (no markdown fences). `_extract_json`
   strips ```json``` wrappers. Guard every response: `None`, `{}`, `[]` must not crash
@@ -113,47 +112,46 @@ tasks claim the timesheet budget first).
 ## Key Conventions
 
 - UI strings: German. Code/function names/comments: English.
-- Invalid Odoo fields from LLM (`uom`, `vat`, `vat_id`, `detailed_type`) are filtered before API calls.
-- JSON2 API `create` sends `{"vals_list": [values]}` — the one real format, no fallback formats. (Prior versions of this codebase tried `args/kwargs` and `values` as fallbacks; removed — see "JSON2 payload-format fallback chain" below.)
+- Invalid Odoo fields from LLM (`uom`, `vat`, `vat_id`, `detailed_type`) filtered before API calls.
+- JSON2 API `create` sends `{"vals_list": [values]}` — one real format, no fallback. (Prior codebase versions tried `args/kwargs` and `values` as fallbacks; removed — see "JSON2 payload-format fallback chain" below.)
 - Bank transactions: 80% exact-match, 20% with amount/label deviations (reconciliation training).
 - LLM timeouts use `ThreadPoolExecutor` (cross-platform, Windows-compatible).
-- Tests: whenever you add or change behaviour in any module or helper, add or update the corresponding test in `tests/integration/`. Never leave a behaviour change untested.
+- Tests: any behaviour added/changed in module or helper → add/update matching test in `tests/integration/`. Never leave behaviour change untested.
 
 ## Odoo API Conventions (saas-19.4)
 
-- **Client class:** `OdooJson2Client(url, db, api_key)` — there is no `OdooClient`.
-- **Datetime fields:** Always use `datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")`. Odoo rejects microseconds produced by `.isoformat()`.
-- **Confirmation methods:** The JSON/2 API exposes `action_confirm`, not `button_confirm`. Before assuming any method name, verify via the odoo-fields MCP tool or a live test.
+- **Client class:** `OdooJson2Client(url, db, api_key)` — no `OdooClient`.
+- **Datetime fields:** Always `datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")`. Odoo rejects microseconds from `.isoformat()`.
+- **Confirmation methods:** JSON/2 API exposes `action_confirm`, not `button_confirm`. Verify any method name via odoo-fields MCP tool or live test first.
 
-Full live-tested field/behavior gotchas list: `odoo-daten-generator/ODOO_GOTCHAS.md`. Read it before touching any field this list doesn't already cover well.
+Full live-tested field/behavior gotchas list: `odoo-daten-generator/ODOO_GOTCHAS.md`. Read before touching any field not already covered there.
 
 ## Debugging
 
-When fixing bugs, always verify the root cause before implementing a fix. Check for data-related issues (e.g., leftover test data, uniqueness constraints) before assuming code-level problems.
+Fixing bugs: verify root cause before fix. Check data issues (leftover test data, uniqueness constraints) before blaming code.
 
 ## Odoo-Specific Rules
 
-For Odoo development: Always verify field names against the actual Odoo model schema before using them. Do NOT assume fields like `company_type`, `is_company`, `company_id`, or `country` exist — use the MCP field metadata server or read the model definition first. Target version is Odoo saas-19.4 (updated 2026-08-03; live test instance `demo-pahu-test1.odoo.com` confirmed as saas-19.4, was previously assumed 19.2 — some 19.2-era fields, e.g. `hr.leave.allocation.allocation_type`, no longer exist).
+Odoo dev: verify field names against actual Odoo model schema before use. Don't assume fields like `company_type`, `is_company`, `company_id`, `country` exist — use MCP field metadata server or read model definition first. Target: Odoo saas-19.4 (updated 2026-08-03; live test instance `demo-pahu-test1.odoo.com` confirmed saas-19.4, previously assumed 19.2 — some 19.2-era fields, e.g. `hr.leave.allocation.allocation_type`, gone now).
 
 ## Workflow Rules
 
-Do NOT exit plan mode until you have explicit user approval. When a task has multiple parts, implement each part fully before moving to the next — do not produce plan files instead of implementations unless explicitly asked.
+Don't exit plan mode without explicit user approval. Multi-part task: implement each part fully before next — no plan files instead of implementations unless asked.
 
 ## Testing
 
-Always run tests after making code changes, especially in Python files. For Odoo modules, validate by running the relevant test suite before considering a task complete.
+Run tests after every code change, especially Python files. Odoo modules: validate via relevant test suite before calling task done.
 
-After every code change, run the full suite against the live Odoo instance:
+After every code change, run full suite against live Odoo instance:
 
 ```bash
 cd odoo-daten-generator
 python3 tests/integration/test_suite.py   # runs unit suite first, then live integration
 ```
 
-Config: `tests/test_config.ini` (gitignored) is used if present, otherwise `config.ini`.
-A task is only complete once the integration tests pass. Mock-based unit tests (using
-`unittest.mock`) are acceptable for behaviour that cannot be verified without side effects,
-but do not replace live integration tests.
+Config: `tests/test_config.ini` (gitignored) used if present, else `config.ini`.
+Task done only when integration tests pass. Mock-based unit tests (`unittest.mock`) OK
+for behaviour unverifiable without side effects, but don't replace live integration tests.
 
 ## Current Sprint
 <!-- Architect updates this before each Claude Code session -->
@@ -161,18 +159,18 @@ Sprint-für-Sprint-Narrativ (S1-S10, abgeschlossen) ausgelagert nach `odoo-daten
 
 ## Do Not Touch Without Architect Approval
 - Object pipeline execution order in `orchestrator.py`
-- JSON2 API request format in `odoo_client.py` — one format per operation since the payload-format fallback chain was removed (evidence: see "JSON2 payload-format fallback chain" below). Do not reintroduce a speculative path/payload variant without live evidence it's needed.
+- JSON2 API request format in `odoo_client.py` — one format per operation since payload-format fallback chain removed (evidence: see "JSON2 payload-format fallback chain" below). Don't reintroduce speculative path/payload variant without live evidence needed.
 - Config schema (dataclasses in `config.py`)
 - Seed cache file naming convention
 
 ## Testing Design Patterns
 
-These patterns are **mandatory** — any behavior added/changed must include the corresponding test type.
+Patterns **mandatory** — any behavior added/changed must include matching test type.
 
 ### Pattern 1: Empty-Pool Guard
 Any `random.choice(pool)`, `random.sample(pool, k)`, or `pool[i % len(pool)]` call MUST
-have a guard test for `pool=[]`. Test must verify: no exception raised, function returns
-early with a warning print (not silently).
+have guard test for `pool=[]`. Test verify: no exception raised, function returns
+early with warning print (not silent).
 ```python
 # Required unit test shape:
 result = fn_under_test(client=mock, pool=[])
@@ -181,7 +179,7 @@ mock_client.create.assert_not_called()
 ```
 
 ### Pattern 2: LLM None-Response Guard
-Every function that calls LLM (directly or via `gemini.*`) MUST test:
+Every function calling LLM (directly or via `gemini.*`) MUST test:
 - LLM returns `None` → no AttributeError on caller
 - LLM returns `{}` or `[]` → fallback used or step skipped gracefully
 ```python
@@ -190,15 +188,15 @@ mock_gemini.fetch_xyz.return_value = None
 ```
 
 ### Pattern 3: Feature-Flag Skip
-Any code path gated on `feature_flags` or a `ModuleSelections` bool/dict MUST have a test
-asserting that when the flag is False/empty, **no Odoo API calls are made**:
+Any code path gated on `feature_flags` or `ModuleSelections` bool/dict MUST have test
+asserting when flag False/empty, **no Odoo API calls made**:
 ```python
 mock_client.create.assert_not_called()
 mock_client.write.assert_not_called()
 ```
 
 ### Pattern 4: Read-Back Validation
-Every integration test step that creates a record MUST immediately read it back and assert
+Every integration test step creating a record MUST immediately read it back, assert
 at least one non-trivial field (not just `id > 0`). Catches field name errors early.
 ```python
 # Required integration test shape:
@@ -209,7 +207,7 @@ assert rec[0]['field_a'] == expected_value
 ```
 
 ### Pattern 5: Module Skip-on-Missing-Prerequisites
-Every module test MUST include a step that passes empty prerequisite lists and asserts
+Every module test MUST include step passing empty prerequisite lists, assert
 graceful skip (no crash, informative result entry):
 ```python
 ctx.partner_ids = []
@@ -218,7 +216,7 @@ assert any("SKIP" in label for label, _, _ in results)
 ```
 
 ### Pattern 6: Many2one Tuple Unpacking
-After creating any record with a Many2one relation, the read-back test MUST handle both
+After creating record with Many2one relation, read-back test MUST handle both
 `[id, name]` tuple and plain `int` return shapes:
 ```python
 val = rec[0]["partner_id"]
@@ -227,8 +225,8 @@ assert pid == expected_id
 ```
 
 ### Pattern 7: Distribution / Statistical Tests
-For any function that randomizes output across buckets (percentage splits, past/today/future,
-80/20 deviation), use `random.seed(N)` + N>=100 samples and assert **all** buckets non-empty:
+For any function randomizing output across buckets (percentage splits, past/today/future,
+80/20 deviation), use `random.seed(N)` + N>=100 samples, assert **all** buckets non-empty:
 ```python
 random.seed(42)
 results = [fn(past_pct=50, today_pct=20) for _ in range(200)]
@@ -238,7 +236,7 @@ assert any(r > today for r in results), "no future dates"
 ```
 
 ### Pattern 8: Batch LLM Call Enforcement
-For any module that generates multiple records from a single LLM call, assert call count == 1:
+For any module generating multiple records from single LLM call, assert call count == 1:
 ```python
 mock_llm = MagicMock()
 mock_llm.fetch_xyz.return_value = [...]  # N items
