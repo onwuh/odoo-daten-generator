@@ -87,13 +87,7 @@ LLM-Maxime gilt auch hier: LLM liefert nur Textbausteine (Positionstexte, CV-Sti
 
 **Neue Dateien:** `pdf_factory.py` (Rendering), `modules/documents.py` (Pipeline-Schritt, läuft **nach** accounting/recruiting — 🔒 Pipeline-Reihenfolge, Architekten-Freigabe). GUI: Checkbox je Stufe im jeweiligen Modul-Panel.
 
-### R4 ⚪ Weitere Kandidaten (Reihenfolge nach Nachfrage)
-
-- **Helpdesk**: Tickets mit Chatter (Wiederverwendung der Chatter-Pipeline aus CRM)
-- **Produktbilder**: Platzhalter-Generierung (farbige Initialen-Kacheln) oder Bild-API; Upload via `image_1920`
-- **Szenario-Presets**: JSON-Presets ("Maschinenbau 50 MA", "IT-Agentur klein") die alle GUI-Regler vorbelegen — ein Klick statt 30
-- **Headless-Modus**: `python3 generate.py --preset maschinenbau.json` für CI/Wiederholbarkeit (Orchestrator ist bereits GUI-frei, fehlt nur ein CLI-Einstieg)
-- ~~**Mehr-Firmen-Support**~~: aktuell implizit Company 1 (`odoo_actions.get_main_company_name`) — **promoted zu R17 (Multicompany, S15)**, siehe unten für Scope und Architektur-Spike-Pflicht
+**Teilstatus, verifiziert 2026-09-02:** P1 (Eingangsrechnungs-PDFs) und P2 (Bewerbungsunterlagen) implementiert — `pdf_factory.py` (`build_vendor_bill_pdf`/`build_cv_pdf`, 5 Layout-Varianten seit S10) + `modules/documents.py` (`create_documents`, gated auf `ctx.model_access` seit S10). P3 (Lieferscheine/Bestellungen, setzt R2/Purchase voraus — R2 ist seit S8 fertig, P3 selbst nicht begonnen) und P4 (Verträge) sind **nicht** umgesetzt — kein `build_`-Pendant in `pdf_factory.py`, kein Aufruf in `modules/documents.py` oder `modules/purchase.py`. R1 bleibt offen für P3/P4.
 
 ### R5 🟡 API-Versions-Schicht — Feld-/Methoden-Mapping pro Odoo-Release
 
@@ -236,43 +230,10 @@ Bausteine:
 
 Aufwand: mittel-groß. Nicht Teil von S3.
 
-### R7 🟡 KI-generierter Demo-Plan als JSON-Eingabe (Spike vor Umsetzung)
-
-**Hinzugefügt:** 2026-08-04, aus POC-Gespräch zur Machbarkeit.
-
-Ziel: Demo-Vorbereitung läuft heute oft schon KI-gestützt ab (Ablaufplan/Storyline wird
-von einer KI erstellt). Idee: dieselbe KI (Gem in Gemini) liefert zusätzlich zum Ablaufplan
-ein JSON, das `DemoCriteria`+`ModuleSelections` gemäß `PLAN_JSON_SCHEMA.md` befüllt. Nutzer
-fügt es in Screen 3 (Konfiguration) in ein Textfeld ein, Parser befüllt die **bestehenden**
-Regler (kein Bypass), Fehler/unbekannte Keys → Warnhinweis, kein Abbruch, Nutzer korrigiert
-direkt an den vorbefüllten Reglern nach. Nichts wird gespeichert (Einwegkonfiguration pro Demo).
-
-Abgrenzung zu R4-Szenario-Presets: Presets sind kuratiert + dauerhaft im Repo; R7 ist
-KI-generiert + ephemeral pro Demo-Termin. Nur der Lade-/Parsing-Mechanismus wird geteilt.
-
-Nicht installierte Module: werden wie heute in Screen 3 ausgegraut/deaktiviert (kein
-Auto-Install per API — `ir.module.module.button_immediate_install` wäre technisch möglich,
-aber braucht `base.group_system`-Rechte auf dem API-Key und hat dauerhafte Nebenwirkungen
-auf der Live-Instanz — bewusst nicht automatisiert). Stattdessen: Reload-Button auf Screen 3,
-der nach manueller Installation durch den Nutzer (im Odoo-Backend) die Modul-/Feature-Flag-
-Erkennung erneut ausführt und den Screen mit den bereits eingegebenen Werten (Snapshot vor
-Rebuild wegen `_clear()`) neu aufbaut.
-
-**Vor Umsetzung: Spike Pflicht**, siehe `PLAN_JSON_SCHEMA.md` Abschnitt 5. Offene Frage ist
-nicht die GUI-Mechanik (unkritisch, nutzt bestehende Screen-3-Struktur), sondern ob der
-Gem-Output zuverlässig genug ist. Exit-Kriterium: braucht ein typischer Gem-Plan mehr
-Nachkorrekturen an den Reglern als er Klicks spart, gewinnt manuelle Eingabe — Feature
-entfällt.
-
-Aufwand GUI-Teil (falls Spike positiv): klein-mittel, kein 🔒-Konflikt (nur `gui.py`,
-Config-Schema/Orchestrator-Reihenfolge unverändert). Nicht Teil von S3/S4, eigener Slot
-nach Spike-Ergebnis einplanen.
-
-**Erster Spike-Durchlauf (2026-08-04):** ein Gem-generierter Plan (IT-Systemhaus
-Quote-to-Cash-Workbook) gegen Schema geprüft — JSON-Parsing sauber (0 unbekannte Keys,
-korrekte Typen, `crm_chatter`-Falle vermieden), zwei Nachkorrekturen nötig (`hr_timesheet`
-als Toggle statt Gesamtzahl missverstanden, `hr` fürs Workbook-Detail "Techniker zuweisen"
-vergessen) — für den Exit-Test ein Pass. Dabei aber größerer Folgefund aufgedeckt, siehe R8.
+**Verifiziert 2026-09-02:** weiterhin nicht umgesetzt — kein Zielland-Feld in `config.py`
+(`DemoCriteria`/`RunContext`), `modules/master_data.py:18` hat `_TARGET_COUNTRIES = ["DE",
+"AT", "CH"]` hartkodiert, `static_data.py`s `CITIES` kennt nur DE/AT/CH. Fundament aus S3
+(länderweise Struktur) steht, das Feature selbst nicht begonnen.
 
 ### R11 🆕 Geplant (S11) — Lost Opportunities (CRM)
 
