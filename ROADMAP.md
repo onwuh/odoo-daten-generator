@@ -464,12 +464,14 @@ verifiziert):**
   eigene Fortschrittszeile in der GUI, läuft aber sicher (kein Crash: unbekannte
   SSE-Modul-Keys werden von `web/jobs.py`/`app.js` ignoriert). Akzeptiert als Log-only für
   S12 — kein Blocker, aber nicht stillschweigend, sondern dokumentiert.
-- ⚠️ Unverifiziert: ob `probability`/`won_status` beim reinen `write()` serverseitig
-  korrekt nachgezogen werden, oder ob Odoos UI-Aktion `action_set_lost` (falls per JSON2
-  aufrufbar) nötig ist. Vor Umsetzung live gegen `demo-pahu-test1` prüfen — nicht
-  spekulativ `action_set_lost` übernehmen (Lehre aus der `/call`+`/call_kw`-Altlast in
-  CLAUDE.md: nur belegte Methodennamen). Gebündelt mit R19s offener Live-Frage prüfen,
-  siehe S12-WP-Sequenz unten.
+- ✅ **Live verifiziert (2026-09-02, WP3, `demo-test5`):** reiner `client.write('crm.lead',
+  [id], {'active': False, 'probability': 0, 'lost_reason_id': X})` reicht — `won_status`
+  ist ein Compute-Feld (`readonly: true` in `fields_get`, kein eigener Schreibpfad) und
+  zieht korrekt auf `'lost'` nach, sobald `active=False` gesetzt ist. Test-Lead ging von
+  `active=True, probability=99.18, won_status='pending'` (Default bei Neuanlage) direkt zu
+  `won_status='lost'` nach dem `write()`. **Kein `action_set_lost`-Call nötig** — bestätigt
+  die ursprüngliche Annahme, keine spekulative Methode übernommen (Testskript + Cleanup
+  unter `.claude/worktrees/`-losem Scratch-Pfad, Records wieder gelöscht).
 - `config.py` 🔒 additiv, Feldname jetzt festgelegt: `ModuleSelections.crm_lost: dict =
   field(default_factory=dict)` — Shape `{"pct": int}`. **Nicht** `ModuleSelections.crm`
   (das ist `int = 0`, kein Dict, `crm.get(...)` würde crashen) und **nicht** `crm_chatter`
@@ -813,11 +815,18 @@ kanonische Fassung, künftige neue Module hier nachschlagen statt neu herzuleite
   niemals `ctx.company_ids`** (das hält `res.partner`-IDs, nicht `res.company` — exakt die
   Falle, die den `mrp.py`-Bug vor S10 monatelang unbemerkt ließ, siehe CLAUDE.md/Memory).
 - Workflow für einen konfigurierbaren genehmigten Anteil — **`approval_state`
-  schreiben, nicht `state`** (`state` ist readonly, siehe oben). ⚠️ Unverifiziert, ob
-  direktes `write(approval_state=...)` akzeptiert wird oder ob
-  `action_submit`/`action_approve`-Methoden nötig sind — **immer erst den aktuellen Status
-  lesen**, nie blind transitionieren (gleiche Fallenklasse wie `hr.leave/action_approve`,
-  siehe CLAUDE.md). Live-Klärung gebündelt in S12-WP-Sequenz (WP3).
+  schreiben, nicht `state`** (`state` ist readonly, siehe oben). ✅ **Live verifiziert
+  (2026-09-02, WP3, `demo-test5`):** reiner `client.write('hr.expense', [id],
+  {'approval_state': 'submitted'})` reicht — **kein** `action_submit`/`action_approve`
+  nötig. `fields_get`s `readonly: true` auf `approval_state` ist reine UI-Anzeige, keine
+  ORM-Schreibsperre (gleiches Muster wie bei `hr.leave` in CLAUDE.md dokumentiert).
+  **Wichtige Nebenerkenntnis:** der Test schlug beim ersten Versuch ohne `product_id`
+  fehl — Odoo lehnte sowohl den `write()` als auch `action_submit`/`action_approve` mit
+  "Select a product to proceed" ab. `product_id` ist zwar laut `fields_get`
+  `required: false`, aber für den Workflow faktisch Pflicht. Betrifft R19 nicht zusätzlich
+  (die Kategorien-Suche/`product_id`-Zuweisung war ohnehin schon im Dev-Task-Plan oben
+  vorgesehen) — nur als Beleg, warum die Reihenfolge "erst Produkt setzen, dann
+  Approval-Anteil schreiben" zwingend ist, nicht optional.
 - `config.py` 🔒 additiv: `ModuleSelections.hr_expense: dict = {"count_per_employee": int,
   "approved_pct": int}` (Dict-Form, nicht Skalar — siehe S8-Lehre bei `stock`).
 - **`orchestrator.py` 🔒 additiv, Einfügestelle korrigiert:** "ans Ende von `module_order`"
@@ -922,7 +931,7 @@ dann WP1 (R16, keine Design-Abhängigkeit von WP3), WP2 (R19, jetzt mit geklärt
 
 | WP | Inhalt | 🔒 | Voraussetzung |
 |---|---|---|---|
-| **WP3** | Gebündelte Live-Verifikation (ein Batch-Skript gegen `demo-test5.odoo.com`, Zugangsdaten aus `config.ini`; **nicht** parallel zu einer anderen Session, die dieselbe Instanz nutzt — Rate-Limit ~1 req/s): (a) `write(approval_state=…)` auf `hr.expense` vs. `action_submit`/`action_approve`-Methoden, (b) `write(probability/won_status)` auf `crm.lead` vs. `action_set_lost` — beide sind echte Schreib-Operationen zu Verifikationszwecken, kein reines Lesen. (c) HTTP-Status eines Unique-Constraint-Verstoßes auf `product.product.barcode` — optional, gate't WP1 nicht (siehe R16-Abschnitt), nur mitnehmen, wenn Zeit bleibt | nein | S11 hat Instanz freigegeben (erfüllt) |
+| **WP3** ✅ (2026-09-02) | Gebündelte Live-Verifikation gegen `demo-test5.odoo.com` (Batch-Skript, ein hr.expense + ein crm.lead angelegt, geschrieben, gelesen, wieder gelöscht). **(a) hr.expense:** `write(approval_state='submitted')` funktioniert direkt, kein `action_submit`/`action_approve` nötig — aber `product_id` muss vorher gesetzt sein (sonst "Select a product to proceed" auf `write()` **und** auf beiden Action-Methoden). **(b) crm.lead:** `write(active=False, probability=0, lost_reason_id=X)` funktioniert direkt, `won_status` (Compute-Feld) zieht korrekt auf `'lost'` nach — kein `action_set_lost` nötig. **(c) übersprungen** (optional, gate't WP1 nicht, siehe R16-Abschnitt) | nein | S11 hat Instanz freigegeben (erfüllt) |
 | **WP1** | R16 Produkt-Ebene: `data_factory.py`-EAN-13-Generator + Kollisions-Dedup gegen bestehende `product.product.barcode`-Werte (inkl. `active_test`-Klärung), `master_data.py`-Anbindung + Used-Set-Ownership, `odoo_actions.py`-Feld-Compat-Eintrag | nein | — (WP3(c) optional, gate't nicht) |
 | **WP2** | R19: `modules/expenses.py` neu, vollständige Registrierungskette (`WANTED_MODULES`/`MODULE_LABELS`/`MODULE_RUN_ORDER`/`build_selections`/`estimate_record_counts`/`app.js`-`MODULE_DEFS`+`ICONS`/`test_run_config_unit.py`-Payloads), Modul-Key durchgängig `hr_expense`, `orchestrator.py`-Eintrag vor `"documents"` (nach `"stock"`), `odoo_actions.py`-Feld-Compat-Eintrag | additiv | WP3(a) |
 | **WP4** | R11: `config.py`-Feld `crm_lost` (additiv, nur innerhalb `if _enabled(crm)` in `build_selections` gesetzt), `RunContext.linked_opportunity_ids` (additiv), `sale.py`-Zeile 89-96 um Tracking ergänzen (+ Kommentar zur Teilbefüllung bei Exception mid-loop), `modules/crm.py`s `mark_lost_opportunities` (mit Empty-`opportunity_ids`-Guard, Pattern 5), `orchestrator.py`-Eintrag nach `"sale"` (🔒-Freigabe erteilt) | additiv + 🔒 (Freigabe erteilt) | WP3(b) |
@@ -953,7 +962,7 @@ Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-
 | **S9 — Webserver-Deployment (R9)** ✅ | `web/` (FastAPI, Guards, Session, Queue, SSE), `connect_service.py`/`run_config.py` (D4), `run_journal.py` (D7), `static/` (index/app.js/app.css), Docker-Compose, `gui.py` gelöscht (2026-08-28) | Ersetzt den Aufrufer, nicht die Pipeline — `orchestrator.py` bleibt unberührt (kein `mode`-Parameter, 🔒 nicht angefasst). Siehe `ROADMAP_ARCHIVE.md`s R9-Statusblock für den gestrichenen Vorschau-Umfang, die korrigierte LLM-Invariante und die fünf live gefundenen Punkte |
 | **S10 — Live-Testphase-Feedback (R10)** ✅ | Phase A (2026-08-29): `has_access`-Zugriffsproben (F6), Fehlerbericht-Entrauschung (F7) 🔒, `mrp.py`-`company_ids`-Fix (F9). Phase B (2026-08-29): DB-Name aus URL (F2), Weiter/Nav-Gate als Latch + Ansicht 03 gestrichen (F3/F5), Einstiegs-Tutorial (F1), 5 PDF-Layout-Varianten (F4) — 301/301 Unit-, 71/76 Live-Integrationsschritte grün | Feedback aus dem ersten echten Gebrauch. Beide Phasen peer-reviewed (je 1 fremder Opus-Agent, Plantext + Live-Repo, keine Konversationshistorie) vor der Umsetzung — Phase A 10 Blocker, Phase B 6 Blocker eingearbeitet. Die 5 verbleibenden Live-Fehlschläge sind durchgängig derselbe vorbestehende, unabhängige `hr.job`-Feldbug (ausgelagert). F8 (Payload-Form-Memo) zurückgestellt — 🔒-Berührung ohne belegten Nutzen, siehe `ROADMAP_ARCHIVE.md`s R10-Statusblock |
 | **S11 — API-Versions-Kompatibilität (R5) + Feedback-Logs (D9)** ✅ (2026-09-02) | Phase A (kein 🔒): WP2 (Zugriffs-Ebenen komponieren), WP1 (dynamisches Feld-Manifest — fand live einen echten, unabhängigen Bug: `hr.applicant.applicant_skill_ids` gehört zu `hr_recruitment_skills`, nicht `hr_recruitment`, gefixt als Beifang), WP4 (`LAST_VERIFIED_VERSION`). Phase B (Cold-Review vor Umsetzung, S5-S10-Verfahren): WP5 (`scripts/check_compat.sh`), D9 (Lauf-Log lokal persistiert über `logging_setup.run_log_capture`, Issue trägt nur `run_id`-Referenz). **WP3 (Übersetzungs-Registry) zurückgestellt** — Review fand die 🔒-Berührung an `odoo_client.py` für den einzigen (unbelegten, nur Test-seitig gelesenen) Präzedenzfall nicht gerechtfertigt; siehe WP3-Statusblock für die vier Blocker und den Wiederaufnahme-Auslöser. | Nutzer-Vorgabe 2026-09-02: hohe Priorität, vor der bereits vorgesehenen Quick-Wins-Sprint eingeplant (die dafür zu S12 verschoben wird). Ersetzt die alte, verworfene "S5 Tier 2"-Zeile (JSON-Mapping-Dateien) komplett — siehe R5-Statusblock. R1 (PDF P3/P4) ist ebenfalls 🟠, aber unberührt von dieser Entscheidung — bewusst nicht mit reingezogen. Unit 351/351, Live-Integration 80/80 (`demo-test5.odoo.com`) grün. |
-| **S12 — Quick Wins** 🟠 **Cold-Review abgeschlossen, Implementierung startet 2026-09-02** | R11 (Lost Opportunities), R16 Produkt-Ebene (Barcode), R19 (Expenses) — WP3→WP1→WP2→WP4→WP5, siehe eigener Abschnitt "S12 — WP-Sequenz" direkt vor §5 | Drei kleine Erweiterungen, aber R19s Registrierungskette und R11s `orchestrator.py`-Einfügung stellten sich im Cold-Review als echte Blocker heraus (4 gefunden, alle eingearbeitet) — "additiv, Freigabe ist Formsache" war zu pauschal. R11s `orchestrator.py`-Einfügung (zwischen `sale`/`hr`) hat jetzt echte Architekten-Freigabe (2026-09-02), kein reiner Anhang wie bei R19/S6-S8. Reihenfolge nach Review getauscht: Live-Verifikation zuerst (gated R19/R11-Design, S11 hat die Instanz bereits freigegeben), dann R16→R19→R11→Review |
+| **S12 — Quick Wins** 🟠 **WP3 (Live-Verifikation) abgeschlossen 2026-09-02, WP1 als Nächstes** | R11 (Lost Opportunities), R16 Produkt-Ebene (Barcode), R19 (Expenses) — WP3✅→WP1→WP2→WP4→WP5, siehe eigener Abschnitt "S12 — WP-Sequenz" direkt vor §5 | Drei kleine Erweiterungen, aber R19s Registrierungskette und R11s `orchestrator.py`-Einfügung stellten sich im Cold-Review als echte Blocker heraus (4 gefunden, alle eingearbeitet) — "additiv, Freigabe ist Formsache" war zu pauschal. R11s `orchestrator.py`-Einfügung (zwischen `sale`/`hr`) hat jetzt echte Architekten-Freigabe (2026-09-02), kein reiner Anhang wie bei R19/S6-S8. WP3 live verifiziert: beide offenen Verhaltensfragen (hr.expense `approval_state`, crm.lead `won_status`) brauchen nur `write()`, keine Action-Methoden — R19/R11-Design jetzt unblockiert |
 | **S13 — Lager-Tiefe** 🆕 | R14 (Multi-Warehouse), R15 (Lagerplätze, inkl. R16 Location-Ebene), R13 (Seriennummern-/Chargenverfolgung, MRP-Anbindung gestrichen — siehe R13) | Alle drei bauen auf `inventory.py`/`stock.*`-Modellen auf. R13 braucht R15 nicht zwingend (`stock.lot.location_id` ist optional), profitiert aber von den gleichzeitig entstehenden Sub-Locations — ein Sprint für den gesamten Lager-Realismus-Ausbau |
 | **S14 — Prozess-Tiefe** 🆕 | R12 (Nachbestellregeln, in `inventory.py`), R18 (Quality Checks, Erweiterung des bestehenden `mrp.py`-Pfads) | Beide sind eher "MRP/Inventory-Investition aus S1/S8 weiter ausnutzen" als "auf S13 aufbauen" (Peer-Review-Korrektur: `quality.point` hat kein Location-Feld, "an `wh_qc_stock_loc_id` andocken" war keine reale Mechanik) — dennoch sinnvoll in einem Sprint gebündelt, da beide dieselbe operative Prozess-Ebene vertiefen |
 | **S15 — Analytic Accounting (R20)** 🆕 | `account.analytic.plan`/`account.analytic.account` + `analytic_distribution`-Wiring über `sale.py`/`purchase.py`/`accounting.py`/`expenses.py` | Cross-cutting (4+ Dateien) bewusst isoliert in eigenem Sprint, damit der Review-Diff überschaubar bleibt; profitiert von R19 (Expenses, S12), falls dessen Zeilen mit-verkabelt werden sollen |
