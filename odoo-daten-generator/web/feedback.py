@@ -94,8 +94,16 @@ def _build_body(message: str, context: Optional[Dict[str, Any]]) -> str:
         f"Zeit (Server, UTC): {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())}",
     ]
     # Data-minimized on purpose: run_id/status/module-status/error-count only —
-    # never target/database/error text, which can carry a prospect's hostname
-    # or Odoo error text into a GitHub issue.
+    # never target/database/error text/log content, which can carry a
+    # prospect's hostname or Odoo error text into a GitHub issue. This is
+    # never populated from anything but app._feedback_run_context's fixed
+    # key set — the run_id here is a REFERENCE, not a payload: the full run
+    # log stays local (run_journal.run_log_path, S11/D9) and is retrievable
+    # by run_id on the machine that ran it, so there's nothing to redact —
+    # nothing beyond this fixed set is ever sent in the first place. `message`
+    # is the one field NOT covered by this: it's free text the user typed
+    # into the feedback form, so a user who pastes a log into it can still
+    # send log content — this comment is about the automatic context only.
     if context:
         run_id = context.get("run_id")
         if run_id:

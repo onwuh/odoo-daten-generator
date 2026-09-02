@@ -7,6 +7,7 @@ token/repo/permission check.
 """
 import os
 import sys
+import tempfile
 import time
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +16,11 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 os.environ.setdefault("ODOO_GENERATOR_ACCESS_CODE", "unit-test-code")
+# S11/D9: this file's run_id-context test lets a submitted run actually
+# execute, which now unconditionally opens a per-run log file
+# (run_journal.run_log_path) — see the matching comment in
+# test_web_api_unit.py for the full reasoning.
+os.environ.setdefault("ODOO_GENERATOR_RUNS_DIR", tempfile.mkdtemp(prefix="odoo_gen_test_runs_"))
 
 import requests
 from fastapi.testclient import TestClient
@@ -371,6 +377,12 @@ def run():
             ctx = captured["context"]
             assert ctx is not None and ctx["run_id"] == run_id, ctx
             assert "target" not in ctx and "database" not in ctx, ctx
+            # S11/D9 — exact key set, not just "these two keys are absent":
+            # the run log now lives locally (run_journal.run_log_path) and
+            # is retrievable by run_id alone, so a future edit adding a
+            # "log" key here would silently defeat that property. Locking
+            # the key set is the regression guard for it.
+            assert set(ctx.keys()) == {"run_id", "status", "modules", "api_error_count"}, ctx
         results.append(("POST /api/feedback: run_id-Kontext enthält run_id/status, nie target/database", True, ""))
     except Exception as e:
         results.append(("POST /api/feedback: run_id-Kontext enthält run_id/status, nie target/database", False, str(e)))

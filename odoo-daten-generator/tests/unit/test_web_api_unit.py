@@ -5,6 +5,7 @@ these exercise the HTTP surface and the queue, not Odoo.
 """
 import os
 import sys
+import tempfile
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -14,6 +15,13 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 os.environ.setdefault("ODOO_GENERATOR_ACCESS_CODE", "unit-test-code")
+# S11/D9: web.jobs._execute now unconditionally opens a per-run log file
+# (run_journal.run_log_path) before doing any other work — several tests
+# below let a submitted run actually execute, which would otherwise write
+# into the real repo's odoo-daten-generator/seeds/runs/ directory. setdefault
+# so a test that locally patches this env var (run_journal_unit.py's own
+# tests do) still wins; this only supplies a safe default.
+os.environ.setdefault("ODOO_GENERATOR_RUNS_DIR", tempfile.mkdtemp(prefix="odoo_gen_test_runs_"))
 
 from fastapi.testclient import TestClient
 
@@ -284,6 +292,62 @@ def run():
         results.append(("Session-Isolation: fremder Lauf ist nicht lesbar", True, ""))
     except Exception as e:
         results.append(("Session-Isolation: fremder Lauf ist nicht lesbar", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # S11/D9 — a real run writes its own log to local disk (run_journal.
+    # run_log_path), independent of the SSE stream. orchestrator.run's fake
+    # emits one real log line through the SAME logger module code logs
+    # through, so this proves the handler is actually wired and filtered to
+    # this run — not just that a file happened to get created. Uses JobQueue
+    # directly (not TestClient) and polls for STATUS_DONE, matching this
+    # file's own established pattern for reliably waiting on a background run
+    # (see the api_errors-redaction test below) rather than a flat sleep.
+    # ------------------------------------------------------------------
+    try:
+        import logging as _logging
+        import run_journal as _run_journal
+
+        def _fake_orchestrator_run(client, llm, ctx, on_module_start=None, on_module_done=None):
+            _logging.getLogger("modules.fake_for_test").info("S11/D9 marker line")
+
+        broker = EventBroker()
+        queue_obj = JobQueue(broker, workers=1)
+        with patch("web.jobs.JournalingClient"), patch("web.jobs.LLMService"), \
+             patch("orchestrator.run", side_effect=_fake_orchestrator_run):
+            queue_obj.start()
+            record = queue_obj.submit(session=_fake_session("s-runlog"), payload=_PAYLOAD)
+            deadline = time.time() + 5
+            while record.status != STATUS_DONE and time.time() < deadline:
+                time.sleep(0.05)
+            queue_obj.stop()
+        assert record.status == STATUS_DONE, f"run never finished: {record.status}"
+        log_path = _run_journal.run_log_path(record.run_id)
+        assert log_path.exists(), f"expected a local run log at {log_path}"
+        content = log_path.read_text(encoding="utf-8")
+        assert "S11/D9 marker line" in content, f"run log missing expected content: {content!r}"
+        results.append(("Lauf-Log: eigenes Log lokal geschrieben, unabhängig vom SSE-Stream", True, ""))
+    except Exception as e:
+        results.append(("Lauf-Log: eigenes Log lokal geschrieben, unabhängig vom SSE-Stream", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # S11/D9 — best-effort: an unwritable ODOO_GENERATOR_RUNS_DIR must not
+    # crash run creation (same rule as RunJournal._persist, "journalling must
+    # never take a run down with it"). Point it at a path whose PARENT is a
+    # plain file, so mkdir(parents=True) fails with ENOTDIR/ENOENT.
+    # ------------------------------------------------------------------
+    try:
+        from web.jobs import _open_run_log_handler
+        with tempfile.TemporaryDirectory() as tmp:
+            blocker_file = os.path.join(tmp, "not-a-directory")
+            with open(blocker_file, "w", encoding="utf-8") as f:
+                f.write("x")
+            bogus_runs_dir = os.path.join(blocker_file, "runs")  # parent is a FILE
+            with patch.dict(os.environ, {"ODOO_GENERATOR_RUNS_DIR": bogus_runs_dir}):
+                handler = _open_run_log_handler("does-not-matter")
+                assert handler is None, f"expected None on an unwritable dir, got {handler!r}"
+        results.append(("Lauf-Log: nicht beschreibbares Verzeichnis -> None, kein Crash", True, ""))
+    except Exception as e:
+        results.append(("Lauf-Log: nicht beschreibbares Verzeichnis -> None, kein Crash", False, str(e)))
 
     # ------------------------------------------------------------------
     # Admission control: a fixed worker pool queues instead of spawning, and a

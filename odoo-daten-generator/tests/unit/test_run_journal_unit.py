@@ -298,6 +298,41 @@ def run():
     except Exception as e:
         results.append(("Aufbewahrung: alte Journale werden entfernt, neue nicht", False, str(e)))
 
+    # ------------------------------------------------------------------
+    # S11/D9 — *.log (run_journal.run_log_path) shares the SAME retention
+    # pass as *.json, not a second, easy-to-forget one. It's the MORE
+    # identifying file of the two (full target URL logged per request, not
+    # just once) — a prune pass that missed it would defeat the point.
+    # ------------------------------------------------------------------
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            old_log = run_journal.run_log_path("demo-old", Path(tmp))
+            new_log = run_journal.run_log_path("demo-new", Path(tmp))
+            old_log.write_text("old log line\n", encoding="utf-8")
+            new_log.write_text("new log line\n", encoding="utf-8")
+            ancient = time.time() - 30 * 86400
+            os.utime(old_log, (ancient, ancient))
+
+            removed = run_journal.prune_journals(Path(tmp), days=7)
+            assert removed == 1, removed
+            assert not old_log.exists(), "altes Lauf-Log nicht entfernt"
+            assert new_log.exists(), "aktuelles Lauf-Log fälschlich entfernt"
+        results.append(("Aufbewahrung: alte Lauf-Logs (*.log) werden mit entfernt, neue nicht", True, ""))
+    except Exception as e:
+        results.append(("Aufbewahrung: alte Lauf-Logs (*.log) werden mit entfernt, neue nicht", False, str(e)))
+
+    try:
+        assert run_journal.run_log_path("demo-abc").name == "demo-abc.log"
+        raised = False
+        try:
+            run_journal.run_log_path("../../etc/passwd")
+        except ValueError:
+            raised = True
+        assert raised, "run_log_path must validate run_id like RunJournal does"
+        results.append(("run_log_path: normale ID -> <id>.log, ungültige ID -> ValueError", True, ""))
+    except Exception as e:
+        results.append(("run_log_path: normale ID -> <id>.log, ungültige ID -> ValueError", False, str(e)))
+
     try:
         with patch.dict(os.environ, {"ODOO_GENERATOR_LOG_RETENTION_DAYS": "3"}):
             assert run_journal.retention_days() == 3
