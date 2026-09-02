@@ -1,10 +1,13 @@
 # odoo-daten-generator
 
 Generates AI-assisted demo data and writes it into a throwaway Odoo demo
-instance over the JSON/2 API — contacts, products, opportunities, orders,
-employees, projects, timesheets, invoices, purchase orders, stock and PDF
-attachments, wired together so the records form one coherent process chain
-rather than unrelated rows.
+instance over the JSON/2 API — contacts, products, manufacturing (BOMs, work
+centers, work orders), opportunities, sales orders, purchase orders, stock,
+employees, recruiting (job postings, candidates, skills), projects,
+timesheets, invoices and PDF attachments, wired together so the records form
+one coherent process chain rather than unrelated rows: a confirmed sales
+order auto-creates its project and task, timesheets against that task drive
+real delivered-quantity invoicing, a vendor bill gets an actual PDF attached.
 
 Since S9 the tool is a **web application**. The CustomTkinter desktop wizard
 (`gui.py`) is retired.
@@ -158,8 +161,17 @@ trail, and reports each refusal per model instead of aborting.
 
 Groq (primary, OpenAI-compatible endpoint) and Google Gemini (fallback). Groq
 retires models without notice — `llama-3.3-70b-versatile` was gone by
-2026-08-28. If the connect screen reports an empty LLM response, check
+2026-08-28, current default is `qwen/qwen3.8-27b` (`config.ini.example`). If
+the connect screen reports an empty LLM response, check
 <https://console.groq.com/docs/models> and put a current model in the field.
+
+## Feedback
+
+A ✉ button, reachable from any screen, opens a short form (Bug / Idea &
+Feature) and files it as a GitHub issue in this repo — no GitHub login
+needed. Server-side only: needs `GITHUB_TOKEN` set on the operator's
+deployment. Without it the button still works but the request answers `503`
+with a clear message instead of silently doing nothing.
 
 ## Tests
 
@@ -173,3 +185,32 @@ instance in `tests/test_config.ini` (or `config.ini`). Offline only:
 ```bash
 cd odoo-daten-generator && python3 tests/unit/unit_suite.py
 ```
+
+## Roadmap
+
+Full detail, priorities and status live in [`ROADMAP.md`](ROADMAP.md)
+(completed items: [`ROADMAP_ARCHIVE.md`](ROADMAP_ARCHIVE.md)) — this is a
+short, coarser summary of what's next, not a replacement for it.
+
+- **Version-compatibility hardening (high priority, in design).** Odoo
+  releases new versions regularly; this project already survived two
+  (19.2→19.4, 19.4→19.5/"V20 beta") with near-zero breakage, but today that's
+  checked by hand. Work in progress: detecting what changed on connect and
+  translating around it automatically, instead of a run silently producing
+  less than it should.
+- **Feedback attachments.** Letting a bug report optionally include the
+  run's actual log, not just a status summary — held back by needing
+  redaction first, since a raw log can carry the target Odoo URL.
+- **More document types.** PDF generation currently covers vendor bills and
+  applicant CVs; purchase documents (delivery notes, POs) and contracts are
+  planned next.
+- **More countries.** Generated customers/suppliers are DACH-only (DE/AT/CH)
+  today; the data layer is already structured per-country, a target-country
+  selector is planned.
+- **More demo-data depth**, roughly in priority order: a realistic CRM
+  funnel (lost opportunities, not just wins), replenishment rules, serial/lot
+  tracking, multi-warehouse and storage locations, barcodes, quality checks,
+  expenses, analytic accounting, and multi-company support.
+
+None of this has a fixed date — check `ROADMAP.md`'s own sprint table for
+current sequencing.
