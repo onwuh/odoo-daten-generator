@@ -26,10 +26,21 @@ logger = logging.getLogger(__name__)
 # create_leave_data fired as soon as 'hr' was installed and failed loudly on
 # every one of those models when the leave apps weren't there. They are
 # GATE_ONLY_MODULES below: probed and labelled, never a selectable module.
+#
+# hr_recruitment_skills (S11/R5, found live 2026-09-02 via WP1's manifest
+# capture run on demo-test5): hr.applicant.applicant_skill_ids ships with
+# THIS submodule, not with hr_recruitment itself — hr_recruitment and
+# hr_skills can both be installed while this one stays off, exactly the same
+# gap class as hr_holidays/hr_work_entry above. Confirmed live: fields_get on
+# hr.applicant returns no skill-related field at all when it's uninstalled,
+# and create_batch fails loudly ("Invalid field 'applicant_skill_ids'") the
+# moment any candidate gets a skill sampled — modules/recruiting.py gates on
+# it (see _applicant_skill_lines).
 WANTED_MODULES = [
     "crm", "sale", "account", "hr", "project",
     "hr_timesheet", "mrp", "hr_recruitment",
     "purchase", "stock", "hr_holidays", "hr_work_entry",
+    "hr_recruitment_skills",
 ]
 
 # "documents" is deliberately absent above: it is a pseudo-module. It attaches
@@ -45,7 +56,7 @@ PSEUDO_MODULES = ["documents"]
 # own set, not folded into WANTED_MODULES's normal treatment, because every
 # WANTED_MODULES entry is otherwise assumed to be a run_config-selectable
 # module — see active_progress_keys and test_run_config_unit.py's invariant.
-GATE_ONLY_MODULES = {"hr_holidays", "hr_work_entry"}
+GATE_ONLY_MODULES = {"hr_holidays", "hr_work_entry", "hr_recruitment_skills"}
 
 MODULE_LABELS = {
     "crm": "CRM",
@@ -60,6 +71,7 @@ MODULE_LABELS = {
     "stock": "Lager",
     "hr_holidays": "Abwesenheiten",
     "hr_work_entry": "Arbeitszeiterfassung",
+    "hr_recruitment_skills": "Bewerber-Skills",
     "documents": "Dokumente (PDFs)",
     "stammdaten": "Stammdaten",
 }

@@ -1,6 +1,7 @@
 import contextlib
 import json
 import logging
+import os
 import random
 import time
 import unicodedata
@@ -40,6 +41,35 @@ _ERROR_MESSAGE_LIMIT = 300
 _RETRY_STATUSES = (429, 503)
 _MAX_ATTEMPTS = 5
 _BACKOFF_BASE_SECONDS = 2.0
+
+# R5/WP1 — dynamic field manifest. FIELD_COMPAT_WHITELIST (odoo_actions.py) is
+# hand-curated and already known-incomplete (e.g. res.partner's country_id/
+# parent_id/type gap, found 2026-09-02). Rather than keep hand-editing it,
+# capture what the codebase actually sends: set this env var and run
+# tests/integration/test_suite.py once — every (model, field) pair that
+# passes through create/create_batch/write/call_method gets recorded here,
+# and test_suite.py dumps it to field_manifest.json on exit. Off by default
+# (a plain run pays nothing — one bool check per call). The result is bounded
+# by what the test suite actually exercises, not a claim of completeness.
+_CAPTURE_FIELDS_ENV = "ODOO_GENERATOR_CAPTURE_FIELDS"
+_capture_fields_enabled = os.environ.get(_CAPTURE_FIELDS_ENV) == "1"
+_captured_fields: Dict[str, set] = {}
+
+
+def _capture_fields(model: str, values: Any) -> None:
+    if not _capture_fields_enabled or not isinstance(values, dict):
+        return
+    _captured_fields.setdefault(model, set()).update(values.keys())
+
+
+def dump_captured_fields(path: str) -> None:
+    """Write the (model -> sorted fields) manifest captured so far as JSON.
+    Called by test_suite.py after a full run with ODOO_GENERATOR_CAPTURE_FIELDS=1
+    set; a no-op call (empty manifest) if capture was never enabled."""
+    manifest = {model: sorted(fields) for model, fields in _captured_fields.items()}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, ensure_ascii=False, sort_keys=True)
+        f.write("\n")
 
 
 class RedirectRefused(requests.RequestException):
@@ -380,6 +410,7 @@ class OdooJson2Client:
         return self.model_method(model, "search_read", payload)
 
     def create(self, model: str, values: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> int:
+        _capture_fields(model, values)
         with self._record_failure(model, "create"):
             payload: Dict[str, Any] = {"vals_list": [values]}
             if context is not None:
@@ -396,6 +427,9 @@ class OdooJson2Client:
         """
         if not values_list:
             return []
+        if _capture_fields_enabled:
+            for values in values_list:
+                _capture_fields(model, values)
         payload: Dict[str, Any] = {"vals_list": values_list}
         if context is not None:
             payload["context"] = context
@@ -425,6 +459,7 @@ class OdooJson2Client:
                 return ids
 
     def write(self, model: str, ids: List[int], values: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> bool:
+        _capture_fields(model, values)
         payload: Dict[str, Any] = {"ids": ids, "vals": values}
         if context is not None:
             payload["context"] = context
@@ -437,6 +472,11 @@ class OdooJson2Client:
         # positional-args concept to send, which is why this no longer takes an
         # `args` parameter (B11's non-empty-args guard is now a TypeError at the
         # call site instead: see tests/unit/test_odoo_client_unit.py).
+        # Keyed as "model#method", not just model: these are method kwargs
+        # (e.g. message_post's body/subtype_id), not the model's own fields —
+        # mixing them into the model's field-manifest entry would corrupt the
+        # FIELD_COMPAT_WHITELIST comparison WP1 exists to sharpen.
+        _capture_fields(f"{model}#{method}", kwargs)
         payload: Dict[str, Any] = dict(kwargs or {})
         if ids is not None:
             payload["ids"] = ids

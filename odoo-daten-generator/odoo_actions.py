@@ -387,13 +387,37 @@ def get_server_version(client) -> Optional[str]:
 # far more than the "~15 requests" it looked like. None means "always check" —
 # a core model with no ir.module.module entry of its own (res.partner,
 # product.product, mail.activity, ir.attachment).
+# Reconciled against field_manifest.json (S11/WP1, live capture 2026-09-02,
+# demo-test5, saas-19.4) — every list below now matches what the codebase
+# actually sends for models already tracked here. Fields the manifest showed
+# but this whitelist didn't yet have are added; nothing is removed solely for
+# being absent from one capture run (hr_holidays/hr_work_entry/hr_recruitment
+# were uninstalled on demo-test5 at capture time, so hr.leave/hr.applicant/etc.
+# legitimately produced no fields that run — install-state, not a real gap).
+#
+# The manifest also surfaced models this whitelist has never tracked at all
+# (mrp.workcenter, mrp.bom.line, mrp.routing.workcenter, purchase.order,
+# stock.quant, project.project, project.task.type, hr.skill, hr.skill.type,
+# sale.advance.payment.inv, account.analytic.line, account.bank.statement.line)
+# — deliberately not added here. Whitelist membership is a judgment call
+# (worth the fields_get cost on every connect), not something to auto-expand
+# from one capture run; left as a candidate list for a future pass instead.
 FIELD_COMPAT_WHITELIST: Dict[str, Tuple[Optional[str], List[str]]] = {
-    'res.partner': (None, ['name', 'is_company', 'street', 'zip', 'city', 'email', 'phone', 'website']),
-    'product.product': (None, ['name', 'list_price', 'type', 'sale_ok', 'purchase_ok']),
-    'crm.lead': ('crm', ['type', 'partner_id', 'name']),
-    'mail.activity': (None, ['res_id', 'res_model_id', 'activity_type_id', 'date_deadline']),
-    'sale.order': ('sale', ['partner_id']),
-    'account.move': ('account', ['move_type', 'partner_id', 'invoice_line_ids', 'invoice_date']),
+    'res.partner': (None, ['name', 'is_company', 'street', 'zip', 'city', 'email', 'phone', 'website',
+                    'country_id', 'parent_id', 'type', 'supplier_rank']),
+    'product.product': (None, ['name', 'list_price', 'type', 'sale_ok', 'purchase_ok',
+                        'invoice_policy', 'is_storable', 'service_tracking', 'service_type',
+                        'standard_price', 'tracking']),
+    'crm.lead': ('crm', ['type', 'partner_id', 'name', 'date_deadline', 'expected_revenue',
+                 'stage_id', 'user_id']),
+    'mail.activity': (None, ['res_id', 'res_model_id', 'activity_type_id', 'date_deadline', 'summary']),
+    'sale.order': ('sale', ['partner_id', 'opportunity_id', 'order_line']),
+    'account.move': ('account', ['move_type', 'partner_id', 'invoice_line_ids', 'invoice_date', 'ref']),
+    # journal_id/balance_start unconfirmed by the 2026-09-02 capture — the run
+    # only captured balance_end_real being written to account.bank.statement
+    # itself (journal_id showed up on account.bank.statement.line instead).
+    # Left as-is rather than removed on one run's evidence; worth a closer
+    # look at accounting.py's bank-statement path in a future pass.
     'account.bank.statement': ('account', ['journal_id', 'balance_start', 'balance_end_real']),
     'hr.employee': ('hr', ['name']),
     # hr.leave/hr.leave.allocation/hr.work.entry.type ship with hr_holidays/
@@ -404,13 +428,21 @@ FIELD_COMPAT_WHITELIST: Dict[str, Tuple[Optional[str], List[str]]] = {
     'hr.leave.allocation': ('hr_holidays', ['employee_id', 'work_entry_type_id']),
     'hr.work.entry.type': ('hr_work_entry', ['name', 'code', 'count_as',
                             'requires_allocation', 'employee_requests']),
+    # applicant_skill_ids deliberately absent: it ships with hr_recruitment_skills,
+    # NOT hr_recruitment (found live 2026-09-02, S11/R5) — a whitelist entry
+    # gated on hr_recruitment alone would false-positive-warn on every
+    # instance with hr_recruitment installed but hr_recruitment_skills not
+    # (this repo's own demo-test5 included), exactly the noise R5 exists to
+    # avoid. modules/recruiting.py and modules/documents.py gate the field
+    # itself on hr_recruitment_skills directly; tracking it here would need a
+    # second, more granular whitelist shape this dict doesn't have yet.
     'hr.applicant': ('hr_recruitment', ['partner_name', 'email_from', 'partner_phone', 'job_id',
-                      'schedule_pay', 'applicant_skill_ids']),
+                      'schedule_pay', 'stage_id']),
     'hr.job.skill': ('hr_recruitment', ['skill_id', 'skill_type_id', 'skill_level_id']),
-    'project.task': ('project', ['name', 'project_id']),
-    'mrp.production': ('mrp', ['product_id', 'date_start']),
-    'mrp.bom': ('mrp', ['product_tmpl_id', 'type', 'product_qty']),
-    'ir.attachment': (None, ['res_model', 'res_id', 'raw', 'mimetype', 'type']),
+    'project.task': ('project', ['name', 'project_id', 'stage_id']),
+    'mrp.production': ('mrp', ['product_id', 'date_start', 'bom_id', 'product_qty']),
+    'mrp.bom': ('mrp', ['product_tmpl_id', 'type', 'product_qty', 'bom_line_ids', 'code', 'product_id']),
+    'ir.attachment': (None, ['res_model', 'res_id', 'raw', 'mimetype', 'type', 'name']),
 }
 
 

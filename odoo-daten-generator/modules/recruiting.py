@@ -153,9 +153,16 @@ def create_job(client, name, department_id, target=3, description=None, job_skil
     return job_id
 
 
-def _applicant_skill_lines(client, skill_ids, skill_levels_map=None):
-    """Build the (0,0,{...}) command list for hr.applicant.applicant_skill_ids."""
-    if not skill_ids:
+def _applicant_skill_lines(client, skill_ids, skill_levels_map=None, skills_supported=True):
+    """Build the (0,0,{...}) command list for hr.applicant.applicant_skill_ids.
+
+    skills_supported=False (hr_recruitment_skills not installed — S11/R5,
+    found live 2026-09-02) returns [] before any lookup: the field itself
+    doesn't exist on hr.applicant then, and create_batch fails loudly the
+    moment it's sent ("Invalid field 'applicant_skill_ids'"), same failure
+    class hr.leave/hr_holidays already had (see run_config.WANTED_MODULES).
+    """
+    if not skill_ids or not skills_supported:
         return []
     skills = client.search_read(
         'hr.skill', [["id", "in", skill_ids]], fields=["id", "skill_type_id"], limit=0,
@@ -429,6 +436,10 @@ def _create_applicants(client, ctx, recruiting_data, num_candidates, job_ids, al
     # Pre-fetch stages once
     stages = get_job_stages(client)
 
+    # S11/R5: applicant_skill_ids ships with hr_recruitment_skills, not with
+    # hr_recruitment itself (see run_config.WANTED_MODULES comment).
+    skills_supported = "hr_recruitment_skills" in ctx.installed_modules
+
     candidates_per_job = num_candidates // len(job_ids)
     remaining = num_candidates % len(job_ids)
     candidate_idx = 0
@@ -451,7 +462,8 @@ def _create_applicants(client, ctx, recruiting_data, num_candidates, job_ids, al
                 "job_id": job_id,
                 "schedule_pay": "monthly",
             }
-            applicant_skill_lines = _applicant_skill_lines(client, candidate_skills, skill_levels_map)
+            applicant_skill_lines = _applicant_skill_lines(
+                client, candidate_skills, skill_levels_map, skills_supported=skills_supported)
             if applicant_skill_lines:
                 values["applicant_skill_ids"] = applicant_skill_lines
             if stage_id:

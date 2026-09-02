@@ -517,6 +517,81 @@ def run():
     except AssertionError as e:
         results.append(("has_create_access: timeout -> True (unknown, not denied), no error entry", False, str(e)))
 
+    # ==================================================================
+    # S11/R5 WP1 — dynamic field manifest capture. Env-gated: off by default
+    # (no bookkeeping on a normal run), records every field sent through
+    # create/create_batch/write/call_method when enabled. call_method's
+    # kwargs land under a separate "model#method" key — they're method
+    # parameters (e.g. message_post's body), not the model's own fields, and
+    # mixing them in would corrupt the FIELD_COMPAT_WHITELIST comparison
+    # WP1 exists to sharpen.
+    # ==================================================================
+    try:
+        orig_enabled = odoo_client._capture_fields_enabled
+        orig_captured = odoo_client._captured_fields
+        odoo_client._capture_fields_enabled = False
+        odoo_client._captured_fields = {}
+        try:
+            client, _sent = _make_client_with_fake_post(lambda url, payload: _FakeResponse(200, json_data=1))
+            client.create('res.partner', {"name": "Test", "email": "a@b.test"})
+            assert odoo_client._captured_fields == {}, \
+                f"capture must stay a no-op when disabled: {odoo_client._captured_fields}"
+            results.append(("field capture: disabled by default -> no-op", True, ""))
+        finally:
+            odoo_client._capture_fields_enabled = orig_enabled
+            odoo_client._captured_fields = orig_captured
+    except AssertionError as e:
+        results.append(("field capture: disabled by default -> no-op", False, str(e)))
+
+    try:
+        orig_enabled = odoo_client._capture_fields_enabled
+        orig_captured = odoo_client._captured_fields
+        odoo_client._capture_fields_enabled = True
+        odoo_client._captured_fields = {}
+        try:
+            client, _sent = _make_client_with_fake_post(lambda url, payload: _FakeResponse(200, json_data=1))
+            client.create('res.partner', {"name": "Test", "email": "a@b.test"})
+            client.write('res.partner', [1], {"phone": "+49 123"})
+            client.create_batch('product.product', [{"list_price": 9.0}, {"name": "P"}])
+            client.call_method('crm.lead', 'message_post', ids=[1], kwargs={"body": "hi"})
+            captured = odoo_client._captured_fields
+            assert captured.get('res.partner') == {"name", "email", "phone"}, captured.get('res.partner')
+            assert captured.get('product.product') == {"list_price", "name"}, captured.get('product.product')
+            assert captured.get('crm.lead#message_post') == {"body"}, captured.get('crm.lead#message_post')
+            assert 'crm.lead' not in captured, "method kwargs must not land under the bare model key"
+            results.append((
+                "field capture: enabled -> records create/write/create_batch/call_method fields",
+                True, "",
+            ))
+        finally:
+            odoo_client._capture_fields_enabled = orig_enabled
+            odoo_client._captured_fields = orig_captured
+    except AssertionError as e:
+        results.append((
+            "field capture: enabled -> records create/write/create_batch/call_method fields",
+            False, str(e),
+        ))
+
+    try:
+        import tempfile
+        orig_captured = odoo_client._captured_fields
+        odoo_client._captured_fields = {"res.partner": {"name", "email"}}
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
+                tmp_path = tmp.name
+            odoo_client.dump_captured_fields(tmp_path)
+            with open(tmp_path, encoding="utf-8") as f:
+                manifest = json_module.load(f)
+            assert manifest == {"res.partner": ["email", "name"]}, manifest
+            results.append(("field capture: dump_captured_fields writes sorted JSON manifest", True, ""))
+        finally:
+            odoo_client._captured_fields = orig_captured
+            if tmp_path:
+                os.remove(tmp_path)
+    except AssertionError as e:
+        results.append(("field capture: dump_captured_fields writes sorted JSON manifest", False, str(e)))
+
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results
 
