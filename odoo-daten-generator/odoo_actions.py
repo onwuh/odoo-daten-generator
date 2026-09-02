@@ -415,7 +415,8 @@ FIELD_COMPAT_WHITELIST: Dict[str, Tuple[Optional[str], List[str]]] = {
 
 
 def check_field_compatibility(client, installed_modules=None,
-                              whitelist: Optional[Dict[str, List[str]]] = None) -> List[str]:
+                              whitelist: Optional[Dict[str, List[str]]] = None,
+                              model_access: Optional[Dict[str, bool]] = None) -> List[str]:
     """Connect-time check: for each model in the whitelist, calls fields_get and
     warns about any field the codebase writes/reads that this instance doesn't
     have. A model that errors out entirely (e.g. its parent app isn't installed)
@@ -423,12 +424,19 @@ def check_field_compatibility(client, installed_modules=None,
     compatibility one. Non-fatal: logs each warning and returns the list of
     warning strings; callers should not treat a non-empty result as fatal.
 
-    `installed_modules` gates the DEFAULT whitelist only (skips models whose
-    parent app isn't installed, see FIELD_COMPAT_WHITELIST's comment). An
-    explicit `whitelist` (flat {model: [fields]}, as the unit tests pass) is
-    checked unconditionally — the caller supplied exactly the models it wants
-    checked and gating those would silently make such a test depend on
-    installed_modules it never passed.
+    `installed_modules` and `model_access` both gate the DEFAULT whitelist only
+    (see FIELD_COMPAT_WHITELIST's comment for the installed-module case;
+    `model_access` additionally skips a model that IS installed but whose
+    create access `probe_model_access` found blocked — e.g. an app installed
+    with a feature toggle off, the S10 mrp.workcenter case). Composing both
+    means a field warning that survives is unambiguous: the model is
+    installed, writable, and the field is still missing — a real version
+    finding, never noise from install/access state (R5/WP2).
+
+    An explicit `whitelist` (flat {model: [fields]}, as the unit tests pass) is
+    checked unconditionally against neither gate — the caller supplied exactly
+    the models it wants checked, and gating those would silently make such a
+    test depend on installed_modules/model_access it never passed.
     """
     warnings: List[str] = []
     if whitelist is not None:
@@ -439,6 +447,8 @@ def check_field_compatibility(client, installed_modules=None,
             (model, fields) for model, (module_key, fields) in FIELD_COMPAT_WHITELIST.items()
             if module_key is None or module_key in installed
         ]
+        if model_access is not None:
+            entries = [(model, fields) for model, fields in entries if model_access.get(model, True)]
 
     for model, fields in entries:
         try:

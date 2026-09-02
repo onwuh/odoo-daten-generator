@@ -211,7 +211,7 @@ def probe(*, base_url: str, database: str, odoo_key: str,
             result.odoo_version = version
             if version:
                 result.field_warnings = odoo_actions.check_field_compatibility(
-                    client, installed_modules=mods) or []
+                    client, installed_modules=mods, model_access=result.model_access) or []
                 detail = version
                 if result.field_warnings:
                     detail += f" · {len(result.field_warnings)} Feld-Warnung(en) siehe Log"

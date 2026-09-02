@@ -195,6 +195,62 @@ def run():
         results.append(("S10: check_field_compatibility gates hr.leave on hr_holidays, not hr", False, str(e)))
 
     # ------------------------------------------------------------------
+    # S11/R5 WP2 — check_field_compatibility composes model_access with
+    # installed_modules: a model that's installed but write-blocked (the
+    # S10 mrp.workcenter case — installed, readable, "Arbeitsaufträge" off)
+    # must stay silent too, same as an uninstalled model (Pattern 3 analog).
+    # ------------------------------------------------------------------
+    try:
+        mock_client = MagicMock()
+        mock_client.model_method.return_value = _AlwaysHasField()
+        # hr installed (hr.employee gated on it) but blocked per model_access.
+        check_field_compatibility(mock_client, installed_modules={"hr"},
+                                  model_access={"hr.employee": False})
+        called_models = {c.args[0] for c in mock_client.model_method.call_args_list}
+        assert "hr.employee" not in called_models, "write-blocked model must stay silent"
+        results.append(("S11/WP2: check_field_compatibility skips installed-but-blocked model", True, ""))
+    except Exception as e:
+        results.append(("S11/WP2: check_field_compatibility skips installed-but-blocked model", False, str(e)))
+
+    try:
+        mock_client = MagicMock()
+        mock_client.model_method.return_value = _AlwaysHasField()
+        # hr installed, model_access says writable -> still checked normally.
+        check_field_compatibility(mock_client, installed_modules={"hr"},
+                                  model_access={"hr.employee": True})
+        called_models = {c.args[0] for c in mock_client.model_method.call_args_list}
+        assert "hr.employee" in called_models, "writable model must still be checked"
+        results.append(("S11/WP2: check_field_compatibility still checks writable model", True, ""))
+    except Exception as e:
+        results.append(("S11/WP2: check_field_compatibility still checks writable model", False, str(e)))
+
+    try:
+        mock_client = MagicMock()
+        mock_client.model_method.return_value = _AlwaysHasField()
+        # A model absent from model_access (never probed) defaults to
+        # checked — same "indeterminate = True" convention probe_model_access
+        # itself uses, not a second, stricter default.
+        check_field_compatibility(mock_client, installed_modules={"hr"}, model_access={})
+        called_models = {c.args[0] for c in mock_client.model_method.call_args_list}
+        assert "hr.employee" in called_models, "model absent from model_access must default to checked"
+        results.append(("S11/WP2: check_field_compatibility defaults unprobed model to checked", True, ""))
+    except Exception as e:
+        results.append(("S11/WP2: check_field_compatibility defaults unprobed model to checked", False, str(e)))
+
+    try:
+        mock_client = MagicMock()
+        # 'street' still missing — explicit whitelist must warn regardless of
+        # model_access, same unconditional contract installed_modules already has.
+        mock_client.model_method.return_value = {"name": {}, "is_company": {}}
+        warnings = check_field_compatibility(
+            mock_client, whitelist={"res.partner": ["name", "is_company", "street"]},
+            model_access={"res.partner": False})
+        assert len(warnings) == 1, f"explicit whitelist must ignore model_access, got {warnings!r}"
+        results.append(("S11/WP2: explicit whitelist bypasses model_access gate", True, ""))
+    except Exception as e:
+        results.append(("S11/WP2: explicit whitelist bypasses model_access gate", False, str(e)))
+
+    # ------------------------------------------------------------------
     # S10/R10 — get_enabled_features stores real bools, not whatever
     # has_create_access's caller happened to return (a stubbed client can
     # return a non-bool truthy/falsy value; the flags dict is serialised to
