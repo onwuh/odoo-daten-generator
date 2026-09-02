@@ -199,9 +199,18 @@ def _create_cv_pdfs(client, gemini, ctx: RunContext) -> None:
         return
 
     logger.info("\n--- DOCUMENTS: Erstelle CV-PDFs für Bewerber ---")
+    # applicant_skill_ids ships with hr_recruitment_skills, not hr_recruitment
+    # itself (S11/R5, found live 2026-09-02) — requesting it in a search_read
+    # fields list when that submodule is missing 500s the whole call
+    # ("Invalid field 'applicant_skill_ids'"), unlike create() which silently
+    # drops an unknown field. See run_config.WANTED_MODULES for the full story.
+    skills_supported = "hr_recruitment_skills" in ctx.installed_modules
+    read_fields = ["id", "partner_name", "email_from", "partner_phone"]
+    if skills_supported:
+        read_fields.append("applicant_skill_ids")
     applicants = client.search_read(
         'hr.applicant', [["id", "in", ctx.applicant_ids]],
-        fields=["id", "partner_name", "email_from", "partner_phone", "applicant_skill_ids"],
+        fields=read_fields,
         limit=0,
     )
     if not applicants:

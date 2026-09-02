@@ -10,7 +10,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 import text_utils
-from modules.recruiting import _random_phone_de, _create_applicants
+from modules.recruiting import _random_phone_de, _create_applicants, _applicant_skill_lines
 
 
 def run():
@@ -70,8 +70,11 @@ def run():
 
         # ctx.applicant_ids must be populated (config.py RunContext field, added
         # alongside S6/P2 CV-PDF work) — a bare None ctx would no longer work
-        # here since _create_applicants now writes back to it.
-        ctx = SimpleNamespace(applicant_ids=[])
+        # here since _create_applicants now writes back to it. ctx.installed_modules
+        # likewise required since S11/R5 (hr_recruitment_skills gate) — all_skill_ids=[]
+        # below means it never actually changes this test's outcome, but the
+        # attribute access itself would still crash without it.
+        ctx = SimpleNamespace(applicant_ids=[], installed_modules=set())
         returned_ids = _create_applicants(
             mock_client, ctx=ctx, recruiting_data=recruiting_data, num_candidates=2,
             job_ids=[42], all_skill_ids=[], skill_levels_map={},
@@ -87,6 +90,39 @@ def run():
         results.append(("Pattern 2: _create_applicants missing candidate_emails/phones -> derived, no crash", True, ""))
     except Exception as e:
         results.append(("Pattern 2: _create_applicants missing candidate_emails/phones -> derived, no crash", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # S11/R5 — applicant_skill_ids ships with hr_recruitment_skills, not
+    # hr_recruitment (found live 2026-09-02: fields_get on hr.applicant has
+    # no skill field at all when it's uninstalled, create_batch fails loudly
+    # the moment a skill line is sent). skills_supported=False must return []
+    # WITHOUT even querying hr.skill/hr.skill.level — real skill_ids given.
+    # ------------------------------------------------------------------
+    try:
+        mock_client = MagicMock()
+        mock_client.search_read.return_value = [{"id": 9, "skill_type_id": [1, "Python"]}]
+        lines = _applicant_skill_lines(mock_client, skill_ids=[9], skills_supported=False)
+        assert lines == [], f"expected no skill lines when unsupported, got {lines!r}"
+        assert mock_client.search_read.call_count == 0, (
+            "skills_supported=False must skip the hr.skill lookup entirely, "
+            f"got {mock_client.search_read.call_count} calls"
+        )
+        results.append(("_applicant_skill_lines: skills_supported=False -> [] with no lookup", True, ""))
+    except Exception as e:
+        results.append(("_applicant_skill_lines: skills_supported=False -> [] with no lookup", False, str(e)))
+
+    try:
+        # Default (skills_supported=True, the pre-S11 behaviour) is unchanged.
+        mock_client = MagicMock()
+        mock_client.search_read.side_effect = [
+            [{"id": 9, "skill_type_id": [1, "Python"]}],   # hr.skill lookup
+            [{"id": 77, "level_progress": 50}],             # hr.skill.level lookup
+        ]
+        lines = _applicant_skill_lines(mock_client, skill_ids=[9])
+        assert len(lines) == 1 and lines[0][2]["skill_id"] == 9, f"expected one skill line, got {lines!r}"
+        results.append(("_applicant_skill_lines: skills_supported defaults True, unchanged behaviour", True, ""))
+    except Exception as e:
+        results.append(("_applicant_skill_lines: skills_supported defaults True, unchanged behaviour", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

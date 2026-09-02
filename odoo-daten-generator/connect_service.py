@@ -62,6 +62,11 @@ class ConnectResult:
     # re-deriving its own answer from the raw model_access dict.
     blocked_modules: Set[str] = field(default_factory=set)
     odoo_version: Optional[str] = None
+    # R5/WP4 — one of "unknown"/"known_good"/"known_broken_with_fix"/"untested"
+    # (odoo_actions.classify_version_status). Replaces the old binary "version
+    # detected or not": a detected-but-never-run-through-WP5 version is a
+    # materially different risk than one actually verified clean.
+    version_status: str = "unknown"
     field_warnings: List[str] = field(default_factory=list)
     existing_company_ids: List[int] = field(default_factory=list)
     existing_product_ids: List[int] = field(default_factory=list)
@@ -92,6 +97,7 @@ class ConnectResult:
             "model_access": self.model_access,
             "blocked_modules": sorted(self.blocked_modules),
             "odoo_version": self.odoo_version,
+            "version_status": self.version_status,
             "field_warnings": self.field_warnings,
             "existing_companies": len(self.existing_company_ids),
             "existing_products": len(self.existing_product_ids),
@@ -209,10 +215,19 @@ def probe(*, base_url: str, database: str, odoo_key: str,
         try:
             version = odoo_actions.get_server_version(client)
             result.odoo_version = version
+            result.version_status = odoo_actions.classify_version_status(version)
             if version:
                 result.field_warnings = odoo_actions.check_field_compatibility(
-                    client, installed_modules=mods) or []
-                detail = version
+                    client, installed_modules=mods, model_access=result.model_access) or []
+                # R5/WP4 — three distinguishable states instead of the old
+                # "version string present" binary: bekannt-gut / bekannt-
+                # defekt-mit-Fix / ungetestet-vorsichtig-fortfahren.
+                status_label = {
+                    "known_good": "geprüft",
+                    "known_broken_with_fix": "bekannte Probleme, Fix aktiv",
+                    "untested": "ungetestet",
+                }.get(result.version_status, "")
+                detail = f"{version} ({status_label})" if status_label else version
                 if result.field_warnings:
                     detail += f" · {len(result.field_warnings)} Feld-Warnung(en) siehe Log"
                 step("version", True, detail)

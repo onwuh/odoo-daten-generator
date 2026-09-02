@@ -157,12 +157,25 @@ def run(client, ctx):
     # with bom_line_ids inlined), gemini=None to prove it needs no LLM call.
     # mrp_routings disabled to keep this test scoped to D3 (products/BOMs),
     # independent of the still-open B15 workcenter default.
+    #
+    # create_quality_points stays False by default — that path never runs
+    # here otherwise, which is exactly why R18's test_report_type="none" bug
+    # went unnoticed (see ROADMAP.md). S11/WP1 flips it under
+    # ODOO_GENERATOR_CAPTURE_FIELDS so a manifest-capture run also sees
+    # quality.point/quality.check's real fields; expect this step to fail on
+    # that known bug when captured this way — capture happens at payload
+    # construction, before the request goes out, so the failure doesn't lose
+    # the fields.
     try:
         rctx = _make_rctx({
             "num_products": 2, "components_per_bom": 2, "sub_boms_per_product": 1,
-            "num_workcenters": 0, "num_manufacturing_orders": 0, "create_quality_points": False,
+            "num_workcenters": 0, "num_manufacturing_orders": 0,
+            "create_quality_points": os.environ.get("ODOO_GENERATOR_CAPTURE_FIELDS") == "1",
         })
-        rctx.feature_flags = {"mrp_routings": False}
+        rctx.feature_flags = {
+            "mrp_routings": False,
+            "quality": os.environ.get("ODOO_GENERATOR_CAPTURE_FIELDS") == "1",
+        }
         create_mrp_data(client, None, rctx)
         assert len(rctx.product_ids) == 2, f"expected 2 main products, got {len(rctx.product_ids)}"
         # 2 products x 2 components + 2 x 1 sub-bom x raw_count(2) = 4 + 4 = 8

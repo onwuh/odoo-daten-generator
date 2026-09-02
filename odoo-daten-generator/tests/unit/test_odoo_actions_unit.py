@@ -8,7 +8,8 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from odoo_actions import (get_enabled_features, get_server_version, check_field_compatibility,
-                          probe_model_access, MODEL_ACCESS_PROBES)
+                          probe_model_access, MODEL_ACCESS_PROBES, classify_version_status,
+                          LAST_VERIFIED_VERSION, KNOWN_BROKEN_VERSIONS)
 
 
 class _AlwaysHasField(dict):
@@ -119,6 +120,46 @@ def run():
         results.append(("S5: get_server_version search_read raises → None, no crash", False, str(e)))
 
     # ------------------------------------------------------------------
+    # S11/R5 WP4 — classify_version_status: three distinguishable states
+    # instead of the old binary "version detected or not".
+    # ------------------------------------------------------------------
+    try:
+        assert classify_version_status(None) == "unknown"
+        results.append(("S11/WP4: classify_version_status(None) -> 'unknown'", True, ""))
+    except AssertionError as e:
+        results.append(("S11/WP4: classify_version_status(None) -> 'unknown'", False, str(e)))
+
+    try:
+        assert classify_version_status(LAST_VERIFIED_VERSION) == "known_good"
+        results.append(("S11/WP4: classify_version_status(LAST_VERIFIED_VERSION) -> 'known_good'", True, ""))
+    except AssertionError as e:
+        results.append(("S11/WP4: classify_version_status(LAST_VERIFIED_VERSION) -> 'known_good'", False, str(e)))
+
+    try:
+        # A version this codebase has never run a WP5 check against.
+        never_seen = "999.9"
+        assert never_seen != LAST_VERIFIED_VERSION and never_seen not in KNOWN_BROKEN_VERSIONS
+        assert classify_version_status(never_seen) == "untested"
+        results.append(("S11/WP4: classify_version_status(unseen version) -> 'untested'", True, ""))
+    except AssertionError as e:
+        results.append(("S11/WP4: classify_version_status(unseen version) -> 'untested'", False, str(e)))
+
+    try:
+        # KNOWN_BROKEN_VERSIONS starts empty (no real finding yet, same as
+        # WP3's registry) — exercise the branch with a fake entry rather than
+        # mutating the real module-level dict.
+        import odoo_actions as _odoo_actions_mod
+        orig = _odoo_actions_mod.KNOWN_BROKEN_VERSIONS
+        _odoo_actions_mod.KNOWN_BROKEN_VERSIONS = {"20.0": "some fixed issue"}
+        try:
+            assert _odoo_actions_mod.classify_version_status("20.0") == "known_broken_with_fix"
+        finally:
+            _odoo_actions_mod.KNOWN_BROKEN_VERSIONS = orig
+        results.append(("S11/WP4: classify_version_status(version in KNOWN_BROKEN_VERSIONS) -> 'known_broken_with_fix'", True, ""))
+    except AssertionError as e:
+        results.append(("S11/WP4: classify_version_status(version in KNOWN_BROKEN_VERSIONS) -> 'known_broken_with_fix'", False, str(e)))
+
+    # ------------------------------------------------------------------
     # S5 tier 1 — check_field_compatibility
     # ------------------------------------------------------------------
 
@@ -193,6 +234,62 @@ def run():
         results.append(("S10: check_field_compatibility gates hr.leave on hr_holidays, not hr", True, ""))
     except Exception as e:
         results.append(("S10: check_field_compatibility gates hr.leave on hr_holidays, not hr", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # S11/R5 WP2 — check_field_compatibility composes model_access with
+    # installed_modules: a model that's installed but write-blocked (the
+    # S10 mrp.workcenter case — installed, readable, "Arbeitsaufträge" off)
+    # must stay silent too, same as an uninstalled model (Pattern 3 analog).
+    # ------------------------------------------------------------------
+    try:
+        mock_client = MagicMock()
+        mock_client.model_method.return_value = _AlwaysHasField()
+        # hr installed (hr.employee gated on it) but blocked per model_access.
+        check_field_compatibility(mock_client, installed_modules={"hr"},
+                                  model_access={"hr.employee": False})
+        called_models = {c.args[0] for c in mock_client.model_method.call_args_list}
+        assert "hr.employee" not in called_models, "write-blocked model must stay silent"
+        results.append(("S11/WP2: check_field_compatibility skips installed-but-blocked model", True, ""))
+    except Exception as e:
+        results.append(("S11/WP2: check_field_compatibility skips installed-but-blocked model", False, str(e)))
+
+    try:
+        mock_client = MagicMock()
+        mock_client.model_method.return_value = _AlwaysHasField()
+        # hr installed, model_access says writable -> still checked normally.
+        check_field_compatibility(mock_client, installed_modules={"hr"},
+                                  model_access={"hr.employee": True})
+        called_models = {c.args[0] for c in mock_client.model_method.call_args_list}
+        assert "hr.employee" in called_models, "writable model must still be checked"
+        results.append(("S11/WP2: check_field_compatibility still checks writable model", True, ""))
+    except Exception as e:
+        results.append(("S11/WP2: check_field_compatibility still checks writable model", False, str(e)))
+
+    try:
+        mock_client = MagicMock()
+        mock_client.model_method.return_value = _AlwaysHasField()
+        # A model absent from model_access (never probed) defaults to
+        # checked — same "indeterminate = True" convention probe_model_access
+        # itself uses, not a second, stricter default.
+        check_field_compatibility(mock_client, installed_modules={"hr"}, model_access={})
+        called_models = {c.args[0] for c in mock_client.model_method.call_args_list}
+        assert "hr.employee" in called_models, "model absent from model_access must default to checked"
+        results.append(("S11/WP2: check_field_compatibility defaults unprobed model to checked", True, ""))
+    except Exception as e:
+        results.append(("S11/WP2: check_field_compatibility defaults unprobed model to checked", False, str(e)))
+
+    try:
+        mock_client = MagicMock()
+        # 'street' still missing — explicit whitelist must warn regardless of
+        # model_access, same unconditional contract installed_modules already has.
+        mock_client.model_method.return_value = {"name": {}, "is_company": {}}
+        warnings = check_field_compatibility(
+            mock_client, whitelist={"res.partner": ["name", "is_company", "street"]},
+            model_access={"res.partner": False})
+        assert len(warnings) == 1, f"explicit whitelist must ignore model_access, got {warnings!r}"
+        results.append(("S11/WP2: explicit whitelist bypasses model_access gate", True, ""))
+    except Exception as e:
+        results.append(("S11/WP2: explicit whitelist bypasses model_access gate", False, str(e)))
 
     # ------------------------------------------------------------------
     # S10/R10 — get_enabled_features stores real bools, not whatever

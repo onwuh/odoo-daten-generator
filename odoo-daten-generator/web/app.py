@@ -420,8 +420,15 @@ def _feedback_run_context(run_id: Optional[str], session) -> Optional[Dict[str, 
     Deliberately not _own_run: runs are pruned after FINISHED_RUN_TTL_SECONDS,
     and a stale or foreign run_id must not fail the feedback submission — it
     should just go in without context. Data-minimized: run_id/status/per-module
-    status/error-count only, never target/database/error text (see
-    feedback._build_body).
+    status/error-count only, never target/database/error text/log content (see
+    feedback._build_body) — not because it's redacted, but because it's
+    unnecessary: the full run log is kept locally
+    (run_journal.run_log_path/S11-D9) and retrievable by the run_id already
+    carried here, so there is nothing to gain by also embedding it in a
+    public GitHub issue. Keep this dict's key set exactly {run_id, status,
+    modules, api_error_count} — a future edit that adds a "log" key here
+    would defeat that property; tests/unit/test_web_feedback_unit.py asserts
+    the exact key set for this reason.
     """
     if not run_id:
         return None

@@ -1,0 +1,181 @@
+{
+  "account.analytic.line": [
+    "date",
+    "employee_id",
+    "name",
+    "project_id",
+    "so_line",
+    "task_id",
+    "unit_amount"
+  ],
+  "account.bank.statement": [
+    "balance_end_real"
+  ],
+  "account.bank.statement.line": [
+    "amount",
+    "journal_id",
+    "partner_id",
+    "payment_ref",
+    "statement_id"
+  ],
+  "account.move": [
+    "invoice_date",
+    "invoice_line_ids",
+    "move_type",
+    "partner_id",
+    "ref"
+  ],
+  "crm.lead": [
+    "date_deadline",
+    "expected_revenue",
+    "name",
+    "partner_id",
+    "stage_id",
+    "type",
+    "user_id"
+  ],
+  "crm.lead#message_post": [
+    "body",
+    "message_type",
+    "subtype_xmlid"
+  ],
+  "hr.applicant": [
+    "email_from",
+    "job_id",
+    "partner_name",
+    "partner_phone",
+    "schedule_pay",
+    "stage_id"
+  ],
+  "hr.employee": [
+    "name"
+  ],
+  "hr.job": [
+    "department_id",
+    "description",
+    "job_skill_ids",
+    "name",
+    "no_of_recruitment",
+    "payment_interval"
+  ],
+  "hr.skill": [
+    "name",
+    "skill_type_id"
+  ],
+  "hr.skill.type": [
+    "name"
+  ],
+  "ir.attachment": [
+    "mimetype",
+    "name",
+    "raw",
+    "res_id",
+    "res_model",
+    "type"
+  ],
+  "mail.activity": [
+    "activity_type_id",
+    "date_deadline",
+    "res_id",
+    "res_model_id",
+    "summary"
+  ],
+  "mrp.bom": [
+    "bom_line_ids",
+    "code",
+    "product_id",
+    "product_qty",
+    "product_tmpl_id",
+    "type"
+  ],
+  "mrp.bom.line": [
+    "bom_id",
+    "product_id",
+    "product_qty"
+  ],
+  "mrp.production": [
+    "bom_id",
+    "date_start",
+    "product_id",
+    "product_qty"
+  ],
+  "mrp.routing.workcenter": [
+    "bom_id",
+    "name",
+    "sequence",
+    "time_cycle_manual",
+    "workcenter_id"
+  ],
+  "mrp.workcenter": [
+    "costs_hour",
+    "name",
+    "time_efficiency"
+  ],
+  "product.product": [
+    "invoice_policy",
+    "is_storable",
+    "list_price",
+    "name",
+    "purchase_ok",
+    "sale_ok",
+    "service_tracking",
+    "service_type",
+    "standard_price",
+    "tracking",
+    "type"
+  ],
+  "project.project": [
+    "name"
+  ],
+  "project.task": [
+    "name",
+    "project_id",
+    "stage_id"
+  ],
+  "project.task.type": [
+    "name",
+    "sequence"
+  ],
+  "purchase.order": [
+    "company_id",
+    "currency_id",
+    "date_order",
+    "document_tax_mode",
+    "order_line",
+    "partner_id",
+    "picking_type_id"
+  ],
+  "res.partner": [
+    "city",
+    "country_id",
+    "email",
+    "is_company",
+    "name",
+    "parent_id",
+    "phone",
+    "street",
+    "supplier_rank",
+    "type",
+    "website",
+    "zip"
+  ],
+  "sale.advance.payment.inv": [
+    "advance_payment_method",
+    "sale_order_ids"
+  ],
+  "sale.order": [
+    "opportunity_id",
+    "order_line",
+    "partner_id"
+  ],
+  "sale.order#action_confirm": [
+    "extra"
+  ],
+  "stock.quant": [
+    "company_id",
+    "in_date",
+    "inventory_quantity",
+    "location_id",
+    "product_id"
+  ]
+}

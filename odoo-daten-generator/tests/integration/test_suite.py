@@ -185,6 +185,16 @@ def main():
     integ_summary = _run_all(client, ctx)
     integ_ok = _render_summary(integ_summary)
 
+    # R5/WP1 — dump the captured field manifest when capture was requested.
+    # Separate from the pass/fail gate below: the manifest is a committed
+    # artifact from an explicit, occasional invocation, not something a
+    # normal green-suite run produces or depends on.
+    if os.environ.get("ODOO_GENERATOR_CAPTURE_FIELDS") == "1":
+        from odoo_client import dump_captured_fields
+        manifest_path = os.path.join(_ROOT, "field_manifest.json")
+        dump_captured_fields(manifest_path)
+        print(f"\n[capture] Field manifest written to {manifest_path}")
+
     all_ok = unit_ok and integ_ok
     sys.exit(0 if all_ok else 1)
 

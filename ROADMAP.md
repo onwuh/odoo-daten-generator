@@ -50,7 +50,7 @@ Parameter heißt in allen Modulsignaturen `gemini`, Provider ist primär Groq; `
 - ⚪ **Offen:** Provider-Erkennung ist weiterhin Prefix-Sniffing — `connect_service.py:126`: `"groq" if llm_key.startswith("gsk_") else "gemini"`. Kein explizites Dropdown/Feld für die Provider-Wahl im Web-Frontend.
 - ⚪ **Offen:** `orchestrator.py:54` — `gemini.fetch_name_suggestions(...)` läuft weiterhin unconditional bei jedem Lauf, außerhalb des `skip_master_data`-Gates (Zeile 46). Lädt Namensbänke auch dann, wenn kein Modul sie braucht.
 
-### D9 🟡 Feedback-Logs — Lauf-Log optional an GitHub-Issue anhängen
+### D9 ✅ (S11 Phase B, 2026-09-02) Feedback-Logs — Lauf-Log lokal, Referenz im Issue
 
 **Hinzugefügt:** 2026-09-02, im selben Gespräch wie R5s Überarbeitung — Nutzer will bei
 gemeldetem Feedback (Bug/Idee-Button, `web/feedback.py`) auch das tatsächliche Lauf-Log
@@ -68,28 +68,52 @@ bestehenden Daten-Minimierungs-Entscheidung — ein Lauf-Log kann die Ziel-Odoo-
 DB-Namen und rohen Odoo-Fehlertext enthalten (potenziell Kundendaten eines Interessenten),
 und `web/feedback.py` erstellt Issues in einem **öffentlich sichtbaren** GitHub-Repo.
 
-**Vorgeschlagene Lösung (nicht final, vor Umsetzung mit Architekt abstimmen):**
-1. **Opt-in, nicht Default** — eigene Checkbox im Feedback-Formular ("Lauf-Log anhängen"),
-   analog zum bereits etablierten Consent-Muster für `crm_chatter`s `use_db_names` (S9) —
-   nicht angehakt heißt heutiges Minimal-Verhalten unverändert.
-2. **Redaktion vor dem Versand**, nicht blindes Anhängen — Ziel-URL/Hostname aus den
-   Log-Zeilen entfernen, bevor sie ins Issue gehen; `odoo_client._redact_error_body`/
-   `_printable` sind die bereits vorhandenen Vorbilder für "Fehlertext säubern, bevor er das
-   System verlässt", hier wiederverwendbar statt neu erfunden.
-3. **Quelle der Logs:** `web/sse.py`s `RunEventStream` hält bereits ein Append-Only-Log pro
-   `run_id` (`_events`, bis `MAX_EVENTS=5000`) — kein neuer Speicher nötig für den
-   Normalfall (Feedback während/kurz nach dem Lauf). **Einschränkung:** dieser Puffer ist
-   In-Memory, nicht dauerhaft — der Janitor-Task (S9) vergisst abgeschlossene Läufe nach
-   `ODOO_GENERATOR_LOG_RETENTION_DAYS`. Feedback zu einem länger zurückliegenden Lauf hat
-   dann kein Log mehr zum Anhängen — Formular sollte das erkennen (Stream via `run_id`
-   nicht mehr auffindbar) und die Checkbox entsprechend deaktivieren/ausblenden, statt einen
-   leeren Log-Block zu versenden.
-4. **Größenlimit** — GitHub-Issue-Bodies haben ein Zeichenlimit; lange Logs entweder kappen
-   (letzte N Zeilen, wo Fehler typischerweise stehen) oder als eingeklapptes `<details>`-Block
-   im Issue-Body einbetten.
+**Lösung, überarbeitet 2026-09-02 (Nutzerentscheidung, ersetzt den Redaktions-Ansatz
+oben):** kein Log-Inhalt geht ins öffentliche GitHub-Issue, auch nicht redigiert — das Log
+bleibt lokal auf der eigenen Maschine des Nutzers (Self-Hosting, siehe
+`constraint_no_it_no_company_infra`-Memory: der eigene Server ist bereits die
+Vertrauensgrenze), das Issue trägt nur eine **Referenz**.
+1. **Referenz existiert bereits** — `web/feedback.py:_build_body` schreibt `run_id` schon
+   heute in den Issue-Body (Zeile ~101). Keine neue Checkbox, keine Redaktion nötig — es
+   verlässt ohnehin nichts das System.
+2. **Dauerhaftigkeit ist die eigentliche Lücke:** `web/sse.py`s `RunEventStream` hält das
+   Log nur In-Memory (`_events`, bis `MAX_EVENTS=5000`), verliert es bei Prozess-Neustart
+   und der Janitor-Task vergisst es nach `ODOO_GENERATOR_LOG_RETENTION_DAYS`. Fix: vollständiges
+   Log pro Lauf zusätzlich auf Platte persistieren, nach demselben Verzeichnis-Muster wie
+   `run_journal.py`s `seeds/runs/<run_id>.json` (z. B. `seeds/runs/<run_id>.log`) — kein
+   neues Verzeichniskonzept.
+3. **Retention:** dieselbe `ODOO_GENERATOR_LOG_RETENTION_DAYS`-Janitor-Logik wie für alles
+   andere, kein separater Knopf ohne belegten Grund.
+4. **Kein Größenlimit/`<details>`-Block nötig** — entfällt, da nichts mehr in den
+   Issue-Body eingebettet wird.
 
-**Tests:** Pattern 3 (Opt-out → keine Log-Zeile im gebauten Body, Assert per String-Suche);
-eigener Unit-Test für die Redaktion (Ziel-URL im Rohlog → nicht im versendeten Body).
+**Umsetzung, verifiziert 2026-09-02 (Cold-Review vor Implementierung, gleiches Verfahren wie
+S5-S10) — mit zwei Korrekturen gegenüber dem Entwurf oben:**
+- **Hook-Punkt:** nicht `web/sse.py`s `publish()` (hätte den Lock jedes Worker-Threads mit
+  Datei-I/O serialisiert und `RunEventStream`s bewusst begrenzten In-Memory-Puffer mit
+  Pfad-/Env-/Retention-Wissen belastet) — stattdessen ein zweiter `logging.FileHandler`
+  über das bereits vorhandene `logging_setup.run_log_capture` (`web/jobs.py:_execute`,
+  verschachtelter `with`-Block neben dem bestehenden SSE-`_StreamHandler`, `contextlib.
+  nullcontext()` wenn die Datei nicht angelegt werden konnte).
+- **Pfad + Retention:** `run_journal.run_log_path(run_id)` — dasselbe Verzeichnis wie der
+  Journal (`ODOO_GENERATOR_RUNS_DIR`-Override, Docker-`read_only`-Profil funktioniert also
+  automatisch mit). `run_journal.prune_journals` räumt jetzt `*.json` UND `*.log` in einem
+  Durchgang ab — Cold-Review-Fund: ein Lauf-Log ist *stärker* Interessenten-identifizierend
+  als das Journal (`odoo_client._post` loggt die volle Ziel-URL bei **jedem** Request, nicht
+  nur einmal), ein eigener, leicht vergessener zweiter Retention-Pfad wäre also schlimmer als
+  gar keiner gewesen.
+- Schreiben ist **best-effort** — dieselbe Regel wie `RunJournal._persist`: ein Lauf darf nie
+  daran scheitern, dass sein eigenes Log nicht angelegt werden konnte.
+
+**Tests:** `tests/unit/test_web_api_unit.py` — echter Lauf schreibt sein Log lokal
+(Marker-Zeile über den echten Logger, nicht nur Datei-Existenz), unbeschreibbares Verzeichnis
+→ `None`, kein Crash. `tests/unit/test_run_journal_unit.py` — `*.log` wird vom selben
+Retention-Durchlauf wie `*.json` erfasst. `tests/unit/test_web_feedback_unit.py` — exakte
+Schlüsselmenge `{run_id, status, modules, api_error_count}` im an `create_github_issue`
+übergebenen Kontext (Cold-Review-Fund: die Regressionssicherung gehört an
+`app._feedback_run_context`, nicht an `feedback._build_body`, das nur formatiert, was es
+bekommt — und sie muss "das automatische Kontext-Objekt", nicht "das Freitextfeld `message`"
+meinen, das der Nutzer selbst befüllt).
 
 ---
 
@@ -143,6 +167,13 @@ der einzige reale Fund, Fix ist bereits gemerged. Kein Rename in zwei geprüften
 Versions-Übergängen (19.2→19.4, 19.4→19.5) bislang — die Registry unten startet deshalb
 bewusst leer, sie ist die Leitung, nicht der Inhalt.
 
+**Eingeplant als S11** (2026-09-02, Nutzerentscheidung, siehe §5) — vor der bereits
+vorgesehenen "Quick Wins"-Sprint, die dafür zu S12 verschoben wird. Verifiziert vor
+Sprintstart: `ir.attachment.raw` wird produktionsseitig nur geschrieben, nie gelesen
+(`modules/documents.py:184,251`) — WP3 startet damit als reine, folgenlose Infrastruktur
+(leere Registry, Regressionstest auf byte-gleiche Payloads), kein echter Eintrag ist
+aktuell belegt.
+
 **Warum das JSON-Mapping-Design verworfen wurde:** zwei Lücken, beide im Chat gefunden.
 (1) `fields_get`-basierte Prüfungen sehen nur "Feld weg/da", nicht "Feld da, aber Laufzeit-
 Form geändert" — exakt der V20-Fund (`ir.attachment.raw` existiert weiter, liefert aber ein
@@ -193,7 +224,59 @@ zusätzlich zu `installed_modules`. Kein neuer Mechanismus — nur korrekte Verd
 eigenem Ergebnis. Eine Feld-Warnung ist danach eindeutig: installiert, schreibbar, trotzdem
 fehlend → garantiert ein Versions-Fund, nie Rauschen aus Install-/Rechte-Zustand.
 
-#### WP3: Übersetzungs-Registry + ein Übersetzungspunkt 🔒
+#### WP3: Übersetzungs-Registry + ein Übersetzungspunkt 🔒 — **zurückgestellt, siehe unten**
+
+**Status 2026-09-02 (S11 Phase B, nach Cold-Review):** zurückgestellt, nicht verworfen.
+Peer-Review (1 fremder Opus-Agent, Plantext + Live-Repo, keine Konversationshistorie —
+gleiches Verfahren wie S5-S10) fand vier Blocker in der ursprünglichen Fassung unten:
+
+1. **Keine Verdrahtung von Connect zum echten Lauf-Client.** Drei getrennte
+   `OdooJson2Client`-Instanzen existieren (`connect_service.probe()`s Client,
+   `JournalingClient` in `web/jobs.py` — der Client, der die eigentlichen Schreibvorgänge
+   macht —, und ein dritter für D7-Cleanup in `web/app.py`). Eine in `probe()` aufgelöste
+   Tabelle erreicht keinen davon; der Transportweg war im ursprünglichen Design nicht
+   spezifiziert.
+2. **Die vier genannten Hook-Punkte decken nur den Schreibpfad ab.** Modell-Umbenennung
+   (im URL-Pfad *jeder* Methode, auch `search`/`search_read`) und der einzige reale
+   Präzedenzfall (`ir.attachment.raw`s Laufzeit-Form-Wechsel, ein *Lese*-Transform) sind
+   von `create`/`create_batch`/`write`/`call_method` aus nicht erreichbar — genau der Fund,
+   den WP3 laut Grenztabelle unten eigentlich abdecken soll.
+3. **`create_batch`s 404/422-Fallback ruft intern `create()` auf** — ein an beiden Stellen
+   angewandter Transform würde auf diesem Pfad doppelt greifen.
+4. Die Begründung "kein gemeinsamer Übersetzungspunkt existiert heute" war ungenau —
+   `_post()` ist ein echter gemeinsamer Punkt; was fehlt, ist Wissen um die Payload-Form
+   (`vals_list` vs. `vals` vs. nackte kwargs), nicht der Aufrufpunkt selbst.
+
+**Reviewer-Einschätzung zur eigentlichen Anti-Pattern-Frage** (explizit nicht nur die eigene
+Begründung dieses Dokuments bestätigen sollen): WP3 ist **kein** Wiederauflegen der entfernten
+JSON2-Payload-Fallback-Kette — die alte Kette war aktiv (verbrannte Requests, änderte
+Kontrollfluss, maskierte echte Fehler bei jedem Call), eine leere Registry mit
+Byte-gleich-Regressionstest ist es nicht. Trotzdem empfohlen: **zurückstellen**, weil (a) der
+einzige Präzedenzfall (`ir.attachment.raw`) live bestätigt nur *geschrieben*, nie in
+Produktionscode *gelesen* wird (`modules/documents.py:184,251` — Lesezugriff existiert nur in
+Test-Assertions), also kein Produktions-Fund vorliegt, und (b) das Design ihn ohnehin nicht
+hätte auffangen können (Blocker 2) — Infrastruktur "für den nächsten Fund" gebaut, die den
+letzten Fund nachweislich nicht aufgefangen hätte, ist schwache Infrastruktur.
+
+**Auslöser für Wiederaufnahme:** der erste Fund aus einem `scripts/check_compat.sh`-Lauf
+(WP5, S11 Phase B umgesetzt), den die Grenztabelle unten mit ✅ markiert (Registry-Eintrag
+reicht). Bis dahin bleibt dieser Punkt offen im Backlog, siehe `§5` Sprinttabelle.
+
+**Falls doch vorgezogen — Mindeststandard, den die Umsetzung dann erfüllen muss:**
+- Blocker 1-3 oben lösen, bevor der erste Code entsteht.
+- Reviewer-Alternative statt Direkt-Patch an `odoo_client.py`: **Subclass** (`class
+  VersionAdaptingClient(OdooJson2Client)`, eigene Datei) statt Änderung der 🔒-Datei selbst
+  — genau das Muster, das `run_journal.JournalingClient`s eigener Docstring bereits
+  begründet ("Subclass rather than a patch: journaling is a separate concern from how
+  create/create_batch build their request"). Löst NICHT Blocker 1 (die drei
+  Client-Instanzen) — verlagert nur, wo die Verdrahtung passiert.
+- Regressionstest muss `(url, payload)`-Paare vergleichen, nicht nur Payloads — sonst keine
+  echte Absicherung gegen eine Modell-Umbenennung im URL-Pfad.
+- Versions-Schlüssel-Semantik vorab festlegen und dokumentieren: exaktes Match oder "diese
+  Version und später"? (`classify_version_status`, Phase A, hat dieselbe Exact-Match-Eigenschaft
+  — ein Eintrag für "19.5" gilt nicht mehr ab 19.6/20.0, genau dann, wenn er gebraucht würde.)
+
+**Ursprüngliches Design (Referenz, nicht mehr aktueller Umsetzungsplan):**
 
 Ersetzt Baustein 2+3 des alten Plans. Statt nutzereditierbarer JSON-Dateien mit eigener
 Vererbungs-/Transformations-DSL: eine kleine, **in Code gepflegte** Registry (nur von
@@ -220,27 +303,36 @@ Kein Plugin-System, keine Ausdrucks-DSL — bleibt bei reiner Umbenennung/Wert-T
 Weglassen. Ein Fund, der mehr braucht (siehe Grenztabelle unten), wird ein echter Code-Zweig,
 keine Registry-Zeile.
 
-#### WP4: `LAST_VERIFIED_VERSION`-Marker
+#### WP4: `LAST_VERIFIED_VERSION`-Marker ✅ (S11 Phase A, 2026-09-02)
 
-Kleine Konstante, gepflegt bei jedem sauberen Durchlauf von WP5 gegen eine neue Version.
-Im Connect-Checklist neben der erkannten Version sichtbar: bekannt-gut / bekannt-defekt-mit-
-Fix / ungetestet-vorsichtig-fortfahren — drei unterscheidbare Zustände statt heute nur
-"Version erkannt oder nicht".
+Kleine Konstante (`odoo_actions.LAST_VERIFIED_VERSION`, aktuell `"19.4"`), gepflegt bei jedem
+sauberen Durchlauf von WP5 gegen eine neue Version — nie sonst. `classify_version_status`
+liefert drei Zustände statt vorher nur "Version erkannt oder nicht":
+`known_good`/`known_broken_with_fix` (letzteres über `KNOWN_BROKEN_VERSIONS`, startet leer,
+gleiche Logik wie WP3s Registry) /`untested`. Im Connect-Checklist als
+`19.4 (geprüft)`/`(ungetestet)`/`(bekannte Probleme, Fix aktiv)` sichtbar — reine
+Anzeigelogik im bestehenden `version`-Step-Detail, kein Frontend-Code nötig.
 
-#### WP5: `scripts/check_compat.sh` — formalisierte Versions-Prüfung (Dev-seitig)
+#### WP5: `scripts/check_compat.sh` ✅ (S11 Phase B, 2026-09-02) — formalisierte Versions-Prüfung (Dev-seitig)
 
 Formalisiert, was am 2026-08-29 für V20-Beta ad-hoc gemacht wurde: `tests/test_config.ini`
-auf eine neue/Beta-Instanz zeigen, vollen `test_suite.py`-Lauf fahren, Funde nach der
-Grenztabelle unten triagieren (Registry-Zeile vs. echter Code-Zweig), `LAST_VERIFIED_VERSION`
-bumpen. **Läuft nicht automatisch bei einem Nutzer-Lauf** — hat Seiteneffekte (echte
-Datensätze auf der Zielinstanz), dauert Minuten, ist eine bewusste, entwicklerseitige
-Freigabe-Aktion pro neuer Odoo-Version, kein Teil des Produkts selbst.
+auf eine neue/Beta-Instanz zeigen, `./scripts/check_compat.sh` ausführen (voller
+`test_suite.py`-Lauf mit `ODOO_GENERATOR_CAPTURE_FIELDS=1`, verlässt sich auf den
+Exit-Code, kein Output-Parsing), Funde bei Fehlschlag nach der Grenztabelle unten triagieren
+(Registry-Zeile vs. echter Code-Zweig), `LAST_VERIFIED_VERSION` **manuell** bumpen — das
+Skript tut das bewusst nicht selbst. **Läuft nicht automatisch bei einem Nutzer-Lauf** — hat
+Seiteneffekte (echte Datensätze auf der Zielinstanz), dauert Minuten, ist eine bewusste,
+entwicklerseitige Freigabe-Aktion pro neuer Odoo-Version, kein Teil des Produkts selbst.
+Live verifiziert (2026-09-02, demo-test5): PASS- und FAIL-Zweig beide durchlaufen, korrekter
+Exit-Code in beiden Fällen.
 
-**Cadence-Zusammenfassung:** WP2-WP4 (Erkennung + Registry-Anwendung) laufen bei **jedem**
+**Cadence-Zusammenfassung:** WP2/WP4 (Erkennung, Zugriffs-Ebenen) laufen bei **jedem**
 Connect — billig, read-only, pro Zielinstanz unterschiedlich, lässt sich nicht vorberechnen.
 WP1 (Manifest) regeneriert sich bei Code-Änderungen, nicht bei Odoo-Releases — eigener,
 unabhängiger Auslöser. WP5 (volle Prüfung, Registry-Inhalt entdecken) läuft selten, bewusst,
-mit Seiteneffekten, nie automatisch im Produkt.
+mit Seiteneffekten, nie automatisch im Produkt. WP3 (Registry-Anwendung pro Connect) ist
+zurückgestellt, siehe dessen eigener Statusblock oben — die Cadence-Aussage dafür gilt erst,
+wenn es umgesetzt wird.
 
 #### Grenze: Was geht per Registry-Eintrag — was braucht echten Code
 
@@ -289,7 +381,7 @@ Aufwand: mittel-groß. Nicht Teil von S3.
 "AT", "CH"]` hartkodiert, `static_data.py`s `CITIES` kennt nur DE/AT/CH. Fundament aus S3
 (länderweise Struktur) steht, das Feature selbst nicht begonnen.
 
-### R11 🆕 Geplant (S11) — Lost Opportunities (CRM)
+### R11 🆕 Geplant (S12) — Lost Opportunities (CRM)
 
 **Warum:** `modules/crm.py` erzeugt aktuell nur aktive/gewonnene Opportunities — kein
 Trichter-Realismus (jede Demo-Pipeline sieht 100% erfolgreich aus).
@@ -338,7 +430,7 @@ auch verlorene Leads vorhanden).
 **Komplexität:** Niedrig-Mittel (die Sequenzierungs-Korrektur macht es weniger trivial als
 zunächst geschätzt) · **Benefit:** Mittel
 
-### R12 🆕 Geplant (S13) — Nachbestellregeln / Replenishment-Planung
+### R12 🆕 Geplant (S14) — Nachbestellregeln / Replenishment-Planung
 
 **Annahme zur Bezeichnung "MRP Planung":** interpretiert als Odoos Nachbestellregeln
 (`stock.warehouse.orderpoint`, im deutschen Inventory-Menü unter "Planung"/"Nachbestellung"),
@@ -377,7 +469,7 @@ S8), Pattern 4 (Read-back `product_min_qty`/`product_max_qty`).
 
 **Komplexität:** Mittel (Minimal-Scope) · **Benefit:** Mittel-Hoch
 
-### R13 🆕 Geplant (S12) — Seriennummern-/Chargenverfolgung
+### R13 🆕 Geplant (S13) — Seriennummern-/Chargenverfolgung
 
 **Live bestätigt (`stock.lot`, saas-19.4):** vollständiges Feldschema — `product_id`
 (`required`), `name` (`required`, "Lot/Serial Number"), `company_id`, `location_id`.
@@ -414,7 +506,7 @@ Crash), Pattern 4 (Read-back `stock.lot.product_id`/`name`), Pattern 6 (m2o-Tupe
 
 **Komplexität:** Mittel · **Benefit:** Mittel
 
-### R14 🆕 Geplant (S12) — Multi-Warehouse
+### R14 🆕 Geplant (S13) — Multi-Warehouse
 
 **Live bestätigt (`stock.warehouse`, saas-19.4):** vollständiges Feldschema — `name`/`code`
 (`required`), `view_location_id`/`lot_stock_id` (`required`, m2o → `stock.location`),
@@ -436,7 +528,7 @@ Pattern 4 (Read-back zweites Warehouse `code`/`lot_stock_id`).
 
 **Komplexität:** Mittel · **Benefit:** Mittel
 
-### R15 🆕 Geplant (S12) — Lagerplätze (Sub-Locations, Putaway)
+### R15 🆕 Geplant (S13) — Lagerplätze (Sub-Locations, Putaway)
 
 **Live bestätigt (`stock.location`, saas-19.4):** vollständiges Feldschema — `usage`
 (Selection: `supplier`/`view`/`internal`/`customer`/`inventory`/`production`/`transit`),
@@ -457,7 +549,7 @@ Pattern 4 (Read-back `complete_name`/`location_id`-Hierarchie).
 
 **Komplexität:** Mittel · **Benefit:** Mittel-Hoch
 
-### R16 🆕 Geplant (S11 Produkt-Ebene, S12 Location-Ebene) — Barcode
+### R16 🆕 Geplant (S12 Produkt-Ebene, S13 Location-Ebene) — Barcode
 
 **Live bestätigt:** `product.product.barcode` (char) **und** `stock.location.barcode`
 (char) existieren beide auf saas-19.4.
@@ -483,7 +575,7 @@ Werten.
 **Komplexität:** Niedrig · **Benefit:** Niedrig-Mittel (zahlt sich nur aus, wenn later
 Odoos eigene Barcode-App/ein Scanner gegen die Demo-DB verwendet wird)
 
-### R17 🆕 Geplant (S15, Architektur-Spike zuerst) — Multicompany
+### R17 🆕 Geplant (S16, Architektur-Spike zuerst) — Multicompany
 
 **Live bestätigt:** `res.company.parent_id`/`child_ids` (Firmenhierarchie),
 `res.users.company_id`/`company_ids` (Default- + erlaubte Firmen) — Standard-Odoo-Multi-
@@ -523,7 +615,7 @@ dem ersten Codezeilen.
 Minimal-Scope des ersten Wurfs — der volle Nutzen hängt vom tatsächlich freigegebenen
 Umfang ab, nicht von dieser Schätzung allein.
 
-### R18 🆕 Geplant (S13) — Quality Checks
+### R18 🆕 Geplant (S14) — Quality Checks
 
 **🚨 Peer-Review-Blocker — das gibt es schon:** `modules/mrp.py:86-89`
 (`create_quality_point`) und `:369-432` erzeugen bereits `quality.point`-Records, suchen
@@ -576,7 +668,7 @@ Regressionstest, der `create_quality_points=True` tatsächlich laufen lässt (bi
 · **Benefit:** Mittel-Hoch (nutzt die MRP-Investition aus S1 weiter aus, guter visueller
 Payoff im Quality-App-Dashboard)
 
-### R19 🆕 Geplant (S11) — Expenses
+### R19 🆕 Geplant (S12) — Expenses
 
 **Live bestätigt (`hr.expense`, saas-19.4):** `state` (Selection:
 `draft`/`submitted`/`approved`/`posted`/`in_payment`/`paid`/`refused` — **kein**
@@ -608,7 +700,7 @@ Calls), Pattern 5 (keine Mitarbeiter → skip), Pattern 7 (Approved-Anteil-Verte
 
 **Komplexität:** Niedrig-Mittel · **Benefit:** Hoch
 
-### R20 🆕 Geplant (S14) — Analytic Accounting
+### R20 🆕 Geplant (S15) — Analytic Accounting
 
 **Live bestätigt:** `account.analytic.plan` (Hierarchie via `parent_id`/`children_ids`),
 `account.analytic.account` (`plan_id` `required`), `analytic_distribution` (json-Feld,
@@ -663,17 +755,17 @@ Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-
 | **S3 — LLM-Minimalismus** ✅ | A1 (`data_factory` + `static_data`), A2, A3 | Kern-Maxime; baut auf stabilem Fundament aus S1/S2 — abgeschlossen, verifiziert 2026-09-02 (siehe `ROADMAP_ARCHIVE.md`) |
 | **S4 — Architektur** ✅ | D1, D2, D3, B11, B14, B15 (2026-08-03/04); B7/B8 GUI-Config-Felder + B10-Architekten-Entscheidung (2026-08-04, Folgesprint) | Callback + Logging + Batching vor weiterem Feature-Ausbau — abgeschlossen |
 | **S5 — API-Versions-Schicht (R5), Tier 1** ✅ | Versions-Erkennung (`get_server_version`), `fields_get`-Warnliste (`check_field_compatibility`) (2026-08-04) | Beide ohne 🔒-Berührung, unabhängig testbar; siehe R5-Statusblock für die Tier-2-Zurückstellungs-Begründung |
-| **S? — API-Versions-Kompatibilität WP1-WP5 (R5-Überarbeitung) + D9** 🟠 **hohe Priorität, noch nicht eingeplant** | WP1 (dynamisches Feld-Manifest), WP2 (Zugriffs-Ebenen komponieren), WP3 (Übersetzungs-Registry + ein Übersetzungspunkt 🔒 `odoo_client.py`, Architekten-Freigabe bereits erteilt), WP4 (`LAST_VERIFIED_VERSION`), WP5 (`scripts/check_compat.sh`); D9 (Feedback-Logs, opt-in + Redaktion) | Nutzer-Vorgabe 2026-09-02: hohe Priorität. Ersetzt die alte, verworfene "S5 Tier 2"-Zeile (JSON-Mapping-Dateien) komplett — siehe R5-Statusblock für die volle Begründung. Einordnung in die Sprintfolge (vor/parallel zu S11?) noch nicht entschieden. |
 | **S6 — PDF (R1/P1+P2)** ✅ | `pdf_factory`, `modules/documents`, GUI-Optionen, `RunContext.applicant_ids` (Voraussetzungs-Fix in `recruiting.py`) (2026-08-04) | Erster Roadmap-Ausbau, größter Demo-Effekt — siehe `SPRINT_LOG.md` für Peer-Review-Ergebnis und den live gefundenen `ir.attachment`-Feldnamen-Bug |
 | **S7 — Prozessketten-Kontinuität (R8)** ✅ | Universelles Service-Produkt-Tagging, billable-lines-first Zeiterfassung, Wizard-basierte Fakturierung, `orchestrator.py`-Reorder 🔒 (2026-08-05) | Umnummeriert von "S7 = Purchase+Inventory" — Prozessketten-Kontinuität ist Voraussetzung, nicht parallel; siehe `ROADMAP_ARCHIVE.md`s R8-Statusblock für Details, Peer-Review-Verlauf (2× fremder Opus-Agent, Plan+Repo-Kontext) und den Hero→Universal-Kurswechsel |
 | **S8 — Purchase + Inventory (R2, R3)** ✅ | `modules/purchase.py`, `modules/inventory.py` (neu), `odoo_actions.py`-Erweiterung, `orchestrator.py`-Anhang 🔒 (2026-08-28) | War ursprünglich S7; siehe `ROADMAP_ARCHIVE.md`s R2/R3-Statusblöcke für Details, zwei Peer-Review-Durchläufe (Plan-Agent + fremder Cold-Review-Agent, gleiches Verfahren wie S5-S7) und live gefundene Bugs (`ctx.company_ids`-Namenskollision, `action_create_invoice`s fehlendes `invoice_date`) |
 | **S9 — Webserver-Deployment (R9)** ✅ | `web/` (FastAPI, Guards, Session, Queue, SSE), `connect_service.py`/`run_config.py` (D4), `run_journal.py` (D7), `static/` (index/app.js/app.css), Docker-Compose, `gui.py` gelöscht (2026-08-28) | Ersetzt den Aufrufer, nicht die Pipeline — `orchestrator.py` bleibt unberührt (kein `mode`-Parameter, 🔒 nicht angefasst). Siehe `ROADMAP_ARCHIVE.md`s R9-Statusblock für den gestrichenen Vorschau-Umfang, die korrigierte LLM-Invariante und die fünf live gefundenen Punkte |
 | **S10 — Live-Testphase-Feedback (R10)** ✅ | Phase A (2026-08-29): `has_access`-Zugriffsproben (F6), Fehlerbericht-Entrauschung (F7) 🔒, `mrp.py`-`company_ids`-Fix (F9). Phase B (2026-08-29): DB-Name aus URL (F2), Weiter/Nav-Gate als Latch + Ansicht 03 gestrichen (F3/F5), Einstiegs-Tutorial (F1), 5 PDF-Layout-Varianten (F4) — 301/301 Unit-, 71/76 Live-Integrationsschritte grün | Feedback aus dem ersten echten Gebrauch. Beide Phasen peer-reviewed (je 1 fremder Opus-Agent, Plantext + Live-Repo, keine Konversationshistorie) vor der Umsetzung — Phase A 10 Blocker, Phase B 6 Blocker eingearbeitet. Die 5 verbleibenden Live-Fehlschläge sind durchgängig derselbe vorbestehende, unabhängige `hr.job`-Feldbug (ausgelagert). F8 (Payload-Form-Memo) zurückgestellt — 🔒-Berührung ohne belegten Nutzen, siehe `ROADMAP_ARCHIVE.md`s R10-Statusblock |
-| **S11 — Quick Wins** 🆕 | R11 (Lost Opportunities), R16 Produkt-Ebene (Barcode), R19 (Expenses) | Drei kleine, in sich unabhängige Erweiterungen — guter Einstiegssprint nach S10. R11 und R19 sind additiv 🔒 (`config.py`-Felder, R19 zusätzlich ein `orchestrator.py`-Anhang) — gleiches Muster wie jeder bisherige Sprintanhang seit S6, Freigabe ist Formsache, kein Blocker (Peer-Review-Korrektur: "ohne 🔒-Berührung" war zu pauschal formuliert) |
-| **S12 — Lager-Tiefe** 🆕 | R14 (Multi-Warehouse), R15 (Lagerplätze, inkl. R16 Location-Ebene), R13 (Seriennummern-/Chargenverfolgung, MRP-Anbindung gestrichen — siehe R13) | Alle drei bauen auf `inventory.py`/`stock.*`-Modellen auf. R13 braucht R15 nicht zwingend (`stock.lot.location_id` ist optional), profitiert aber von den gleichzeitig entstehenden Sub-Locations — ein Sprint für den gesamten Lager-Realismus-Ausbau |
-| **S13 — Prozess-Tiefe** 🆕 | R12 (Nachbestellregeln, in `inventory.py`), R18 (Quality Checks, Erweiterung des bestehenden `mrp.py`-Pfads) | Beide sind eher "MRP/Inventory-Investition aus S1/S8 weiter ausnutzen" als "auf S12 aufbauen" (Peer-Review-Korrektur: `quality.point` hat kein Location-Feld, "an `wh_qc_stock_loc_id` andocken" war keine reale Mechanik) — dennoch sinnvoll in einem Sprint gebündelt, da beide dieselbe operative Prozess-Ebene vertiefen |
-| **S14 — Analytic Accounting (R20)** 🆕 | `account.analytic.plan`/`account.analytic.account` + `analytic_distribution`-Wiring über `sale.py`/`purchase.py`/`accounting.py`/`expenses.py` | Cross-cutting (4+ Dateien) bewusst isoliert in eigenem Sprint, damit der Review-Diff überschaubar bleibt; profitiert von R19 (Expenses, S11), falls dessen Zeilen mit-verkabelt werden sollen |
-| **S15 — Multicompany (R17)** 🆕 | Architektur-Spike (Pflicht vor Code) + Minimal-Scope: zweite `res.company`, `RunContext.company_ids`-Namenskonflikt auflösen 🔒 | Höchste Komplexität/Blast-Radius aller neuen Items — bewusst zuletzt, damit alle anderen Module (Warehouses, Quality, Analytic) schon stehen, wenn die zweite Firma befüllt wird. Eigener Architekten-Freigabe-Schritt vor S15-Start, gleiches Zwei-Pass-Peer-Review-Verfahren wie S5-S10 |
+| **S11 — API-Versions-Kompatibilität (R5) + Feedback-Logs (D9)** ✅ (2026-09-02) | Phase A (kein 🔒): WP2 (Zugriffs-Ebenen komponieren), WP1 (dynamisches Feld-Manifest — fand live einen echten, unabhängigen Bug: `hr.applicant.applicant_skill_ids` gehört zu `hr_recruitment_skills`, nicht `hr_recruitment`, gefixt als Beifang), WP4 (`LAST_VERIFIED_VERSION`). Phase B (Cold-Review vor Umsetzung, S5-S10-Verfahren): WP5 (`scripts/check_compat.sh`), D9 (Lauf-Log lokal persistiert über `logging_setup.run_log_capture`, Issue trägt nur `run_id`-Referenz). **WP3 (Übersetzungs-Registry) zurückgestellt** — Review fand die 🔒-Berührung an `odoo_client.py` für den einzigen (unbelegten, nur Test-seitig gelesenen) Präzedenzfall nicht gerechtfertigt; siehe WP3-Statusblock für die vier Blocker und den Wiederaufnahme-Auslöser. | Nutzer-Vorgabe 2026-09-02: hohe Priorität, vor der bereits vorgesehenen Quick-Wins-Sprint eingeplant (die dafür zu S12 verschoben wird). Ersetzt die alte, verworfene "S5 Tier 2"-Zeile (JSON-Mapping-Dateien) komplett — siehe R5-Statusblock. R1 (PDF P3/P4) ist ebenfalls 🟠, aber unberührt von dieser Entscheidung — bewusst nicht mit reingezogen. Unit 351/351, Live-Integration 80/80 (`demo-test5.odoo.com`) grün. |
+| **S12 — Quick Wins** 🆕 | R11 (Lost Opportunities), R16 Produkt-Ebene (Barcode), R19 (Expenses) | Drei kleine, in sich unabhängige Erweiterungen — guter Einstiegssprint nach S11. R11 und R19 sind additiv 🔒 (`config.py`-Felder, R19 zusätzlich ein `orchestrator.py`-Anhang) — gleiches Muster wie jeder bisherige Sprintanhang seit S6, Freigabe ist Formsache, kein Blocker (Peer-Review-Korrektur: "ohne 🔒-Berührung" war zu pauschal formuliert) |
+| **S13 — Lager-Tiefe** 🆕 | R14 (Multi-Warehouse), R15 (Lagerplätze, inkl. R16 Location-Ebene), R13 (Seriennummern-/Chargenverfolgung, MRP-Anbindung gestrichen — siehe R13) | Alle drei bauen auf `inventory.py`/`stock.*`-Modellen auf. R13 braucht R15 nicht zwingend (`stock.lot.location_id` ist optional), profitiert aber von den gleichzeitig entstehenden Sub-Locations — ein Sprint für den gesamten Lager-Realismus-Ausbau |
+| **S14 — Prozess-Tiefe** 🆕 | R12 (Nachbestellregeln, in `inventory.py`), R18 (Quality Checks, Erweiterung des bestehenden `mrp.py`-Pfads) | Beide sind eher "MRP/Inventory-Investition aus S1/S8 weiter ausnutzen" als "auf S13 aufbauen" (Peer-Review-Korrektur: `quality.point` hat kein Location-Feld, "an `wh_qc_stock_loc_id` andocken" war keine reale Mechanik) — dennoch sinnvoll in einem Sprint gebündelt, da beide dieselbe operative Prozess-Ebene vertiefen |
+| **S15 — Analytic Accounting (R20)** 🆕 | `account.analytic.plan`/`account.analytic.account` + `analytic_distribution`-Wiring über `sale.py`/`purchase.py`/`accounting.py`/`expenses.py` | Cross-cutting (4+ Dateien) bewusst isoliert in eigenem Sprint, damit der Review-Diff überschaubar bleibt; profitiert von R19 (Expenses, S12), falls dessen Zeilen mit-verkabelt werden sollen |
+| **S16 — Multicompany (R17)** 🆕 | Architektur-Spike (Pflicht vor Code) + Minimal-Scope: zweite `res.company`, `RunContext.company_ids`-Namenskonflikt auflösen 🔒 | Höchste Komplexität/Blast-Radius aller neuen Items — bewusst zuletzt, damit alle anderen Module (Warehouses, Quality, Analytic) schon stehen, wenn die zweite Firma befüllt wird. Eigener Architekten-Freigabe-Schritt vor S16-Start, gleiches Zwei-Pass-Peer-Review-Verfahren wie S5-S10 |
 
 **Pro Arbeitspaket verbindlich** (aus CLAUDE.md Testing Design Patterns):
 - Empty-Pool-Guards (P1) für jede neue `random.choice/sample`-Stelle

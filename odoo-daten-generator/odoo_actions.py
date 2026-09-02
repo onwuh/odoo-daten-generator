@@ -343,6 +343,38 @@ def get_main_company_info(client) -> Dict[str, Any]:
         return {}
 
 
+# R5/WP4 — the highest version this codebase has actually been run against
+# end-to-end (scripts/check_compat.sh, ROADMAP.md §R5/WP5) and found clean.
+# Bumped only by that deliberate, dev-side check — never by a user run. Two
+# transitions verified so far: 19.2->19.4 (2026-08-04) and 19.4->19.5/V20-beta
+# (2026-08-29, PR #20) — both clean (no field rename), so this still trails
+# the highest version actually seen live.
+LAST_VERIFIED_VERSION = "19.4"
+
+# Versions found broken by a WP5 run, with a fix already landed for them —
+# distinct from "never checked". Starts empty (same as WP3's FIELD_OVERRIDES
+# registry): no version has needed one yet. Keyed by the same normalized
+# 'MAJOR.MINOR' string get_server_version returns; value is a short
+# human-readable note for the connect checklist, not machine-consumed.
+KNOWN_BROKEN_VERSIONS: Dict[str, str] = {}
+
+
+def classify_version_status(version: Optional[str]) -> str:
+    """One of 'unknown' (couldn't detect a version at all), 'known_good'
+    (matches LAST_VERIFIED_VERSION), 'known_broken_with_fix' (in
+    KNOWN_BROKEN_VERSIONS), or 'untested' (a real version, just never run
+    through WP5). Replaces the old binary "version detected or not" — a
+    detected-but-untested version is a materially different risk than one
+    that's actually been verified clean."""
+    if not version:
+        return "unknown"
+    if version == LAST_VERIFIED_VERSION:
+        return "known_good"
+    if version in KNOWN_BROKEN_VERSIONS:
+        return "known_broken_with_fix"
+    return "untested"
+
+
 def get_server_version(client) -> Optional[str]:
     """Returns the normalized 'MAJOR.MINOR' Odoo server version (e.g. '19.4'), or
     None if it can't be determined/parsed.
@@ -387,13 +419,37 @@ def get_server_version(client) -> Optional[str]:
 # far more than the "~15 requests" it looked like. None means "always check" —
 # a core model with no ir.module.module entry of its own (res.partner,
 # product.product, mail.activity, ir.attachment).
+# Reconciled against field_manifest.json (S11/WP1, live capture 2026-09-02,
+# demo-test5, saas-19.4) — every list below now matches what the codebase
+# actually sends for models already tracked here. Fields the manifest showed
+# but this whitelist didn't yet have are added; nothing is removed solely for
+# being absent from one capture run (hr_holidays/hr_work_entry/hr_recruitment
+# were uninstalled on demo-test5 at capture time, so hr.leave/hr.applicant/etc.
+# legitimately produced no fields that run — install-state, not a real gap).
+#
+# The manifest also surfaced models this whitelist has never tracked at all
+# (mrp.workcenter, mrp.bom.line, mrp.routing.workcenter, purchase.order,
+# stock.quant, project.project, project.task.type, hr.skill, hr.skill.type,
+# sale.advance.payment.inv, account.analytic.line, account.bank.statement.line)
+# — deliberately not added here. Whitelist membership is a judgment call
+# (worth the fields_get cost on every connect), not something to auto-expand
+# from one capture run; left as a candidate list for a future pass instead.
 FIELD_COMPAT_WHITELIST: Dict[str, Tuple[Optional[str], List[str]]] = {
-    'res.partner': (None, ['name', 'is_company', 'street', 'zip', 'city', 'email', 'phone', 'website']),
-    'product.product': (None, ['name', 'list_price', 'type', 'sale_ok', 'purchase_ok']),
-    'crm.lead': ('crm', ['type', 'partner_id', 'name']),
-    'mail.activity': (None, ['res_id', 'res_model_id', 'activity_type_id', 'date_deadline']),
-    'sale.order': ('sale', ['partner_id']),
-    'account.move': ('account', ['move_type', 'partner_id', 'invoice_line_ids', 'invoice_date']),
+    'res.partner': (None, ['name', 'is_company', 'street', 'zip', 'city', 'email', 'phone', 'website',
+                    'country_id', 'parent_id', 'type', 'supplier_rank']),
+    'product.product': (None, ['name', 'list_price', 'type', 'sale_ok', 'purchase_ok',
+                        'invoice_policy', 'is_storable', 'service_tracking', 'service_type',
+                        'standard_price', 'tracking']),
+    'crm.lead': ('crm', ['type', 'partner_id', 'name', 'date_deadline', 'expected_revenue',
+                 'stage_id', 'user_id']),
+    'mail.activity': (None, ['res_id', 'res_model_id', 'activity_type_id', 'date_deadline', 'summary']),
+    'sale.order': ('sale', ['partner_id', 'opportunity_id', 'order_line']),
+    'account.move': ('account', ['move_type', 'partner_id', 'invoice_line_ids', 'invoice_date', 'ref']),
+    # journal_id/balance_start unconfirmed by the 2026-09-02 capture — the run
+    # only captured balance_end_real being written to account.bank.statement
+    # itself (journal_id showed up on account.bank.statement.line instead).
+    # Left as-is rather than removed on one run's evidence; worth a closer
+    # look at accounting.py's bank-statement path in a future pass.
     'account.bank.statement': ('account', ['journal_id', 'balance_start', 'balance_end_real']),
     'hr.employee': ('hr', ['name']),
     # hr.leave/hr.leave.allocation/hr.work.entry.type ship with hr_holidays/
@@ -404,18 +460,27 @@ FIELD_COMPAT_WHITELIST: Dict[str, Tuple[Optional[str], List[str]]] = {
     'hr.leave.allocation': ('hr_holidays', ['employee_id', 'work_entry_type_id']),
     'hr.work.entry.type': ('hr_work_entry', ['name', 'code', 'count_as',
                             'requires_allocation', 'employee_requests']),
+    # applicant_skill_ids deliberately absent: it ships with hr_recruitment_skills,
+    # NOT hr_recruitment (found live 2026-09-02, S11/R5) — a whitelist entry
+    # gated on hr_recruitment alone would false-positive-warn on every
+    # instance with hr_recruitment installed but hr_recruitment_skills not
+    # (this repo's own demo-test5 included), exactly the noise R5 exists to
+    # avoid. modules/recruiting.py and modules/documents.py gate the field
+    # itself on hr_recruitment_skills directly; tracking it here would need a
+    # second, more granular whitelist shape this dict doesn't have yet.
     'hr.applicant': ('hr_recruitment', ['partner_name', 'email_from', 'partner_phone', 'job_id',
-                      'schedule_pay', 'applicant_skill_ids']),
+                      'schedule_pay', 'stage_id']),
     'hr.job.skill': ('hr_recruitment', ['skill_id', 'skill_type_id', 'skill_level_id']),
-    'project.task': ('project', ['name', 'project_id']),
-    'mrp.production': ('mrp', ['product_id', 'date_start']),
-    'mrp.bom': ('mrp', ['product_tmpl_id', 'type', 'product_qty']),
-    'ir.attachment': (None, ['res_model', 'res_id', 'raw', 'mimetype', 'type']),
+    'project.task': ('project', ['name', 'project_id', 'stage_id']),
+    'mrp.production': ('mrp', ['product_id', 'date_start', 'bom_id', 'product_qty']),
+    'mrp.bom': ('mrp', ['product_tmpl_id', 'type', 'product_qty', 'bom_line_ids', 'code', 'product_id']),
+    'ir.attachment': (None, ['res_model', 'res_id', 'raw', 'mimetype', 'type', 'name']),
 }
 
 
 def check_field_compatibility(client, installed_modules=None,
-                              whitelist: Optional[Dict[str, List[str]]] = None) -> List[str]:
+                              whitelist: Optional[Dict[str, List[str]]] = None,
+                              model_access: Optional[Dict[str, bool]] = None) -> List[str]:
     """Connect-time check: for each model in the whitelist, calls fields_get and
     warns about any field the codebase writes/reads that this instance doesn't
     have. A model that errors out entirely (e.g. its parent app isn't installed)
@@ -423,12 +488,19 @@ def check_field_compatibility(client, installed_modules=None,
     compatibility one. Non-fatal: logs each warning and returns the list of
     warning strings; callers should not treat a non-empty result as fatal.
 
-    `installed_modules` gates the DEFAULT whitelist only (skips models whose
-    parent app isn't installed, see FIELD_COMPAT_WHITELIST's comment). An
-    explicit `whitelist` (flat {model: [fields]}, as the unit tests pass) is
-    checked unconditionally — the caller supplied exactly the models it wants
-    checked and gating those would silently make such a test depend on
-    installed_modules it never passed.
+    `installed_modules` and `model_access` both gate the DEFAULT whitelist only
+    (see FIELD_COMPAT_WHITELIST's comment for the installed-module case;
+    `model_access` additionally skips a model that IS installed but whose
+    create access `probe_model_access` found blocked — e.g. an app installed
+    with a feature toggle off, the S10 mrp.workcenter case). Composing both
+    means a field warning that survives is unambiguous: the model is
+    installed, writable, and the field is still missing — a real version
+    finding, never noise from install/access state (R5/WP2).
+
+    An explicit `whitelist` (flat {model: [fields]}, as the unit tests pass) is
+    checked unconditionally against neither gate — the caller supplied exactly
+    the models it wants checked, and gating those would silently make such a
+    test depend on installed_modules/model_access it never passed.
     """
     warnings: List[str] = []
     if whitelist is not None:
@@ -439,6 +511,8 @@ def check_field_compatibility(client, installed_modules=None,
             (model, fields) for model, (module_key, fields) in FIELD_COMPAT_WHITELIST.items()
             if module_key is None or module_key in installed
         ]
+        if model_access is not None:
+            entries = [(model, fields) for model, fields in entries if model_access.get(model, True)]
 
     for model, fields in entries:
         try:

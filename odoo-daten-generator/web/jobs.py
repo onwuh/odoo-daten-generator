@@ -9,6 +9,7 @@ Admission control has two levels: a fixed worker pool, so request N+1 queues
 instead of spawning another run, and a per-session cap so one person cannot fill
 every slot.
 """
+import contextlib
 import logging
 import os
 import queue
@@ -23,7 +24,7 @@ import run_config
 from connect_service import detect_provider
 from llm_service import LLMService
 from logging_setup import run_log_capture
-from run_journal import JournalingClient, RunJournal
+from run_journal import JournalingClient, RunJournal, default_journal_dir, run_log_path
 from web.sse import EventBroker
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,26 @@ def worker_count() -> int:
 
 def per_session_limit() -> int:
     return _int_env("ODOO_GENERATOR_SESSION_RUN_LIMIT", 2)
+
+
+def _open_run_log_handler(run_id: str) -> Optional[logging.Handler]:
+    """S11/D9 — full per-run log, kept local (run_journal.run_log_path,
+    same directory/env-override/retention as the run journal), never sent
+    anywhere: a feedback issue carries only the run_id as a reference to look
+    this up on the machine that ran it.
+
+    Best-effort, same rule as RunJournal._persist: a run must never fail
+    because its own log couldn't be written (unwritable ODOO_GENERATOR_RUNS_DIR,
+    read-only-rootfs profile without the volume mounted, etc).
+    """
+    try:
+        default_journal_dir().mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(run_log_path(run_id), encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+        return handler
+    except OSError as exc:
+        logger.warning(f"⚠️  Lauf-Log konnte nicht angelegt werden: {exc}")
+        return None
 
 
 class AdmissionRefused(RuntimeError):
@@ -272,6 +293,14 @@ class JobQueue:
         handler = _StreamHandler(lambda t, d: self._publish(run_id, t, d))
         handler.setFormatter(logging.Formatter("%(message)s"))
 
+        # S11/D9 — best-effort second handler for the same run's records,
+        # written to local disk instead of the SSE stream. None (nullcontext
+        # below) if it couldn't be opened; _open_run_log_handler already
+        # logged why and a missing log file must not stop the run.
+        log_file_handler = _open_run_log_handler(run_id)
+        file_capture = (run_log_capture(run_id, log_file_handler)
+                        if log_file_handler is not None else contextlib.nullcontext())
+
         journal = RunJournal(run_id)
         journal.set_target(job["base_url"])
         client = None
@@ -280,7 +309,7 @@ class JobQueue:
         # run_log_capture binds the run id in THIS thread's context — a fresh
         # thread starts with an empty context rather than inheriting one, and
         # pool threads are reused, so binding anywhere else leaks between runs.
-        with run_log_capture(run_id, handler):
+        with run_log_capture(run_id, handler), file_capture:
             try:
                 client = JournalingClient(job["base_url"], job["database"], job["odoo_key"],
                                           journal=journal)
