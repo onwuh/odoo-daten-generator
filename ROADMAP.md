@@ -115,137 +115,6 @@ CLAUDE.md-Konvention: "always check cache before LLM call". Heute gecacht: `name
 
 ---
 
-## 2. Bugs & Logikfehler
-
-### B1 🔴 `gui.py:360` — Feature-Flags werden nie erkannt
-
-```python
-self.feature_flags = odoo_actions.get_enabled_features(self.client)
-```
-
-`get_enabled_features(client, installed_modules=None)` überspringt **alle** Probes, wenn `installed_modules` leer ist (`odoo_actions.py:58`: `installed = installed_modules or set()`). Die GUI übergibt den Parameter nicht → `feature_flags` ist immer `{}`.
-
-**Folgen:**
-- Leads-Spinner in `_sub_crm` (gui.py:549) erscheint nie, auch wenn `crm.use_lead` aktiv ist
-- Arbeitszentren-Spinner und Qualitäts-Checkbox in `_sub_mrp` (gui.py:741, 751) erscheinen nie
-- Inkonsistenz: `mrp.py:225` nutzt `ctx.feature_flags.get('mrp_routings', True)` mit Default `True` → Arbeitszentren werden trotzdem erstellt, aber mit `max(1, 0) = 1` statt der gewünschten Anzahl
-
-**Fix:** `self.feature_flags = odoo_actions.get_enabled_features(self.client, mods)` (die Testsuite macht es in `test_suite.py:152` bereits richtig).
-**Test:** Unit-Test mit Mock-Client: `get_enabled_features(client, {"crm", "mrp"})` ruft Probes auf; ohne Set keine Calls (Pattern 3).
-
-### B2 🔴 `llm_service.py:104` — Timeout blockiert trotzdem
-
-```python
-with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-    future = executor.submit(self._raw_call, prompt)
-    try:
-        text, ... = future.result(timeout=timeout)
-    except concurrent.futures.TimeoutError:
-        ...
-```
-
-Der `with`-Block ruft beim Verlassen `shutdown(wait=True)` auf → nach einem `TimeoutError` **blockiert der Kontext-Exit, bis der hängende HTTP-Call doch fertig ist**. Der Timeout wartet also faktisch nicht ab, sondern nur die Fehlermeldung ist früher da.
-
-**Fix:**
-
-```python
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-future = executor.submit(self._raw_call, prompt)
-try:
-    text, in_tok, out_tok = future.result(timeout=timeout)
-except concurrent.futures.TimeoutError:
-    msg = f"timed out after {timeout}s"
-finally:
-    executor.shutdown(wait=False, cancel_futures=True)  # Thread läuft ggf. aus, blockiert aber nicht
-```
-
-**Zusatz:** Timeouts sind aktuell nicht retry-fähig (`"timed out"` matcht keinen `_RETRYABLE_HINTS`-Eintrag). Entscheiden: entweder `"timed out"` in die Hints aufnehmen oder bewusst dokumentieren.
-**Test:** Unit-Test mit gemocktem `_raw_call`, der `time.sleep` simuliert — `_call` muss innerhalb Toleranz zurückkehren.
-
-### B3 🔴 `llm_service.py:367` + `llm_service.py:510` — ZeroDivisionError bei leerem LLM-Dict
-
-```python
-if isinstance(data, dict):
-    sets = list(data.values())
-    return {name: sets[i % len(sets)] for i, name in enumerate(project_names)}
-```
-
-LLM liefert `{}` → `isinstance` besteht → `len(sets) == 0` → `i % 0` → **ZeroDivisionError**. Betroffen: `fetch_all_project_stages` und `fetch_all_bom_components` (`fetch_workcenter_data` hat den Guard `len(data) >= 1` korrekt).
-
-**Fix:** `if isinstance(data, dict) and data:` in beiden Funktionen.
-**Test:** Pattern 2 — `mock._call_json.return_value = {}` → Rückgabe `{}`, kein Raise.
-
-### B4 🟠 `accounting.py:148` — Banktransaktionen duplizieren sich bei Wiederholungsläufen
-
-`create_bank_transactions_for_all_invoices` sucht **alle** gebuchten Rechnungen der Datenbank (`state = posted`, ohne Lauf-Eingrenzung). Zweiter Generator-Lauf → für sämtliche Alt-Rechnungen entstehen erneut Bank-Transaktionen. Zusätzlich wird bei existierendem Statement (`Z. 227-233`) `balance_start` hart auf `0.0` überschrieben, obwohl das Statement schon Zeilen hat → Salden inkonsistent.
-
-**Fix:**
-1. Nur Rechnungen dieses Laufs verwenden: `create_invoices_from_orders` und `create_vendor_bill` geben IDs bereits zurück → in `ctx` sammeln (`ctx.invoice_ids`, `ctx.bill_ids` — 🔒 Config-Schema-Erweiterung) und an die Funktion übergeben.
-2. Bestehendes Statement: `balance_end_real` additiv fortschreiben (`bisheriges balance_end_real + Summe neuer Zeilen`), `balance_start` unangetastet lassen.
-
-**Test:** Integration — zwei Aufrufe hintereinander; Assert: Anzahl Statement-Lines wächst nur um die neuen Rechnungen.
-
-### B5 🟠 `hr.py` — Urlaub über Jahresgrenze scheitert an der Allocation
-
-`create_leave_allocation` (Z. 47-48) begrenzt auf `{year}-01-01 … {year}-12-31`. `_random_future_monday` streut aber bis `timescale_days` (GUI erlaubt bis 730 Tage!) in die Zukunft → Anträge im Folgejahr liegen außerhalb der Allocation → `action_approve` schlägt fehl (heute: nur Print, Datenbestand unvollständig).
-
-**Fix:** Allocation-Zeitraum aus dem tatsächlichen Streufenster ableiten:
-
-```python
-horizon_end = today + datetime.timedelta(days=timescale_days + 14)
-# Variante A: eine Allocation pro betroffenem Jahr
-# Variante B (einfacher): date_to = horizon_end, date_from = today - timedelta(days=timescale_days)
-```
-
-Variante B empfohlen (eine Allocation, deckt Fenster komplett ab).
-**Test:** Integration mit `timescale_days=400` — Leave im Folgejahr wird erstellt **und** genehmigt (Read-Back `state == 'validate'`, Pattern 4).
-
-### B6 🟠 `project.py:117-122` — `random.sample` zerstört Phasen-Reihenfolge
-
-```python
-selected = random.sample(stages, k=num_stages)
-```
-
-`random.sample` liefert eine zufällige *Reihenfolge* — die logische Workflow-Progression ("Kickoff → … → Abnahme"), die das LLM extra generiert, wird zerwürfelt und per `sequence=seq*10` falsch einsortiert (z. B. "Deployment" vor "Kickoff").
-
-**Fix:** Teilmenge ziehen, Original-Reihenfolge bewahren:
-
-```python
-idx = sorted(random.sample(range(len(stages)), k=num_stages))
-selected = [stages[i] for i in idx]
-```
-
-**Test:** Unit — `random.seed(42)`, Assert: Reihenfolge der Auswahl entspricht Reihenfolge der Quellliste.
-
-### B9 🟡 `crm.py:271-278` — Chatter-Teilnehmernamen nur von der ersten Opportunity
-
-`participants` wird aus `opp_data[0]` gebaut und gilt für den **gesamten** Batch-Prompt → das LLM grüßt in allen Opportunities denselben Kunden/Verkäufer, obwohl `partner_name` pro Opp bekannt ist. Zusätzlich: `random.choice(opp_titles_bank)` (Z. 126) erzeugt Duplikat-Titel → `messages_by_title` (Dict!) liefert für gleichnamige Opps identische Konversationen.
-
-**Fix:**
-1. Titel ohne Zurücklegen vergeben (`random.sample`, bei Bedarf Suffix "– {Partnername}") → Titel eindeutig und Kundenspezifisch.
-2. Prompt-Format auf Liste von Objekten umstellen: `[{"title": ..., "customer": ..., "salesperson": ...}, ...]`, Antwort keyed by Titel. Ein Call bleibt ein Call (Batch-Regel eingehalten).
-
-**Test:** Unit — Pattern 8 (call_count == 1) bleibt; Assert: Titel im Request eindeutig.
-
-### B12 🟡 `crm.py:116` — Verkäufer-Zuordnung hängt an Chatter-Option
-
-```python
-sales_users = _fetch_sales_users(client) if ctx.module_selections.crm_chatter else []
-```
-
-`user_id` (Verkäufer) auf Opportunities wird nur gesetzt, wenn Chatter aktiviert ist — sachfremde Kopplung.
-**Fix:** `sales_users` immer laden (ein Call, billig); Chatter-Flag steuert nur die Nachrichtengenerierung.
-
-### B13 🟡 `recruiting.py:253-258` — Skill-Level-Duplikate bei existierenden Skill-Typen
-
-Existiert der Skill-Typ bereits, werden Skills **und Levels trotzdem neu angelegt** → bei jedem Lauf wachsen Duplikat-Levels ("Anfänger", "Anfänger", …).
-**Fix:** Level-Erstellung nur im `else`-Zweig (neuer Typ); für existierende Typen `fetch_skill_levels_map` nutzen. Nebenbefund: `levels[:max(3, len(levels))]` ist ein No-Op — entfernen.
-**Test:** Integration — zweimaliger Lauf, Assert: Level-Anzahl pro Typ konstant.
-
-### B16 ⚪ `crm.py:52` — toter Code / unklare Präzedenz
-
-`(company_ids * 2)[:len(company_ids) * 2]` — der Slice ist ein No-Op. Und `crm.py:46` `return early or [stages[0]["id"]] if stages else []` funktioniert nur wegen Operator-Präzedenz korrekt — Klammern setzen: `return (early or [stages[0]["id"]]) if stages else []`.
-
 ## 3. Architektur- & Design-Verbesserungen
 
 ### D5 🟡 Typisierte Modul-Configs statt roher Dicts 🔒
@@ -859,8 +728,8 @@ Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-
 
 | Sprint | Inhalt | Begründung |
 |---|---|---|
-| **S1 — Bugfixes kritisch** | B1, B2, B3 (+ B16 als Beifang) | Kleine, isolierte Fixes; B1 schaltet verlorene Features frei |
-| **S2 — Datenqualität** | B4, B5, B6, B9, B12, B13 | Sichtbare Qualität der Demo-Daten; keine Strukturänderungen |
+| **S1 — Bugfixes kritisch** ✅ | B1, B2, B3 (+ B16 als Beifang) | Kleine, isolierte Fixes; B1 schaltet verlorene Features frei — abgeschlossen, verifiziert 2026-09-02 (siehe `ROADMAP_ARCHIVE.md`) |
+| **S2 — Datenqualität** ✅ | B4, B5, B6, B9, B12, B13 | Sichtbare Qualität der Demo-Daten; keine Strukturänderungen — abgeschlossen, verifiziert 2026-09-02 (siehe `ROADMAP_ARCHIVE.md`) |
 | **S3 — LLM-Minimalismus** | A1 (`data_factory` + `static_data`), A2, A3 | Kern-Maxime; baut auf stabilem Fundament aus S1/S2 |
 | **S4 — Architektur** ✅ | D1, D2, D3, B11, B14, B15 (2026-08-03/04); B7/B8 GUI-Config-Felder + B10-Architekten-Entscheidung (2026-08-04, Folgesprint) | Callback + Logging + Batching vor weiterem Feature-Ausbau — abgeschlossen |
 | **S5 — API-Versions-Schicht (R5), Tier 1** ✅ | Versions-Erkennung (`get_server_version`), `fields_get`-Warnliste (`check_field_compatibility`) (2026-08-04) | Beide ohne 🔒-Berührung, unabhängig testbar; siehe R5-Statusblock für die Tier-2-Zurückstellungs-Begründung |

@@ -5,6 +5,119 @@ Abgeschlossene Bugs/Design-Punkte/Roadmap-Items aus `ROADMAP.md`, hier archivier
 ---
 
 ## 2. Bugs & Logikfehler
+
+### B1 ✅ Erledigt — `gui.py:360` — Feature-Flags werden nie erkannt
+
+```python
+self.feature_flags = odoo_actions.get_enabled_features(self.client)
+```
+
+`get_enabled_features(client, installed_modules=None)` überspringt **alle** Probes, wenn `installed_modules` leer ist (`odoo_actions.py:58`: `installed = installed_modules or set()`). Die GUI übergibt den Parameter nicht → `feature_flags` ist immer `{}`.
+
+**Folgen:**
+- Leads-Spinner in `_sub_crm` (gui.py:549) erscheint nie, auch wenn `crm.use_lead` aktiv ist
+- Arbeitszentren-Spinner und Qualitäts-Checkbox in `_sub_mrp` (gui.py:741, 751) erscheinen nie
+- Inkonsistenz: `mrp.py:225` nutzt `ctx.feature_flags.get('mrp_routings', True)` mit Default `True` → Arbeitszentren werden trotzdem erstellt, aber mit `max(1, 0) = 1` statt der gewünschten Anzahl
+
+**Fix:** `self.feature_flags = odoo_actions.get_enabled_features(self.client, mods)` (die Testsuite macht es in `test_suite.py:152` bereits richtig).
+**Test:** Unit-Test mit Mock-Client: `get_enabled_features(client, {"crm", "mrp"})` ruft Probes auf; ohne Set keine Calls (Pattern 3).
+
+**Verifiziert 2026-09-02:** `connect_service.py:182` übergibt `mods` an `get_enabled_features` — behoben.
+
+### B2 ✅ Erledigt — `llm_service.py:104` — Timeout blockiert trotzdem
+
+```python
+with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+    future = executor.submit(self._raw_call, prompt)
+    try:
+        text, ... = future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        ...
+```
+
+Der `with`-Block ruft beim Verlassen `shutdown(wait=True)` auf → nach einem `TimeoutError` **blockiert der Kontext-Exit, bis der hängende HTTP-Call doch fertig ist**. Der Timeout wartet also faktisch nicht ab, sondern nur die Fehlermeldung ist früher da.
+
+**Fix:**
+
+```python
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+future = executor.submit(self._raw_call, prompt)
+try:
+    text, in_tok, out_tok = future.result(timeout=timeout)
+except concurrent.futures.TimeoutError:
+    msg = f"timed out after {timeout}s"
+finally:
+    executor.shutdown(wait=False, cancel_futures=True)  # Thread läuft ggf. aus, blockiert aber nicht
+```
+
+**Zusatz:** Timeouts sind aktuell nicht retry-fähig (`"timed out"` matcht keinen `_RETRYABLE_HINTS`-Eintrag). Entscheiden: entweder `"timed out"` in die Hints aufnehmen oder bewusst dokumentieren.
+**Test:** Unit-Test mit gemocktem `_raw_call`, der `time.sleep` simuliert — `_call` muss innerhalb Toleranz zurückkehren.
+
+**Verifiziert 2026-09-02:** `llm_service.py:136-151` — kein `with`-Block mehr, `executor.shutdown(wait=False, cancel_futures=True)` explizit — behoben.
+
+### B3 ✅ Erledigt — `llm_service.py:367` + `llm_service.py:510` — ZeroDivisionError bei leerem LLM-Dict
+
+```python
+if isinstance(data, dict):
+    sets = list(data.values())
+    return {name: sets[i % len(sets)] for i, name in enumerate(project_names)}
+```
+
+LLM liefert `{}` → `isinstance` besteht → `len(sets) == 0` → `i % 0` → **ZeroDivisionError**. Betroffen: `fetch_all_project_stages` und `fetch_all_bom_components` (`fetch_workcenter_data` hat den Guard `len(data) >= 1` korrekt).
+
+**Fix:** `if isinstance(data, dict) and data:` in beiden Funktionen.
+**Test:** Pattern 2 — `mock._call_json.return_value = {}` → Rückgabe `{}`, kein Raise.
+
+**Verifiziert 2026-09-02:** `llm_service.py:437,446,602,611` — `if isinstance(data, dict) and data:` plus zweiter `if not data: return {}`-Guard vor der Indizierung in beiden Funktionen — behoben.
+
+### B4 ✅ Erledigt — `accounting.py:148` — Banktransaktionen duplizieren sich bei Wiederholungsläufen
+
+`create_bank_transactions_for_all_invoices` sucht **alle** gebuchten Rechnungen der Datenbank (`state = posted`, ohne Lauf-Eingrenzung). Zweiter Generator-Lauf → für sämtliche Alt-Rechnungen entstehen erneut Bank-Transaktionen. Zusätzlich wird bei existierendem Statement (`Z. 227-233`) `balance_start` hart auf `0.0` überschrieben, obwohl das Statement schon Zeilen hat → Salden inkonsistent.
+
+**Fix:**
+1. Nur Rechnungen dieses Laufs verwenden: `create_invoices_from_orders` und `create_vendor_bill` geben IDs bereits zurück → in `ctx` sammeln (`ctx.invoice_ids`, `ctx.bill_ids` — 🔒 Config-Schema-Erweiterung) und an die Funktion übergeben.
+2. Bestehendes Statement: `balance_end_real` additiv fortschreiben (`bisheriges balance_end_real + Summe neuer Zeilen`), `balance_start` unangetastet lassen.
+
+**Test:** Integration — zwei Aufrufe hintereinander; Assert: Anzahl Statement-Lines wächst nur um die neuen Rechnungen.
+
+**Verifiziert 2026-09-02:** `modules/accounting.py:187-295` — `create_bank_transactions_for_all_invoices` nimmt jetzt explizite `invoice_ids`/`bill_ids` (lauf-eingegrenzt statt aller gebuchten DB-Rechnungen), `balance_start` bleibt unangetastet, `balance_end_real` wird additiv fortgeschrieben — behoben.
+
+### B5 ✅ Erledigt — `hr.py` — Urlaub über Jahresgrenze scheitert an der Allocation
+
+`create_leave_allocation` (Z. 47-48) begrenzt auf `{year}-01-01 … {year}-12-31`. `_random_future_monday` streut aber bis `timescale_days` (GUI erlaubt bis 730 Tage!) in die Zukunft → Anträge im Folgejahr liegen außerhalb der Allocation → `action_approve` schlägt fehl (heute: nur Print, Datenbestand unvollständig).
+
+**Fix:** Allocation-Zeitraum aus dem tatsächlichen Streufenster ableiten:
+
+```python
+horizon_end = today + datetime.timedelta(days=timescale_days + 14)
+# Variante A: eine Allocation pro betroffenem Jahr
+# Variante B (einfacher): date_to = horizon_end, date_from = today - timedelta(days=timescale_days)
+```
+
+Variante B empfohlen (eine Allocation, deckt Fenster komplett ab).
+**Test:** Integration mit `timescale_days=400` — Leave im Folgejahr wird erstellt **und** genehmigt (Read-Back `state == 'validate'`, Pattern 4).
+
+**Verifiziert 2026-09-02:** `modules/hr.py:238-247` — Allocation-Fenster (`alloc_date_from`/`alloc_date_to`) wird aus `timescale_days` abgeleitet statt aus einem festen Kalenderjahr (Variante B aus dem ursprünglichen Fix-Vorschlag) — behoben.
+
+### B6 ✅ Erledigt — `project.py:117-122` — `random.sample` zerstört Phasen-Reihenfolge
+
+```python
+selected = random.sample(stages, k=num_stages)
+```
+
+`random.sample` liefert eine zufällige *Reihenfolge* — die logische Workflow-Progression ("Kickoff → … → Abnahme"), die das LLM extra generiert, wird zerwürfelt und per `sequence=seq*10` falsch einsortiert (z. B. "Deployment" vor "Kickoff").
+
+**Fix:** Teilmenge ziehen, Original-Reihenfolge bewahren:
+
+```python
+idx = sorted(random.sample(range(len(stages)), k=num_stages))
+selected = [stages[i] for i in idx]
+```
+
+**Test:** Unit — `random.seed(42)`, Assert: Reihenfolge der Auswahl entspricht Reihenfolge der Quellliste.
+
+**Verifiziert 2026-09-02:** `modules/project.py:51` — `sorted(random.sample(range(len(stages)), k=num_stages))` bewahrt die Original-Reihenfolge — behoben.
+
 ### B7 ✅ Erledigt — `accounting.py` — Mindestens 10 Eingangsrechnungen, immer
 
 War: `num_bills = max(10, num_invoices // 2)` erzwang immer ≥10 Vendor Bills. Core-Bug bereits am 2026-08-03/04 behoben (`max(1, num_invoices // 2)`); GUI-Konfigurierbarkeit (`ModuleSelections.account_bills: Optional[int] = None`, GUI-Feld "Anzahl Eingangsrechnungen" in `_sub_account`, min 0) im S4-Folgesprint ergänzt — `num_bills` wird jetzt vor dem `purchase_pool`-Gate berechnet, damit ein `0`-Override auch `_create_suppliers` überspringt. Getestet in `tests/unit/test_accounting_batch_unit.py` (B7-Tests) und `tests/integration/test_accounting.py` (Step 9, Pattern 4 Read-Back).
@@ -12,6 +125,18 @@ War: `num_bills = max(10, num_invoices // 2)` erzwang immer ≥10 Vendor Bills. 
 ### B8 ✅ Erledigt — `sale.py` — Bestätigung hart auf 5 Aufträge begrenzt
 
 War: `orders_to_confirm = ctx.order_ids[:max(1, min(5, len(ctx.order_ids)))]` bestätigte bei 200 Aufträgen genau 5. Core-Bug bereits am 2026-08-03/04 behoben (`_DEFAULT_CONFIRM_PCT = 65`-Konstante, skaliert mit Auftragsanzahl); GUI-Konfigurierbarkeit (`ModuleSelections.sale_confirm_pct: int = 65`, GUI-Slider "Bestätigt (%)" in `_sub_sale`, analog `validate_pct`) im S4-Folgesprint ergänzt — die Modul-Konstante ist entfernt, `sale.py` liest `ctx.module_selections.sale_confirm_pct`. Getestet in `tests/unit/test_sale_unit.py` und `tests/integration/test_sale.py` (Step 7, Pattern 4 Read-Back).
+
+### B9 ✅ Erledigt — `crm.py:271-278` — Chatter-Teilnehmernamen nur von der ersten Opportunity
+
+`participants` wird aus `opp_data[0]` gebaut und gilt für den **gesamten** Batch-Prompt → das LLM grüßt in allen Opportunities denselben Kunden/Verkäufer, obwohl `partner_name` pro Opp bekannt ist. Zusätzlich: `random.choice(opp_titles_bank)` (Z. 126) erzeugt Duplikat-Titel → `messages_by_title` (Dict!) liefert für gleichnamige Opps identische Konversationen.
+
+**Fix:**
+1. Titel ohne Zurücklegen vergeben (`random.sample`, bei Bedarf Suffix "– {Partnername}") → Titel eindeutig und Kundenspezifisch.
+2. Prompt-Format auf Liste von Objekten umstellen: `[{"title": ..., "customer": ..., "salesperson": ...}, ...]`, Antwort keyed by Titel. Ein Call bleibt ein Call (Batch-Regel eingehalten).
+
+**Test:** Unit — Pattern 8 (call_count == 1) bleibt; Assert: Titel im Request eindeutig.
+
+**Verifiziert 2026-09-02:** `modules/crm.py:317-325` — ein Customer/Salesperson-Paar pro Opportunity statt eines für den ganzen Batch, plus `_unique_titles` gegen Titel-Duplikate — behoben.
 
 ### B10 ✅ Erledigt (dokumentiert, kein Code-Change) — `installed_modules` enthielt *ausgewählte*, nicht installierte Module
 
@@ -23,6 +148,25 @@ Architekten-Review (2026-08-04, S4-Folgesprint) hat den ursprünglich vorgeschla
 
 War: Fallback 3 postete `{}` (nur Context) unabhängig vom Inhalt von `args`/`kwargs`/`ids`. Behoben (2026-08-03/04): Guard `if ids or args or kwargs: raise` (odoo_client.py, in `call_method`) lässt Fallback 3 nur noch feuern, wenn wirklich nichts zu senden war. Getestet in `tests/unit/test_odoo_client_unit.py`.
 
+### B12 ✅ Erledigt — `crm.py:116` — Verkäufer-Zuordnung hängt an Chatter-Option
+
+```python
+sales_users = _fetch_sales_users(client) if ctx.module_selections.crm_chatter else []
+```
+
+`user_id` (Verkäufer) auf Opportunities wird nur gesetzt, wenn Chatter aktiviert ist — sachfremde Kopplung.
+**Fix:** `sales_users` immer laden (ein Call, billig); Chatter-Flag steuert nur die Nachrichtengenerierung.
+
+**Verifiziert 2026-09-02:** `modules/crm.py:140` — `sales_users` wird unconditional geladen, nicht mehr an `crm_chatter` gekoppelt — behoben.
+
+### B13 ✅ Erledigt — `recruiting.py:253-258` — Skill-Level-Duplikate bei existierenden Skill-Typen
+
+Existiert der Skill-Typ bereits, werden Skills **und Levels trotzdem neu angelegt** → bei jedem Lauf wachsen Duplikat-Levels ("Anfänger", "Anfänger", …).
+**Fix:** Level-Erstellung nur im `else`-Zweig (neuer Typ); für existierende Typen `fetch_skill_levels_map` nutzen. Nebenbefund: `levels[:max(3, len(levels))]` ist ein No-Op — entfernen.
+**Test:** Integration — zweimaliger Lauf, Assert: Level-Anzahl pro Typ konstant.
+
+**Verifiziert 2026-09-02:** `modules/recruiting.py:312-327` — Skill-Levels werden nur noch `for entry in new_entries` erzeugt, der No-Op-Slice ist entfernt — behoben.
+
 ### B14 ✅ Erledigt — `sale.py` — Order↔Opportunity-Verknüpfung ignoriert Partner
 
 War: `zip(ctx.order_ids, ctx.opportunity_ids)` verknüpfte positionsweise. Behoben (2026-08-03/04): `create_sale_data` gruppiert Opportunities nach `partner_id` und ordnet jeder Order nur eine Opportunity desselben Kunden zu (kein Match → keine Verknüpfung). Getestet in `test_sale_unit.py` und `tests/integration/test_sale.py` (Step 6, bewusst umgekehrte Opp-Reihenfolge zur Regressionsprüfung gegen positionsbasiertes `zip`).
@@ -30,6 +174,12 @@ War: `zip(ctx.order_ids, ctx.opportunity_ids)` verknüpfte positionsweise. Behob
 ### B15 ✅ Erledigt — `mrp.py` — `max(1, num_workcenters)` machte 0 unmöglich
 
 War: `num_workcenters = max(1, int(...))` erzwang ≥1 auch bei deaktivierten Routings. Behoben (2026-08-03/04): `max(0, ...)`. Getestet in `tests/unit/test_mrp_batch_unit.py`.
+
+### B16 ✅ Erledigt — `crm.py:52` — toter Code / unklare Präzedenz
+
+`(company_ids * 2)[:len(company_ids) * 2]` — der Slice ist ein No-Op. Und `crm.py:46` `return early or [stages[0]["id"]] if stages else []` funktioniert nur wegen Operator-Präzedenz korrekt — Klammern setzen: `return (early or [stages[0]["id"]]) if stages else []`.
+
+**Verifiziert 2026-09-02:** `modules/crm.py:49` — Klammern gesetzt (`(early or [stages[0]["id"]]) if stages else []`); `modules/crm.py:52-59` — toter Slice durch echte `_build_partner_pool`-Funktion (`random.choices` für den Rest) ersetzt — behoben.
 
 ### B17 ✅ Erledigt (2026-08-04) — `hr.py:33` — `hr.work.entry.type.shortcut_behavior` existiert nicht auf saas-19.4
 
