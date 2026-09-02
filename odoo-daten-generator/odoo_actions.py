@@ -343,6 +343,38 @@ def get_main_company_info(client) -> Dict[str, Any]:
         return {}
 
 
+# R5/WP4 — the highest version this codebase has actually been run against
+# end-to-end (scripts/check_compat.sh, ROADMAP.md §R5/WP5) and found clean.
+# Bumped only by that deliberate, dev-side check — never by a user run. Two
+# transitions verified so far: 19.2->19.4 (2026-08-04) and 19.4->19.5/V20-beta
+# (2026-08-29, PR #20) — both clean (no field rename), so this still trails
+# the highest version actually seen live.
+LAST_VERIFIED_VERSION = "19.4"
+
+# Versions found broken by a WP5 run, with a fix already landed for them —
+# distinct from "never checked". Starts empty (same as WP3's FIELD_OVERRIDES
+# registry): no version has needed one yet. Keyed by the same normalized
+# 'MAJOR.MINOR' string get_server_version returns; value is a short
+# human-readable note for the connect checklist, not machine-consumed.
+KNOWN_BROKEN_VERSIONS: Dict[str, str] = {}
+
+
+def classify_version_status(version: Optional[str]) -> str:
+    """One of 'unknown' (couldn't detect a version at all), 'known_good'
+    (matches LAST_VERIFIED_VERSION), 'known_broken_with_fix' (in
+    KNOWN_BROKEN_VERSIONS), or 'untested' (a real version, just never run
+    through WP5). Replaces the old binary "version detected or not" — a
+    detected-but-untested version is a materially different risk than one
+    that's actually been verified clean."""
+    if not version:
+        return "unknown"
+    if version == LAST_VERIFIED_VERSION:
+        return "known_good"
+    if version in KNOWN_BROKEN_VERSIONS:
+        return "known_broken_with_fix"
+    return "untested"
+
+
 def get_server_version(client) -> Optional[str]:
     """Returns the normalized 'MAJOR.MINOR' Odoo server version (e.g. '19.4'), or
     None if it can't be determined/parsed.

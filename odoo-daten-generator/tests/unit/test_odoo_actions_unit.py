@@ -8,7 +8,8 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from odoo_actions import (get_enabled_features, get_server_version, check_field_compatibility,
-                          probe_model_access, MODEL_ACCESS_PROBES)
+                          probe_model_access, MODEL_ACCESS_PROBES, classify_version_status,
+                          LAST_VERIFIED_VERSION, KNOWN_BROKEN_VERSIONS)
 
 
 class _AlwaysHasField(dict):
@@ -117,6 +118,46 @@ def run():
         results.append(("S5: get_server_version search_read raises → None, no crash", True, ""))
     except Exception as e:
         results.append(("S5: get_server_version search_read raises → None, no crash", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # S11/R5 WP4 — classify_version_status: three distinguishable states
+    # instead of the old binary "version detected or not".
+    # ------------------------------------------------------------------
+    try:
+        assert classify_version_status(None) == "unknown"
+        results.append(("S11/WP4: classify_version_status(None) -> 'unknown'", True, ""))
+    except AssertionError as e:
+        results.append(("S11/WP4: classify_version_status(None) -> 'unknown'", False, str(e)))
+
+    try:
+        assert classify_version_status(LAST_VERIFIED_VERSION) == "known_good"
+        results.append(("S11/WP4: classify_version_status(LAST_VERIFIED_VERSION) -> 'known_good'", True, ""))
+    except AssertionError as e:
+        results.append(("S11/WP4: classify_version_status(LAST_VERIFIED_VERSION) -> 'known_good'", False, str(e)))
+
+    try:
+        # A version this codebase has never run a WP5 check against.
+        never_seen = "999.9"
+        assert never_seen != LAST_VERIFIED_VERSION and never_seen not in KNOWN_BROKEN_VERSIONS
+        assert classify_version_status(never_seen) == "untested"
+        results.append(("S11/WP4: classify_version_status(unseen version) -> 'untested'", True, ""))
+    except AssertionError as e:
+        results.append(("S11/WP4: classify_version_status(unseen version) -> 'untested'", False, str(e)))
+
+    try:
+        # KNOWN_BROKEN_VERSIONS starts empty (no real finding yet, same as
+        # WP3's registry) — exercise the branch with a fake entry rather than
+        # mutating the real module-level dict.
+        import odoo_actions as _odoo_actions_mod
+        orig = _odoo_actions_mod.KNOWN_BROKEN_VERSIONS
+        _odoo_actions_mod.KNOWN_BROKEN_VERSIONS = {"20.0": "some fixed issue"}
+        try:
+            assert _odoo_actions_mod.classify_version_status("20.0") == "known_broken_with_fix"
+        finally:
+            _odoo_actions_mod.KNOWN_BROKEN_VERSIONS = orig
+        results.append(("S11/WP4: classify_version_status(version in KNOWN_BROKEN_VERSIONS) -> 'known_broken_with_fix'", True, ""))
+    except AssertionError as e:
+        results.append(("S11/WP4: classify_version_status(version in KNOWN_BROKEN_VERSIONS) -> 'known_broken_with_fix'", False, str(e)))
 
     # ------------------------------------------------------------------
     # S5 tier 1 — check_field_compatibility
