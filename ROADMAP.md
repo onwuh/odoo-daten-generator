@@ -50,6 +50,47 @@ Parameter heißt in allen Modulsignaturen `gemini`, Provider ist primär Groq; `
 - ⚪ **Offen:** Provider-Erkennung ist weiterhin Prefix-Sniffing — `connect_service.py:126`: `"groq" if llm_key.startswith("gsk_") else "gemini"`. Kein explizites Dropdown/Feld für die Provider-Wahl im Web-Frontend.
 - ⚪ **Offen:** `orchestrator.py:54` — `gemini.fetch_name_suggestions(...)` läuft weiterhin unconditional bei jedem Lauf, außerhalb des `skip_master_data`-Gates (Zeile 46). Lädt Namensbänke auch dann, wenn kein Modul sie braucht.
 
+### D9 🟡 Feedback-Logs — Lauf-Log optional an GitHub-Issue anhängen
+
+**Hinzugefügt:** 2026-09-02, im selben Gespräch wie R5s Überarbeitung — Nutzer will bei
+gemeldetem Feedback (Bug/Idee-Button, `web/feedback.py`) auch das tatsächliche Lauf-Log
+mitschicken können, nicht nur die heutige Kurzzusammenfassung.
+
+**Aktueller Zustand (`web/feedback.py:91-112`, `_build_body`):** Payload ist **bewusst
+daten-minimiert** — Kommentar im Code (Zeile 96-98) sagt ausdrücklich: "niemals Ziel-
+URL/Datenbank/Fehlertext, das kann Hostname oder Odoo-Fehlertext eines Interessenten in ein
+GitHub-Issue tragen." Heute übertragen: `run_id`+Status, Modul-Status-Liste,
+`api_error_count` — keine Log-Zeilen, kein Fehlertext.
+
+**Spannung, die dieses Item auflösen muss:** volle Logs sind für Diagnose (genau wie die
+R5-Feld-Warnungen aus diesem Gespräch) sehr wertvoll, kollidieren aber direkt mit der
+bestehenden Daten-Minimierungs-Entscheidung — ein Lauf-Log kann die Ziel-Odoo-URL, den
+DB-Namen und rohen Odoo-Fehlertext enthalten (potenziell Kundendaten eines Interessenten),
+und `web/feedback.py` erstellt Issues in einem **öffentlich sichtbaren** GitHub-Repo.
+
+**Vorgeschlagene Lösung (nicht final, vor Umsetzung mit Architekt abstimmen):**
+1. **Opt-in, nicht Default** — eigene Checkbox im Feedback-Formular ("Lauf-Log anhängen"),
+   analog zum bereits etablierten Consent-Muster für `crm_chatter`s `use_db_names` (S9) —
+   nicht angehakt heißt heutiges Minimal-Verhalten unverändert.
+2. **Redaktion vor dem Versand**, nicht blindes Anhängen — Ziel-URL/Hostname aus den
+   Log-Zeilen entfernen, bevor sie ins Issue gehen; `odoo_client._redact_error_body`/
+   `_printable` sind die bereits vorhandenen Vorbilder für "Fehlertext säubern, bevor er das
+   System verlässt", hier wiederverwendbar statt neu erfunden.
+3. **Quelle der Logs:** `web/sse.py`s `RunEventStream` hält bereits ein Append-Only-Log pro
+   `run_id` (`_events`, bis `MAX_EVENTS=5000`) — kein neuer Speicher nötig für den
+   Normalfall (Feedback während/kurz nach dem Lauf). **Einschränkung:** dieser Puffer ist
+   In-Memory, nicht dauerhaft — der Janitor-Task (S9) vergisst abgeschlossene Läufe nach
+   `ODOO_GENERATOR_LOG_RETENTION_DAYS`. Feedback zu einem länger zurückliegenden Lauf hat
+   dann kein Log mehr zum Anhängen — Formular sollte das erkennen (Stream via `run_id`
+   nicht mehr auffindbar) und die Checkbox entsprechend deaktivieren/ausblenden, statt einen
+   leeren Log-Block zu versenden.
+4. **Größenlimit** — GitHub-Issue-Bodies haben ein Zeichenlimit; lange Logs entweder kappen
+   (letzte N Zeilen, wo Fehler typischerweise stehen) oder als eingeklapptes `<details>`-Block
+   im Issue-Body einbetten.
+
+**Tests:** Pattern 3 (Opt-out → keine Log-Zeile im gebauten Body, Assert per String-Suche);
+eigener Unit-Test für die Redaktion (Ziel-URL im Rohlog → nicht im versendeten Body).
+
 ---
 
 ## 4. Weiterentwicklung / Roadmap
@@ -89,123 +130,136 @@ LLM-Maxime gilt auch hier: LLM liefert nur Textbausteine (Positionstexte, CV-Sti
 
 **Teilstatus, verifiziert 2026-09-02:** P1 (Eingangsrechnungs-PDFs) und P2 (Bewerbungsunterlagen) implementiert — `pdf_factory.py` (`build_vendor_bill_pdf`/`build_cv_pdf`, 5 Layout-Varianten seit S10) + `modules/documents.py` (`create_documents`, gated auf `ctx.model_access` seit S10). P3 (Lieferscheine/Bestellungen, setzt R2/Purchase voraus — R2 ist seit S8 fertig, P3 selbst nicht begonnen) und P4 (Verträge) sind **nicht** umgesetzt — kein `build_`-Pendant in `pdf_factory.py`, kein Aufruf in `modules/documents.py` oder `modules/purchase.py`. R1 bleibt offen für P3/P4.
 
-### R5 🟡 API-Versions-Schicht — Feld-/Methoden-Mapping pro Odoo-Release
+### R5 🟠 API-Versions-Kompatibilität — Registry + Übersetzungspunkt (überarbeitet 2026-09-02, hohe Priorität)
 
-**S5-Status (2026-08-04, siehe CLAUDE.md "Current Sprint" für Details):** Sprint in zwei
-Tiers gesplittet, nach Architekten-Review eines vorab peer-reviewten Plans (fremder
-Opus-Agent, Kontext nur Plan+Live-Repo). **Tier 1 — Baustein 1 (Versions-Erkennung) +
-`fields_get`-Warnliste — implementiert und getestet.** **Tier 2 — Baustein 2 (Mapping-Dateien)
-+ Baustein 3 (Client-Adapter, 🔒 `odoo_client.py`) — bewusst zurückgestellt**, siehe
-Begründung unten. Zwei Korrekturen an diesem Abschnitt gegenüber dem Original-Stand
-(2026-07-20):
-1. **Kanonische Version ist 19.4, nicht 19.2** — der Live-Instanz-Stand hat sich seit
-   Schreiben dieses Abschnitts geändert (siehe CLAUDE.md-Update 2026-08-03), und der Code
-   schreibt bereits 19.4-Feldnamen. Jede Mapping-Datei muss Deltas relativ zu 19.4
-   beschreiben, nicht relativ zu 19.2 wie unten ursprünglich skizziert.
-2. **Die "realen Beispiele" in der Problem-Beschreibung unten sind teils nicht belegt:**
-   `work_entry_type_id` ist laut Projekt-Memory auf 19.2 *und* 19.4 identisch (kein Delta);
-   `action_confirm` vs. `button_confirm` ist eine JSON/2-API-vs.-ORM-Unterscheidung, kein
-   Versions-Delta. Einzig belegter Delta zwischen 19.2 und 19.4: `hr.leave.allocation.
-   allocation_type` existierte auf 19.2, wurde auf 19.4 entfernt — und brauchte keine
-   Mapping-Zeile, weil der Code das Feld nie referenziert. **Tier 2 wurde deshalb
-   zurückgestellt: eine Adapter-Infrastruktur ohne einen einzigen belegten Rename lässt sich
-   nur gegen synthetische Test-Daten prüfen, nicht gegen echtes Odoo-Verhalten — Bausteine 2+3
-   werden gebaut, sobald eine zweite reale Ziel-Version einen konkreten Rename liefert.**
-   Baustein 1 + die `fields_get`-Warnliste liefern schon heute echten, live-geprüften Wert
-   ohne dieses Risiko (`odoo_actions.get_server_version`, `odoo_actions.
-   check_field_compatibility`, `FIELD_COMPAT_WHITELIST` — alle ohne 🔒-Berührung).
-   Nebenbefund aus dem ersten Live-Lauf der neuen Warnliste: `hr.work.entry.type.
-   shortcut_behavior` (`modules/hr.py:33`) existiert auf saas-19.4 nicht (74 Live-Felder
-   geprüft, keine Nähe-Übereinstimmung) — bisher unbemerkt, weil der `create()`-Zweig in
-   `get_or_create_annual_leave_type` nur bei komplett leerer `hr.work.entry.type`-Tabelle
-   feuert. Nicht Teil von S5 behoben (Scope-Grenze) — siehe Bug-Liste.
+**Status:** Tier 1 (Versions-Erkennung + Feld-Warnliste) seit 2026-08-04 implementiert und
+live geprüft — siehe Baustein 1 unten, unverändert. Der ursprüngliche Tier-2-Plan (nutzer­
+editierbare `api_versions/<version>.json`-Mapping-Dateien + Adapter) ist **verworfen**,
+zugunsten eines schlankeren, im Chat vom 2026-09-02 erarbeiteten Designs — siehe WP1-WP5
+unten. Auslöser: Nutzerfrage zur V20-Absicherung; im selben Gespräch wurde auch festgestellt,
+dass V20-Beta bereits am 2026-08-29 live getestet wurde ([PR #20](https://github.com/pahuodoo/odoo-daten-generator/pull/20)) —
+V20-Beta meldet sich intern als `saas-19.5`, ein `ir.attachment.raw`-Read-Shape-Wechsel war
+der einzige reale Fund, Fix ist bereits gemerged. Kein Rename in zwei geprüften
+Versions-Übergängen (19.2→19.4, 19.4→19.5) bislang — die Registry unten startet deshalb
+bewusst leer, sie ist die Leitung, nicht der Inhalt.
 
-**Problem:** Zwischen SaaS-Releases werden Felder umbenannt oder gestrichen. Heute sind
-Feld-/Methodennamen hart in den Modulen codiert — jedes Release erzwingt Programmänderungen.
+**Warum das JSON-Mapping-Design verworfen wurde:** zwei Lücken, beide im Chat gefunden.
+(1) `fields_get`-basierte Prüfungen sehen nur "Feld weg/da", nicht "Feld da, aber Laufzeit-
+Form geändert" — exakt der V20-Fund (`ir.attachment.raw` existiert weiter, liefert aber ein
+Dict statt eines Strings). Eine Rename-Map hätte das nicht behoben, nur eine Werttransformation.
+(2) Der ursprüngliche Plan hätte pro Request-Kontext übersetzt; belastbare Praxis (SQLAlchemy-
+Dialects, Kubernetes-Client-Discovery) löst das genau einmal beim Connect, nicht pro Call —
+schlanker und vermeidet exakt das Muster, das die entfernte JSON2-Payload-Fallback-Kette schon
+einmal als Fehlkonstruktion gezeigt hat (blindes Pro-Call-Probieren statt einmaliger,
+belegter Prüfung).
 
-**Ziel:** Release-Unterschiede so weit wie sinnvoll in *nutzer­editierbare Konfiguration* verlagern — und die Grenze klar ziehen, ab der Code die richtige Antwort ist (siehe Tabelle unten).
+**Neues Design — fünf Arbeitspakete:**
 
-#### Baustein 1: Versions-Erkennung (automatisch, überschreibbar) ✅ Erledigt (Tier 1)
+#### WP1: Dynamisches Feld-Manifest statt Hardcoded-Whitelist
 
-`odoo_actions.get_server_version(client)` — Live-bestätigtes Format auf saas-19.4:
-`"saas~19.4.1.3"` (Segmentanzahl nach dem Punkt variiert, Parser darf sie nicht annehmen):
+`FIELD_COMPAT_WHITELIST` (`odoo_actions.py:390`) ist von Hand kuratiert und bereits nachweislich
+unvollständig — Stichprobe `res.partner` (2026-09-02): tatsächlich geschriebene Felder sind
+`name, street, zip, city, country_id, email, phone, website, is_company, parent_id, type`
+(`modules/master_data.py:110-150`, `data_factory.build_company`/`build_contacts`), die
+Whitelist kennt nur 8 von 11 — `country_id`/`parent_id` (beide Many2one, höchstes
+Rename-Risiko) und `type` (Selection, laut Docstring bereits historisch fragil) fehlen.
+
+Statische AST-Analyse über `modules/*.py` ist hier ungeeignet — Felder werden über
+`data_factory.py`-Hilfsfunktionen zusammengesetzt, nicht als Literal am Call-Site.
+Stattdessen: Laufzeit-Capture. Ein Env-Flag (`ODOO_GENERATOR_CAPTURE_FIELDS=1`) an
+`odoo_client.py`s einzigem Übersetzungspunkt pro Operation (`create`/`create_batch`/`write`/
+`call_method`) protokolliert jedes tatsächlich gesendete `(model, field)`-Paar. Ein Lauf von
+`tests/integration/test_suite.py` mit diesem Flag erzeugt das vollständige, echte Manifest —
+committed, regeneriert bei Bedarf, optional per CI gegen den committed Stand geprüft (Drift
+= neues Feld ohne Whitelist-Eintrag).
+
+#### WP2: Zugriffs-Ebenen komponieren (Feld-Warnung ↔ Nicht-installiert ↔ Kein Schreibzugriff)
+
+Drei Signale existieren, zwei davon bereits gebaut, aber nicht komponiert:
+1. **App nicht installiert** → `installed_modules`, gattert `FIELD_COMPAT_WHITELIST`
+   bereits korrekt (`odoo_actions.py:439-441`).
+2. **App installiert, Schreibzugriff blockiert** (der MRP/Workcenter-Fall aus S10:
+   `mrp.workcenter` meldete sich per Lese-Probe als vorhanden, obwohl die Einstellung
+   "Arbeitsaufträge" aus war — `has_access` ist die Lösung, `odoo_client.has_create_access`/
+   `odoo_actions.probe_model_access`, S10) — **wird `check_field_compatibility` heute nicht
+   übergeben.** Beleg: `connect_service.py:213` ruft `check_field_compatibility(client,
+   installed_modules=mods)` — `result.model_access` (Zeile 197, zwei Schritte vorher im selben
+   Connect-Flow bereits berechnet) fließt nicht ein.
+3. **App installiert, Schreibzugriff da, Feld fehlt trotzdem in `fields_get`** — erst dieses
+   Signal ist ein echter Versions-/Schema-Fund.
+
+Fix: `check_field_compatibility` bekommt `model_access` als zusätzlichen Parameter, gattert
+zusätzlich zu `installed_modules`. Kein neuer Mechanismus — nur korrekte Verdrahtung von S10s
+eigenem Ergebnis. Eine Feld-Warnung ist danach eindeutig: installiert, schreibbar, trotzdem
+fehlend → garantiert ein Versions-Fund, nie Rauschen aus Install-/Rechte-Zustand.
+
+#### WP3: Übersetzungs-Registry + ein Übersetzungspunkt 🔒
+
+Ersetzt Baustein 2+3 des alten Plans. Statt nutzereditierbarer JSON-Dateien mit eigener
+Vererbungs-/Transformations-DSL: eine kleine, **in Code gepflegte** Registry (nur von
+Entwickler/Claude befüllt, kein End-Nutzer-Editier-Pfad — der war ohnehin nie ein reales
+Bedürfnis, `IMPLEMENTIERUNGSPLAN.md`s ursprüngliche Prämisse dafür war unbelegt):
 
 ```python
-rec = client.search_read('ir.module.module', [['name', '=', 'base']],
-                         fields=['latest_version'], limit=1)
-# "saas~19.4.1.3" → normalisiert "19.4"
-```
-
-GUI: neue Statuszeile "Odoo-Version" in Screen 2 (`gui.py`), nicht-blockierend (kein Gate auf
-"Weiter" bei Erkennungsfehler, analog zum bestehenden "Vorhandene Stammdaten"-Verhalten).
-Auf einen manuellen Override-Dropdown wurde **bewusst verzichtet** (analog zur B10-
-Architekten-Entscheidung: ein Override-Wert ohne Konsumenten — Tier 2/der Adapter, der ihn
-lesen würde, ist zurückgestellt — wäre totes Gewicht).
-
-**Zusätzlich implementiert (Baustein 3 "Ausbaustufe", vorgezogen weil unabhängig von
-Bausteinen 2+3):** `odoo_actions.check_field_compatibility(client)` — `fields_get` gegen eine
-kuratierte Liste von ~16 Modell/Feld-Paaren (aus echten `client.create`/`create_batch`/
-`write`-Call-Sites über `modules/*.py` gezogen, priorisiert nach CLAUDE.md "Verified field
-gotchas"). Nicht-fataler Log-Warnung, kein GUI-Gate. Modelle, deren übergeordnetes App nicht
-installiert ist, werden still übersprungen (Installations-, kein Versions-Thema).
-
-Screen 2 zeigt die erkannte Version als eigene Statuszeile; daneben ein Dropdown zum manuellen Überschreiben (für Edge-Fälle / Testsysteme). Unbekannte Version → nächstniedrigere bekannte verwenden + deutliche Warnung im Log.
-
-#### Baustein 2: Mapping-Dateien `api_versions/<version>.json` (nutzereditierbar)
-
-Der Code verwendet durchgehend *kanonische* Namen (= aktuelle Zielversion 19.2). Pro abweichender Version existiert eine JSON-Datei, die nur die **Deltas** beschreibt:
-
-```json
-{
-  "version": "19.4",
-  "extends": "19.2",
-  "fields": {
-    "hr.leave":        { "work_entry_type_id": "leave_type_id" },
-    "product.product": { "is_storable": null }
-  },
-  "methods": {
-    "sale.order": { "action_confirm": "button_confirm" }
-  },
-  "models": {
-    "account.bank.statement": "account.statement"
-  },
-  "defaults": {
-    "hr.job": { "payment_interval": "monthly" }
-  }
+# Beispielform, nicht final — startet LEER (siehe Status oben, keine Renames bisher belegt)
+FIELD_OVERRIDES: Dict[str, Dict[str, Dict[str, Any]]] = {
+    "19.5": {
+        "ir.attachment": {"raw": {"read_transform": normalize_attachment_raw}},
+    },
 }
 ```
 
-Semantik: Schlüssel = kanonischer Name, Wert = Name in dieser Version, `null` = Feld existiert nicht mehr → kommentarlos weglassen. `extends` bildet eine Vererbungskette, damit 19.4 nur beschreibt, was sich seit 19.2 geändert hat. `defaults` deckt neue Pflichtfelder mit konstantem Wert ab.
+Aufgelöst **einmal pro Connect** (nicht pro Request — Analogie: SQLAlchemy wählt seinen
+Dialect einmal bei Connect, nicht pro Query) zu einer pro-Lauf gültigen Übersetzungstabelle.
+`odoo_client.py`s `create`/`write`/`call_method` konsultieren sie an ihrem bereits
+bestehenden einzigen Übersetzungspunkt pro Operation, bevor der Payload rausgeht — kein
+Modul in `modules/*.py` ändert sich. 🔒 `odoo_client.py` betroffen — **Architekten-Freigabe
+hiermit erteilt** (Chat 2026-09-02: "wir werden es mit hoher Priorität umsetzen").
 
-Ein Nutzer kann damit ein neues Release ohne Programmierung bedienen: Datei kopieren, Renames eintragen, fertig.
+Kein Plugin-System, keine Ausdrucks-DSL — bleibt bei reiner Umbenennung/Wert-Transformation/
+Weglassen. Ein Fund, der mehr braucht (siehe Grenztabelle unten), wird ein echter Code-Zweig,
+keine Registry-Zeile.
 
-#### Baustein 3: Adapter im Client (eine Stelle, Module bleiben unberührt) 🔒
+#### WP4: `LAST_VERIFIED_VERSION`-Marker
 
-`OdooJson2Client` erhält eine `schema_map`; `create`/`write`/`search_read`/`call_method` übersetzen Modell-, Feld- und Methodennamen vor dem Senden — und bei `search_read` die Feldnamen der Antwort **zurück** (Reverse-Map), damit alle Module weiter kanonisch lesen. Genau ein Übersetzungspunkt, keine Änderung in `modules/*`. 🔒 Da `odoo_client.py` betroffen ist: Architekten-Freigabe vor Umsetzung.
+Kleine Konstante, gepflegt bei jedem sauberen Durchlauf von WP5 gegen eine neue Version.
+Im Connect-Checklist neben der erkannten Version sichtbar: bekannt-gut / bekannt-defekt-mit-
+Fix / ungetestet-vorsichtig-fortfahren — drei unterscheidbare Zustände statt heute nur
+"Version erkannt oder nicht".
 
-**Ausbaustufe (optional):** Beim Verbinden `fields_get` für die ~15 genutzten Modelle abfragen und ungemappte fehlende Felder als Warnung listen ("Feld `X` auf `Y` existiert im Zielsystem nicht und ist nicht gemappt — Eintrag in `api_versions/<version>.json` ergänzen"). Damit sieht der Nutzer *vor* dem Lauf exakt, was er in die JSON eintragen muss — die Mapping-Datei schreibt sich quasi selbst.
+#### WP5: `scripts/check_compat.sh` — formalisierte Versions-Prüfung (Dev-seitig)
 
-#### Grenze: Was geht per Config — was braucht Code
+Formalisiert, was am 2026-08-29 für V20-Beta ad-hoc gemacht wurde: `tests/test_config.ini`
+auf eine neue/Beta-Instanz zeigen, vollen `test_suite.py`-Lauf fahren, Funde nach der
+Grenztabelle unten triagieren (Registry-Zeile vs. echter Code-Zweig), `LAST_VERIFIED_VERSION`
+bumpen. **Läuft nicht automatisch bei einem Nutzer-Lauf** — hat Seiteneffekte (echte
+Datensätze auf der Zielinstanz), dauert Minuten, ist eine bewusste, entwicklerseitige
+Freigabe-Aktion pro neuer Odoo-Version, kein Teil des Produkts selbst.
 
-| Änderungstyp im Release | JSON reicht | Begründung |
+**Cadence-Zusammenfassung:** WP2-WP4 (Erkennung + Registry-Anwendung) laufen bei **jedem**
+Connect — billig, read-only, pro Zielinstanz unterschiedlich, lässt sich nicht vorberechnen.
+WP1 (Manifest) regeneriert sich bei Code-Änderungen, nicht bei Odoo-Releases — eigener,
+unabhängiger Auslöser. WP5 (volle Prüfung, Registry-Inhalt entdecken) läuft selten, bewusst,
+mit Seiteneffekten, nie automatisch im Produkt.
+
+#### Grenze: Was geht per Registry-Eintrag — was braucht echten Code
+
+| Änderungstyp im Release | Registry-Eintrag reicht | Begründung |
 |---|:---:|---|
-| Feld umbenannt (1:1) | ✅ | reine String-Substitution |
-| Feld ersatzlos gestrichen | ✅ (`null`) | Weglassen genügt |
-| Neues Pflichtfeld mit konstantem Default | ✅ (`defaults`) | statischer Wert |
-| Methode umbenannt | ✅ | String-Substitution |
-| Modell umbenannt | ✅ | String-Substitution |
-| Selection-Wert umbenannt (1:1) | ⚠️ (`values`-Map, falls nötig) | noch Substitution — aber bereits Grenzfall |
-| Feld aufgeteilt / Format geändert (z. B. Datetime-Konvention) | ❌ Code | braucht Werttransformation |
-| Char-Feld wurde Many2one (Wert muss per Lookup ermittelt werden) | ❌ Code | braucht zusätzlichen API-Call |
+| Feld umbenannt (1:1) | ✅ | reine Umbenennung |
+| Feld ersatzlos gestrichen | ✅ (weglassen) | kein Transform nötig |
+| Neues Pflichtfeld mit konstantem Default | ✅ | statischer Wert |
+| Methode umbenannt | ✅ | reine Umbenennung |
+| Modell umbenannt | ✅ | reine Umbenennung |
+| Feld-Laufzeit-Form geändert (z. B. `ir.attachment.raw` String→Dict) | ✅ (Transform-Funktion) | kleine, registrierte Funktion — kein genereller Adapter nötig |
+| Char-Feld wurde Many2one (Wert braucht Lookup) | ❌ Code | braucht zusätzlichen API-Call |
 | Workflow geändert (z. B. zwei Bestätigungsschritte statt einem) | ❌ Code | braucht Ablauflogik |
-| Modell aufgespalten / zusammengelegt | ❌ Code | Strukturänderung |
+| Modell aufgespalten / zusammengelegt | ❌ Code | Strukturänderung — laut Chat 2026-09-02 realistisch nur an Major-Version-Grenzen erwartet |
 
-**Faustregeln (bewusst konservativ):**
-1. Config-Customizing endet exakt dort, wo mehr als *String-Ersetzung + statische Defaults* nötig ist. Alles mit Logik (Transformation, Lookup, Bedingung, Mehrschrittigkeit) wird als `VersionAdapter`-Klasse programmiert (`api_versions/adapter_19_4.py` mit Hook `prepare_vals(model, vals)` / `prepare_call(model, method, ...)`) und mit einem Programm-Update ausgeliefert.
-2. Braucht eine Versions-JSON mehr als ~20 Einträge oder häufen sich ⚠️-Grenzfälle, ist das ebenfalls das Signal für Code statt Config — die Datei ist dann kein Mapping mehr, sondern ein verstecktes Programm.
-3. **Kein** Plugin-System, **keine** Ausdrucks-DSL in der JSON (keine Bedingungen, keine Templates). Das wäre die übertrieben komplizierte Lösung: schwer testbar, vom Nutzer kaum debugbar, und spart gegenüber einer kleinen Adapter-Klasse nichts.
-
-**Tests:** Unit — Mapping-Auflösung (extends-Kette, `null`-Drop, Reverse-Mapping bei `search_read`); Integration — ein Lauf durch den Adapter mit Identitäts-Mapping (19.2→19.2) muss byte-gleiche Payloads erzeugen wie heute (Regressionsschutz).
+**Tests:** Unit — Registry-Auflösung pro Version, Transform-Funktionen einzeln; Integration —
+WP2s Komposition (Feld-Warnung bleibt stumm, wenn `model_access` blockiert meldet — Pattern 3
+analog); ein Lauf mit leerer Registry muss byte-gleiche Payloads erzeugen wie heute
+(Regressionsschutz, gleiche Idee wie im alten Plan).
 
 ### R6 🟡 Multi-Country Customer/Supplier Generation
 
@@ -609,7 +663,7 @@ Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-
 | **S3 — LLM-Minimalismus** ✅ | A1 (`data_factory` + `static_data`), A2, A3 | Kern-Maxime; baut auf stabilem Fundament aus S1/S2 — abgeschlossen, verifiziert 2026-09-02 (siehe `ROADMAP_ARCHIVE.md`) |
 | **S4 — Architektur** ✅ | D1, D2, D3, B11, B14, B15 (2026-08-03/04); B7/B8 GUI-Config-Felder + B10-Architekten-Entscheidung (2026-08-04, Folgesprint) | Callback + Logging + Batching vor weiterem Feature-Ausbau — abgeschlossen |
 | **S5 — API-Versions-Schicht (R5), Tier 1** ✅ | Versions-Erkennung (`get_server_version`), `fields_get`-Warnliste (`check_field_compatibility`) (2026-08-04) | Beide ohne 🔒-Berührung, unabhängig testbar; siehe R5-Statusblock für die Tier-2-Zurückstellungs-Begründung |
-| S5 Tier 2 (zurückgestellt) | `api_versions/*.json`, Client-Adapter (🔒) | Erst mit einem echten, belegten Rename zwischen zwei Live-Versionen — siehe R5 |
+| **S? — API-Versions-Kompatibilität WP1-WP5 (R5-Überarbeitung) + D9** 🟠 **hohe Priorität, noch nicht eingeplant** | WP1 (dynamisches Feld-Manifest), WP2 (Zugriffs-Ebenen komponieren), WP3 (Übersetzungs-Registry + ein Übersetzungspunkt 🔒 `odoo_client.py`, Architekten-Freigabe bereits erteilt), WP4 (`LAST_VERIFIED_VERSION`), WP5 (`scripts/check_compat.sh`); D9 (Feedback-Logs, opt-in + Redaktion) | Nutzer-Vorgabe 2026-09-02: hohe Priorität. Ersetzt die alte, verworfene "S5 Tier 2"-Zeile (JSON-Mapping-Dateien) komplett — siehe R5-Statusblock für die volle Begründung. Einordnung in die Sprintfolge (vor/parallel zu S11?) noch nicht entschieden. |
 | **S6 — PDF (R1/P1+P2)** ✅ | `pdf_factory`, `modules/documents`, GUI-Optionen, `RunContext.applicant_ids` (Voraussetzungs-Fix in `recruiting.py`) (2026-08-04) | Erster Roadmap-Ausbau, größter Demo-Effekt — siehe `SPRINT_LOG.md` für Peer-Review-Ergebnis und den live gefundenen `ir.attachment`-Feldnamen-Bug |
 | **S7 — Prozessketten-Kontinuität (R8)** ✅ | Universelles Service-Produkt-Tagging, billable-lines-first Zeiterfassung, Wizard-basierte Fakturierung, `orchestrator.py`-Reorder 🔒 (2026-08-05) | Umnummeriert von "S7 = Purchase+Inventory" — Prozessketten-Kontinuität ist Voraussetzung, nicht parallel; siehe `ROADMAP_ARCHIVE.md`s R8-Statusblock für Details, Peer-Review-Verlauf (2× fremder Opus-Agent, Plan+Repo-Kontext) und den Hero→Universal-Kurswechsel |
 | **S8 — Purchase + Inventory (R2, R3)** ✅ | `modules/purchase.py`, `modules/inventory.py` (neu), `odoo_actions.py`-Erweiterung, `orchestrator.py`-Anhang 🔒 (2026-08-28) | War ursprünglich S7; siehe `ROADMAP_ARCHIVE.md`s R2/R3-Statusblöcke für Details, zwei Peer-Review-Durchläufe (Plan-Agent + fremder Cold-Review-Agent, gleiches Verfahren wie S5-S7) und live gefundene Bugs (`ctx.company_ids`-Namenskollision, `action_create_invoice`s fehlendes `invoice_date`) |
