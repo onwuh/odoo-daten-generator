@@ -155,7 +155,7 @@ for behaviour unverifiable without side effects, but don't replace live integrat
 
 ## Current Sprint
 <!-- Architect updates this before each Claude Code session -->
-Sprint-für-Sprint-Narrativ (S1-S10, abgeschlossen) ausgelagert nach `odoo-daten-generator/SPRINT_LOG.md` (2026-09-02) — Kontext, Peer-Review-Ergebnisse und live gefundene Bugs pro Sprint stehen dort. Aktueller Stand: S1-S10 abgeschlossen, nächster Sprint offen. Siehe `ROADMAP.md` §5 (Umsetzungsreihenfolge) für Backlog-Kandidaten.
+Sprint-für-Sprint-Narrativ (S1-S10, abgeschlossen) ausgelagert nach `odoo-daten-generator/SPRINT_LOG.md` (2026-09-02) — Kontext, Peer-Review-Ergebnisse und live gefundene Bugs pro Sprint stehen dort. Aktueller Stand: S1-S10 abgeschlossen, **S11 gestartet 2026-09-02** (Branch `s11-api-version-compat-d9`) — R5 WP1-5 (API-Versions-Kompatibilität) + D9 (Feedback-Logs, lokal persistiert). Siehe `ROADMAP.md` §5 (Umsetzungsreihenfolge) für Task-Reihenfolge (Phase A/B) und Details.
 
 ## Do Not Touch Without Architect Approval
 - Object pipeline execution order in `orchestrator.py`
