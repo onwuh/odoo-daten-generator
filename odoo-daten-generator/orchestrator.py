@@ -7,24 +7,31 @@ Module execution order is important:
 4. sale         — orders, confirmation, CRM won-stage update; confirming an
                    order with a service_tracking-tagged product also triggers
                    Odoo's native project/task creation (R8)
-5. hr           — employees (project/timesheet need them)
-6. project      — projects, tasks, stages (timesheets need project_ids)
-7. hr_timesheet — timesheets; logs hours against order-linked tasks (R8),
+5. crm_lost     — marks a share of opportunities lost (R11); must run after
+                   sale (only opportunities sale.py did NOT link to an order
+                   are eligible — see ctx.linked_opportunity_ids). Log-only,
+                   no progress row (not in run_config.MODULE_RUN_ORDER)
+6. hr           — employees (project/timesheet need them)
+7. project      — projects, tasks, stages (timesheets need project_ids)
+8. hr_timesheet — timesheets; logs hours against order-linked tasks (R8),
                    which is what makes their delivered quantity non-zero
-8. account      — invoices from orders (delivered-qty-aware, via the native
+9. account      — invoices from orders (delivered-qty-aware, via the native
                    sale.advance.payment.inv wizard — R8), vendor bills, bank
                    transactions. Moved from position 4 to run after
                    hr_timesheet: a service line's invoiced quantity is driven
                    by qty_delivered, computed from timesheets that don't exist
                    yet if account ran earlier.
-9. hr_recruitment — recruiting
-10. purchase       — purchase orders + confirmation + vendor bills from
+10. hr_recruitment — recruiting
+11. purchase       — purchase orders + confirmation + vendor bills from
                       ctx.component_ids (R2); contributes to ctx.bill_ids,
                       which documents (P1) reads — must run before it
-11. stock          — stock.quant on-hand seeding (R3); independent of
+12. stock          — stock.quant on-hand seeding (R3); independent of
                       purchase (no shared state), placed after for narrative
                       order (procure → stock) only
-12. documents      — PDF attachments for vendor bills (needs bill_ids) and
+13. hr_expense     — expense records per employee (R19); needs ctx.employee_ids
+                      (hr) only, placed here (not right after hr) so it doesn't
+                      disturb the existing hr→project→timesheet→account chain
+14. documents      — PDF attachments for vendor bills (needs bill_ids) and
                       applicant CVs (needs applicant_ids); always runs last
 """
 
@@ -34,7 +41,7 @@ from config import RunContext
 from llm_service import LLMService
 from odoo_client import OdooJson2Client
 from logging_setup import configure_logging
-from modules import master_data, crm, sale, accounting, hr, project, mrp, recruiting, documents, purchase, inventory
+from modules import master_data, crm, sale, accounting, hr, project, mrp, recruiting, documents, purchase, inventory, expenses
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -68,6 +75,11 @@ def run(client: OdooJson2Client, gemini: LLMService, ctx: RunContext,
         ("mrp",            "mrp" in ctx.installed_modules,              mrp.create_mrp_data),
         ("crm",            "crm" in ctx.installed_modules,              crm.create_crm_data),
         ("sale",           "sale" in ctx.installed_modules,             sale.create_sale_data),
+        # R11: must run after "sale" (operates on opportunities sale.py did
+        # NOT link to an order — ctx.linked_opportunity_ids). Not its own
+        # WANTED_MODULES/MODULE_RUN_ORDER entry (log-only, no progress row,
+        # see ROADMAP.md's R11 section) — gated the same way as "crm" itself.
+        ("crm_lost",       "crm" in ctx.installed_modules,               crm.mark_lost_opportunities),
         ("hr",             "hr" in ctx.installed_modules,               hr.create_hr_data),
         ("project",        "project" in ctx.installed_modules,          project.create_project_data),
         ("hr_timesheet",   "hr_timesheet" in ctx.installed_modules,     project.create_timesheet_data),
@@ -75,6 +87,7 @@ def run(client: OdooJson2Client, gemini: LLMService, ctx: RunContext,
         ("hr_recruitment", "hr_recruitment" in ctx.installed_modules,   recruiting.create_recruiting_data),
         ("purchase",       "purchase" in ctx.installed_modules,          purchase.create_purchase_data),
         ("stock",          "stock" in ctx.installed_modules,             inventory.create_inventory_data),
+        ("hr_expense",     "hr_expense" in ctx.installed_modules,        expenses.create_expense_data),
         # "documents" is not a real Odoo-probed module — ir.attachment is core,
         # always available, hence hardcoded True (not gated on installed_modules,
         # which would incorrectly tie this to Odoo's unrelated real "Documents"

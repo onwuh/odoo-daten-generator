@@ -205,5 +205,70 @@ def run(client, ctx):
     except Exception as e:
         results.append(("crm: user_id set with chatter disabled (B12)", False, str(e)))
 
+    # Step 9 — R11: mark_lost_opportunities only touches unlinked opportunities.
+    # opp_a simulates one sale.py already linked to an order (must stay
+    # active); opp_b is unlinked (with pct=100, must end up lost).
+    try:
+        from config import ModuleSelections, RunContext, DemoCriteria
+        from modules.crm import mark_lost_opportunities
+
+        opp_a = create_opportunity(client, partner_id, "R11 Test Opportunity Linked")
+        opp_b = create_opportunity(client, partner_id, "R11 Test Opportunity Unlinked")
+        assert isinstance(opp_a, int) and isinstance(opp_b, int)
+
+        criteria = DemoCriteria(
+            mode="both", industry="Test", num_companies=1,
+            num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
+            num_services=0, num_consumables=0, num_storables=0,
+        )
+        sel = ModuleSelections(crm_lost={"pct": 100})
+        r11_ctx = RunContext(
+            criteria=criteria, module_selections=sel,
+            industry="Test", language_name="German", language_code="de_DE",
+            gemini_model_name="test",
+        )
+        r11_ctx.opportunity_ids = [opp_a, opp_b]
+        r11_ctx.linked_opportunity_ids = [opp_a]
+
+        mark_lost_opportunities(client, None, r11_ctx)
+
+        rec = client.search_read(
+            'crm.lead', [["id", "in", [opp_a, opp_b]]],
+            fields=["active", "won_status"], limit=0,
+            context={"active_test": False},
+        )
+        by_id = {r["id"]: r for r in rec}
+        assert by_id[opp_a]["active"] is True, f"linked opportunity was marked lost: {by_id[opp_a]}"
+        assert by_id[opp_b]["active"] is False, f"unlinked opportunity was NOT marked lost: {by_id[opp_b]}"
+        assert by_id[opp_b]["won_status"] == "lost", by_id[opp_b]
+        results.append((
+            "crm: R11 — mark_lost_opportunities only touches unlinked opportunities (Pattern 4)",
+            True, f"linked={by_id[opp_a]}, unlinked={by_id[opp_b]}",
+        ))
+    except Exception as e:
+        results.append(("crm: R11 — mark_lost_opportunities only touches unlinked opportunities (Pattern 4)", False, str(e)))
+
+    # Step 10 — R11 Pattern 5: empty opportunity_ids -> graceful skip, no writes.
+    try:
+        from config import ModuleSelections, RunContext, DemoCriteria
+        from modules.crm import mark_lost_opportunities
+
+        criteria = DemoCriteria(
+            mode="both", industry="Test", num_companies=1,
+            num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
+            num_services=0, num_consumables=0, num_storables=0,
+        )
+        sel = ModuleSelections(crm_lost={"pct": 100})
+        skip_ctx = RunContext(
+            criteria=criteria, module_selections=sel,
+            industry="Test", language_name="German", language_code="de_DE",
+            gemini_model_name="test",
+        )
+        skip_ctx.opportunity_ids = []
+        mark_lost_opportunities(client, None, skip_ctx)  # must not raise
+        results.append(("crm: R11 — empty opportunity_ids -> graceful skip (Pattern 5)", True, ""))
+    except Exception as e:
+        results.append(("crm: R11 — empty opportunity_ids -> graceful skip (Pattern 5)", False, str(e)))
+
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

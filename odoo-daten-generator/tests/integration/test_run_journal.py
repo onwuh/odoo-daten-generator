@@ -94,6 +94,45 @@ def run(client, ctx):
         except Exception as e:
             results.append(("run_journal: leeres Journal löscht nichts (Pattern 5)", False, str(e)))
 
+        # Step 6 — S12/WP5 cold-review fund: an APPROVED hr.expense used to
+        # make delete_run fail outright (Odoo refuses unlink on
+        # approved/posted expenses, and delete_run unlinks a whole model
+        # group in one call — so this single record would have failed
+        # deletion for every hr.expense in the same run). CANCEL_BEFORE_UNLINK
+        # now runs action_reset first; this proves the real fix end-to-end,
+        # not just the mocked unit tests.
+        try:
+            employees = client.search_read('hr.employee', [], fields=["id"], limit=1)
+            products = client.search_read(
+                'product.product', [["can_be_expensed", "=", True]], fields=["id"], limit=1,
+            )
+            if not employees or not products:
+                results.append(("run_journal: SKIP — kein Mitarbeiter/keine Spesenkategorie",
+                                True, "skipped"))
+            else:
+                expense_journal = run_journal.RunJournal("demo-itest-expense", Path(tmp))
+                expense_id = client.create('hr.expense', {
+                    "employee_id": employees[0]["id"], "product_id": products[0]["id"],
+                    "name": "S12/WP5 Journal Reset Test", "total_amount": 10.0,
+                    "payment_mode": "own_account",
+                })
+                expense_journal.record('hr.expense', [expense_id])
+                client.write('hr.expense', [expense_id], {"approval_state": "submitted"})
+                client.write('hr.expense', [expense_id], {"approval_state": "approved"})
+
+                summary = run_journal.delete_run(client, expense_journal)
+                assert summary["deleted"] == 1 and not summary["failed"], summary
+                remaining = client.search_read(
+                    'hr.expense', [["id", "=", expense_id]], fields=["id"], limit=0,
+                )
+                assert remaining == [], f"approved expense still present after delete_run: {remaining}"
+                results.append((
+                    "run_journal: delete_run löscht auch genehmigte hr.expense (action_reset)",
+                    True, f"expense {expense_id}",
+                ))
+        except Exception as e:
+            results.append(("run_journal: delete_run löscht auch genehmigte hr.expense (action_reset)", False, str(e)))
+
     # Safety net: never leave test partners behind if an assertion aborted early.
     if created_ids:
         try:

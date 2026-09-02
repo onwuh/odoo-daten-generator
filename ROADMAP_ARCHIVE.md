@@ -722,3 +722,122 @@ sichtbaren Fehler (exakt die B1/S8-`stock_avg_qty`-Fehlerklasse, nur eine Stufe 
 R12 umgeht das bewusst, indem es in ein bestehendes Modul einzieht statt ein eigenes zu
 werden — R18 und R19 werden echte neue Module und brauchen alle fünf Punkte.
 
+**Nachtrag (2026-09-02, R19/S12):** dieser Hinweis war beim R19-Cold-Review nicht mehr
+auffindbar (`ROADMAP.md` referenzierte ihn nur als "siehe Implementierungshinweis oben" —
+stale geworden, als R10 hierher archiviert wurde und die Referenz ihr Ziel verlor). R19s
+eigener Cold-Review erweiterte/verifizierte ihn gegen den tatsächlichen Code auf sieben
+Punkte (exakte Zeilennummern, plus die `test_run_config_unit.py`-Testabdeckung als Punkt 7)
+und schrieb ihn neu als eigenständigen, dauerhaften Abschnitt "Referenz —
+Registrierungskette für ein neues orchestriertes Modul" in `ROADMAP.md` §3 — R12/R18
+verweisen jetzt dorthin, nicht mehr hierher.
+
+### D9 ✅ Erledigt (2026-09-02, als Teil von Sprint S11 Phase B) — Feedback-Logs: Lauf-Log lokal, Referenz im Issue
+
+Der Feedback-Button (`web/feedback.py`) übertrug bisher nur eine Kurzzusammenfassung ins
+GitHub-Issue — bewusst daten-minimiert (Kommentar im Code: "niemals Ziel-URL/Datenbank/
+Fehlertext"). Nutzerwunsch: das volle Lauf-Log für Diagnose mitschicken, was direkt mit
+dieser Daten-Minimierung kollidiert — ein Log kann die Ziel-Odoo-URL und rohen Odoo-Fehlertext
+(potenziell Kundendaten eines Interessenten) enthalten, und Issues landen in einem
+**öffentlichen** GitHub-Repo.
+
+**Gelöste Spannung (Nutzerentscheidung, ersetzte einen ursprünglich geplanten
+Redaktions-Ansatz):** kein Log-Inhalt geht je ins öffentliche Issue, auch nicht redigiert —
+das Log bleibt lokal auf der eigenen Maschine (Self-Hosting ist bereits die
+Vertrauensgrenze), das Issue trägt nur die ohnehin schon vorhandene `run_id`-Referenz.
+
+**Umsetzung:** zweiter `logging.FileHandler` über das bestehende
+`logging_setup.run_log_capture` (`web/jobs.py._execute`, verschachtelt neben dem
+SSE-Handler, `contextlib.nullcontext()` bei nicht anlegbarer Datei). Pfad/Retention über
+`run_journal.run_log_path`/`prune_journals` — dasselbe Verzeichnis wie die Run-Journale,
+`ODOO_GENERATOR_RUNS_DIR`-Override greift automatisch mit. **Cold-Review-Fund:**
+`prune_journals` räumt jetzt `*.json` UND `*.log` in einem Durchgang ab — ein Lauf-Log ist
+*stärker* Interessenten-identifizierend als das Journal selbst (`odoo_client._post` loggt
+die volle Ziel-URL bei **jedem** Request, nicht nur einmal); ein separater, leicht
+vergessener zweiter Retention-Pfad wäre schlimmer gewesen als gar keiner. Schreiben ist
+best-effort, gleiche Regel wie `RunJournal._persist`: ein Lauf darf nie daran scheitern,
+dass sein eigenes Log nicht angelegt werden konnte.
+
+Getestet: `test_web_api_unit.py` (echter Lauf schreibt sein Log lokal, unbeschreibbares
+Verzeichnis → `None`, kein Crash), `test_run_journal_unit.py` (`*.log` im selben
+Retention-Durchlauf wie `*.json`), `test_web_feedback_unit.py` (exakte, minimale
+Schlüsselmenge `{run_id, status, modules, api_error_count}` im Issue-Kontext).
+
+### R11 ✅ Erledigt (2026-09-02, als Teil von Sprint S12/WP4) — Lost Opportunities (CRM)
+
+`modules/crm.py` erzeugte bis dahin nur aktive/gewonnene Opportunities — kein
+Trichter-Realismus, jede Demo-Pipeline sah zu 100% erfolgreich aus. Neu: ein konfigurierbarer
+Anteil wird als verloren markiert (`crm.lost.reason` gesucht, nie erzeugt — Referenzdaten-
+Konvention wie `modules/mrp.py`s `quality.alert.team`-Suche).
+
+**Sequenzierungs-Falle (vor Umsetzung gefunden, nicht live):** die naheliegende Umsetzung
+(lost-Anteil am Ende von `create_crm_data` markieren) wäre falsch gewesen — `sale.py`
+verknüpft Aufträge über `search_read('crm.lead', …)`, was `active=False`-Leads unsichtbar
+macht, und schreibt danach die Won-Stage auf verknüpfte Leads. Da CRM vor Sales läuft, hätte
+ein in `crm.py` bereits verlorener Lead entweder fälschlich doch verknüpft oder von `sale.py`
+ignoriert werden können — im schlimmsten Fall verloren *und* Won-staged gleichzeitig. Fix:
+eigener, späterer Aufruf **nach** `sale.py`, operiert nur auf den von `sale.py` **nicht**
+verknüpften Opportunities.
+
+**Umsetzung:** neues additives `RunContext.linked_opportunity_ids` — `sale.py`s
+Verknüpfungsschleife hängt bei jedem erfolgreichen Link den `opp_id` zusätzlich an (kein
+extra `search_read` gegen die rate-limitierte Live-Instanz nötig). `modules/crm.py`s neues
+`mark_lost_opportunities` berechnet die unverknüpften Leads rein lokal, gruppiert den zu
+markierenden Anteil nach zufällig zugewiesenem `lost_reason_id` und schreibt pro Gruppe
+gebündelt (`active=False, probability=0, lost_reason_id=X`) — `won_status` ist ein
+Compute-Feld und zieht korrekt auf `'lost'` nach (live verifiziert, S12/WP3: kein
+`action_set_lost`-Call nötig). Neuer `orchestrator.py`-`module_order`-Eintrag `crm_lost`
+direkt nach `sale`, vor `hr` — ein echter Locked-List-Eingriff (Position zwischen zwei
+bestehenden Schritten, nicht am Ende), dafür holte diese Session explizite
+Architekten-Freigabe ein, statt die vom Cold-Review vorgeschlagene Alternative (Aufruf aus
+`sale.create_sale_data` heraus) zu nehmen — die hätte zwar keine 🔒-Freigabe gebraucht, aber
+Fortschrittszeile/Fehler-Erfassung/eigenes Gate verloren, architektonisch schlechter trotz
+kleinerem sichtbaren Antrag. `crm_lost` bleibt bewusst log-only ohne eigene GUI-
+Fortschrittszeile (kein `WANTED_MODULES`/`MODULE_RUN_ORDER`-Eintrag).
+
+**Cold-Review (fremder Opus-Agent, Plan-Text + Live-Repo, keine Konversationshistorie) vor
+Umsetzung — 3 Blocker gefunden:** ein falsches Vorbild-Zitat für die Search-only-Konvention
+(`mrp.py`s tatsächliche Fundstelle war eine andere Funktion als ursprünglich zitiert); die
+🔒-Einstufung der `orchestrator.py`-Einfügung als "Freigabe ist Formsache" war falsch (siehe
+oben); und `config.py`s neues Feld allein hätte nicht gereicht — ohne einen Eintrag in
+`run_config.build_selections` wäre `crm_lost` nie befüllt worden (B1-Fehlerklasse).
+
+Getestet: 7 neue Unit-Fälle (u. a. ein direkter Beweis, dass nur unverlinkte Opportunities je
+geschrieben werden, selbst bei `pct=100`), 2 neue Live-Integrationsschritte — echter Beweis
+gegen `demo-test5`: eine simuliert verlinkte Opportunity blieb aktiv, eine unverlinkte wurde
+mit `won_status='lost'` markiert.
+
+### R19 ✅ Erledigt (2026-09-02, als Teil von Sprint S12/WP2) — Expenses
+
+Neues `modules/expenses.py`: `hr.expense`-Datensätze pro Mitarbeiter, Kategorien
+(`product.product` mit `can_be_expensed=True`) gesucht statt erzeugt, kein LLM-Call
+(Beschreibung per Template — LLM-Minimalismus: nichts Kreatives, das einen Roundtrip
+rechtfertigt). Ein konfigurierbarer Anteil wird über zwei gebündelte `write()`-Aufrufe
+(`submitted`, dann `approved` — nicht 2×N Einzel-Calls) genehmigt.
+
+**Live-Fund (S12/WP3, vor Implementierung):** `product.product` muss auf jedem Datensatz
+gesetzt sein — ohne `product_id` lehnte Odoo sowohl den reinen `write(approval_state=…)` als
+auch `action_submit`/`action_approve` mit "Select a product to proceed" ab, obwohl das Feld
+laut `fields_get` `required: false` ist. Mit `product_id` gesetzt reicht ein reiner
+`write('hr.expense', ids, {'approval_state': 'submitted'})` (und danach `'approved'`) —
+kein Action-Methoden-Aufruf nötig.
+
+**Cold-Review (fremder Opus-Agent, Plan-Text + Live-Repo, keine Konversationshistorie) vor
+Umsetzung — 2 Blocker gefunden, beide gravierender als übliche Planungsungenauigkeiten:**
+(1) der Modul-Key musste **`hr_expense`** sein, nicht das ursprünglich geplante `expenses` —
+`test_run_config_unit.py`s eigene Invariante (`orchestrator.py`s Literal-Text nach dem
+`WANTED_MODULES`-Key durchsucht) hätte bei einem Mismatch fehlgeschlagen, exakt wie
+`static/app.js`s Karten-Gate auf denselben Odoo-Technik-Namen angewiesen ist
+(`hr_recruitment`/`hr_timesheet`-Präzedenzfall). (2) die ursprüngliche Planung nannte nur
+`config.py` + `orchestrator.py` — ohne die vollständige Registrierungskette
+(`run_config.py`s `WANTED_MODULES`/`MODULE_LABELS`/`MODULE_RUN_ORDER`/`build_selections`/
+`estimate_record_counts`, `static/app.js`s `MODULE_DEFS`+`ICONS`,
+`test_run_config_unit.py`s Testdaten) hätte das Feature **nie** funktioniert — exakt die
+B1-Fehlerklasse, nicht bloß eine Ungenauigkeit. Diese Kette ist jetzt als eigenständige
+Referenz in `ROADMAP.md` §3 dokumentiert (siehe Nachtrag oben), statt bei jedem neuen Modul
+neu entdeckt zu werden.
+
+Getestet: 7 neue Unit-Fälle (Pattern 1/3/5/7, ein Regressionstest, dass `product_id` auf
+jedem erzeugten Datensatz gesetzt ist, ein Beweis, dass die Genehmigung als 2 gebündelte
+Batch-Writes läuft statt 2×N Einzel-Calls), 3 neue Live-Integrationsschritte — erster Lauf
+durchgehend grün, kein einziger Fehlschlag.
+

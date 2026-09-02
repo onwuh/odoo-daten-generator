@@ -191,6 +191,54 @@ def run():
         results.append(("Cleanup: storniert zuerst und meldet den echten Grund", False, str(e)))
 
     try:
+        # S12/WP5 cold-review fund: hr.expense refuses unlink outright once
+        # approved/posted (unlike sale.order/purchase.order/account.move,
+        # which merely need cancelling first) — and delete_run unlinks a
+        # whole model group in ONE call, so a single approved expense in the
+        # group would otherwise fail deletion for every expense in it,
+        # draft/submitted included. action_reset must run first, same
+        # best-effort pattern as the other three models.
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = run_journal.RunJournal("demo-expense-reset", Path(tmp))
+            journal.record("hr.expense", [70, 71])
+            client = MagicMock()
+            client.errors = []
+            summary = run_journal.delete_run(client, journal)
+            methods = [call.args[1] for call in client.call_method.call_args_list]
+            assert methods == ["action_reset", "unlink"], methods
+            # delete_run processes reversed(journal.entries) — newest first.
+            assert sorted(client.call_method.call_args_list[0].kwargs.get("ids")) == [70, 71], \
+                client.call_method.call_args_list[0]
+            assert summary["deleted"] == 2 and not summary["failed"], summary
+        results.append(("Cleanup: hr.expense wird vor dem Löschen zurückgesetzt (action_reset)", True, ""))
+    except Exception as e:
+        results.append(("Cleanup: hr.expense wird vor dem Löschen zurückgesetzt (action_reset)", False, str(e)))
+
+    try:
+        # Even if action_reset itself fails for one record (e.g. already in a
+        # state it can't reset from), the group unlink is still attempted —
+        # same best-effort contract as sale.order/purchase.order/account.move.
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = run_journal.RunJournal("demo-expense-reset-fail", Path(tmp))
+            journal.record("hr.expense", [72])
+            client = MagicMock()
+            client.errors = []
+
+            def _call(model, method, ids=None, **kwargs):
+                if method == "action_reset":
+                    raise RuntimeError("cannot reset a posted expense")
+                return True
+
+            client.call_method.side_effect = _call
+            summary = run_journal.delete_run(client, journal)
+            methods = [call.args[1] for call in client.call_method.call_args_list]
+            assert methods == ["action_reset", "unlink"], methods
+            assert summary["deleted"] == 1 and not summary["failed"], summary
+        results.append(("Cleanup: hr.expense-Unlink läuft trotz fehlgeschlagenem action_reset weiter", True, ""))
+    except Exception as e:
+        results.append(("Cleanup: hr.expense-Unlink läuft trotz fehlgeschlagenem action_reset weiter", False, str(e)))
+
+    try:
         # S10/R10 end-to-end regression: the two tests above check
         # _first_new_error against a hand-built errors list. This one drives a
         # REAL OdooJson2Client (call_method now makes exactly one request per

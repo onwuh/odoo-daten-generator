@@ -155,7 +155,7 @@ for behaviour unverifiable without side effects, but don't replace live integrat
 
 ## Current Sprint
 <!-- Architect updates this before each Claude Code session -->
-Sprint-für-Sprint-Narrativ (S1-S10, abgeschlossen) ausgelagert nach `odoo-daten-generator/SPRINT_LOG.md` (2026-09-02) — Kontext, Peer-Review-Ergebnisse und live gefundene Bugs pro Sprint stehen dort. Aktueller Stand: S1-S11 abgeschlossen (2026-09-02, Branch `s11-api-version-compat-d9`, noch nicht in main gemerged) — R5 WP1/WP2/WP4/WP5 + D9 umgesetzt, WP3 (Übersetzungs-Registry) nach Cold-Review zurückgestellt (siehe `ROADMAP.md`s WP3-Statusblock für Blocker + Wiederaufnahme-Auslöser). Nächster Sprint: S12 — Quick Wins (R11/R16/R19), siehe `ROADMAP.md` §5.
+Sprint-für-Sprint-Narrativ (S1-S10, abgeschlossen) ausgelagert nach `odoo-daten-generator/SPRINT_LOG.md` (2026-09-02) — Kontext, Peer-Review-Ergebnisse und live gefundene Bugs pro Sprint stehen dort. Aktueller Stand: S1-S12 abgeschlossen (2026-09-02, Branch `s11-api-version-compat-d9`, noch nicht in main gemerged) — S11: R5 WP1/WP2/WP4/WP5 + D9 umgesetzt, WP3 (Übersetzungs-Registry) nach Cold-Review zurückgestellt (siehe `ROADMAP_ARCHIVE.md`s R5/D9-Statusblöcken). S12: R11 (Lost Opportunities) + R19 (Expenses) vollständig umgesetzt und archiviert, R16 Produkt-Ebene (Barcode) umgesetzt (Location-Ebene bleibt in S13 offen) — siehe `ROADMAP.md`s "S12 — WP-Sequenz" für den Ablauf, `ROADMAP_ARCHIVE.md`s R11/R19-Statusblöcken für Details. Beide Sprints peer-reviewed vor Merge (S5-S11-Verfahren), bereit für PR nach `main`. Nächster Sprint: noch nicht festgelegt, siehe `ROADMAP.md` §5 für offene Kandidaten (S13+).
 
 ## Do Not Touch Without Architect Approval
 - Object pipeline execution order in `orchestrator.py`

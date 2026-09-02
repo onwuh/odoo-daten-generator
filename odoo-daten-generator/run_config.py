@@ -40,7 +40,7 @@ WANTED_MODULES = [
     "crm", "sale", "account", "hr", "project",
     "hr_timesheet", "mrp", "hr_recruitment",
     "purchase", "stock", "hr_holidays", "hr_work_entry",
-    "hr_recruitment_skills",
+    "hr_recruitment_skills", "hr_expense",
 ]
 
 # "documents" is deliberately absent above: it is a pseudo-module. It attaches
@@ -72,6 +72,7 @@ MODULE_LABELS = {
     "hr_holidays": "Abwesenheiten",
     "hr_work_entry": "Arbeitszeiterfassung",
     "hr_recruitment_skills": "Bewerber-Skills",
+    "hr_expense": "Spesen",
     "documents": "Dokumente (PDFs)",
     "stammdaten": "Stammdaten",
 }
@@ -82,7 +83,7 @@ MODULE_LABELS = {
 # step, see the comment there.
 MODULE_RUN_ORDER = [
     "mrp", "crm", "sale", "hr", "project", "hr_timesheet",
-    "account", "hr_recruitment", "purchase", "stock", "documents",
+    "account", "hr_recruitment", "purchase", "stock", "hr_expense", "documents",
 ]
 
 # Maps orchestrator's on_module_start/on_module_done names onto progress-row keys.
@@ -231,6 +232,16 @@ def build_selections(payload: Dict[str, Any]) -> Tuple[ModuleSelections, Set[str
             today = min(_as_pct(activities.get("today_pct"), "crm.activities.today_pct", 20),
                         100 - past)
             sel.crm_activities = {"enabled": True, "past_pct": past, "today_pct": today}
+        # R11: crm_lost only settable when crm itself is enabled — a crm.py
+        # sub-feature (like chatter/activities above), not its own module.
+        # Set here, inside `if _enabled(crm)`, so "CRM installed but not
+        # selected" can never leave crm_lost active with an empty
+        # ctx.opportunity_ids (modules/crm.py's mark_lost_opportunities also
+        # guards this independently, but this is the cleaner place to
+        # prevent it).
+        lost = _as_dict(crm.get("lost"), "crm.lost")
+        if _enabled(lost):
+            sel.crm_lost = {"pct": _as_pct(lost.get("pct"), "crm.lost.pct", 20)}
 
     sale = _as_dict(modules.get("sale"), "modules.sale")
     if _enabled(sale):
@@ -320,6 +331,15 @@ def build_selections(payload: Dict[str, Any]) -> Tuple[ModuleSelections, Set[str
         # dict-shaped, not a bare int: orchestrator's module_code "stock" is
         # looked up via getattr(ModuleSelections, "stock") — see config.py.
         sel.stock = {"avg_qty": _as_int(stock.get("avg_qty"), "stock.avg_qty", 0, 100000, default=50)}
+
+    hr_expense = _as_dict(modules.get("hr_expense"), "modules.hr_expense")
+    if _enabled(hr_expense):
+        selected.add("hr_expense")
+        sel.hr_expense = {
+            "count_per_employee": _as_int(hr_expense.get("count_per_employee"),
+                                          "hr_expense.count_per_employee", 0, 100, default=3),
+            "approved_pct": _as_pct(hr_expense.get("approved_pct"), "hr_expense.approved_pct", 70),
+        }
 
     documents = _as_dict(modules.get("documents"), "modules.documents")
     if _enabled(documents):
@@ -454,6 +474,11 @@ def estimate_record_counts(ctx: RunContext, selected: Set[str]) -> Dict[str, int
             counts["Chatter-Nachrichten"] = sel.crm * int(sel.crm_chatter.get("messages_per_opp", 0))
         if sel.crm_activities:
             counts["Aktivitäten"] = sel.crm
+        if sel.crm_lost:
+            # Upper bound, not exact: the actual share is applied only to
+            # opportunities sale.py leaves unlinked, which this arithmetic
+            # pre-flight can't know ahead of the run.
+            counts["Verlorene Opportunities (max.)"] = round(sel.crm * sel.crm_lost.get("pct", 0) / 100)
     if "sale" in selected and sel.sale:
         counts["Aufträge"] = sel.sale
     if "account" in selected:
@@ -481,5 +506,7 @@ def estimate_record_counts(ctx: RunContext, selected: Set[str]) -> Dict[str, int
         counts["Bestellungen"] = sel.purchase
     if "stock" in selected and sel.stock:
         counts["Lagerbestände"] = c.num_storables or 0
+    if "hr_expense" in selected and sel.hr_expense:
+        counts["Spesen"] = sel.hr * int(sel.hr_expense.get("count_per_employee", 0))
 
     return {label: value for label, value in counts.items() if value}

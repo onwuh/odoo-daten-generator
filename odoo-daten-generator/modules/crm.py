@@ -213,6 +213,58 @@ def create_crm_data(client, gemini, ctx: RunContext) -> None:
         logger.info(f"✅ {len(ctx.lead_ids)} Leads erstellt.")
 
 
+def mark_lost_opportunities(client, gemini, ctx: RunContext) -> None:
+    """R11: marks a configurable share of opportunities as lost.
+
+    Must run after sale.py — operates only on opportunities sale.py did NOT
+    link to an order (ctx.linked_opportunity_ids), so a lead never ends up
+    both lost and Won-staged. Enforced by orchestrator.py's module_order
+    position ("crm_lost" right after "sale"), not by this function.
+
+    crm.lost.reason is searched, never created (reference-data convention,
+    see modules/mrp.py's quality.alert.team/quality.point.test_type search —
+    an empty pool skips the feature entirely rather than inventing a reason).
+    """
+    sel = ctx.module_selections.crm_lost
+    if not sel:
+        return
+    pct = sel.get('pct', 0)
+    if pct <= 0:
+        return
+    if not ctx.opportunity_ids:
+        return
+
+    unlinked = [oid for oid in ctx.opportunity_ids if oid not in ctx.linked_opportunity_ids]
+    if not unlinked:
+        return
+
+    reasons = client.search_read('crm.lost.reason', [], fields=['id'], limit=0)
+    if not reasons:
+        logger.warning("⚠️  Keine crm.lost.reason gefunden — Lost-Opportunities übersprungen.")
+        return
+
+    num_lost = round(len(unlinked) * pct / 100)
+    to_lost = random.sample(unlinked, k=min(num_lost, len(unlinked)))
+    if not to_lost:
+        return
+
+    logger.info(f"\n--- CRM: Markiere {len(to_lost)} Opportunities als verloren ---")
+    reason_ids = [r['id'] for r in reasons]
+    groups = defaultdict(list)
+    for oid in to_lost:
+        groups[random.choice(reason_ids)].append(oid)
+    for reason_id, ids in groups.items():
+        try:
+            # active=False + lost_reason_id is sufficient — won_status is a
+            # compute field and correctly resolves to 'lost' (live-verified
+            # S12/WP3), no action_set_lost call needed.
+            client.write('crm.lead', ids, {"active": False, "probability": 0, "lost_reason_id": reason_id})
+        except Exception as e:
+            logger.warning(f"⚠️  Konnte {len(ids)} Opportunities nicht als verloren markieren: {e}")
+
+    logger.info(f"✅ {len(to_lost)} Opportunities als verloren markiert.")
+
+
 # ---------------------------------------------------------------------------
 # Chatter
 # ---------------------------------------------------------------------------

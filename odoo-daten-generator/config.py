@@ -38,6 +38,12 @@ class ModuleSelections:
     # crm_activities shape: {"enabled": bool, "past_pct": int, "today_pct": int}
     # future_pct is implied: 100 - past_pct - today_pct
     # empty dict → activities disabled
+    crm_lost: dict = field(default_factory=dict)
+    # crm_lost shape: {"pct": int} (R11). A crm.py sub-feature like crm_chatter/
+    # crm_activities, NOT its own orchestrated module — no WANTED_MODULES/
+    # MODULE_RUN_ORDER entry, gated in build_selections inside the existing
+    # `if _enabled(crm)` block. Still its own orchestrator.py module_order
+    # step (must run after "sale") — see modules/crm.py's mark_lost_opportunities.
     documents: dict = field(default_factory=dict)
     # documents shape: {"bill_pdfs_enabled": bool, "cv_pdfs_enabled": bool}
     # empty dict → both stages disabled
@@ -49,6 +55,12 @@ class ModuleSelections:
     # since ModuleSelections.get(module_code) is getattr(self, module_code) below and the
     # gate is `elif not sel: continue` — a scalar int field named e.g. stock_avg_qty paired
     # with module_code "stock" would look up a nonexistent attribute and always skip silently.
+    hr_expense: dict = field(default_factory=dict)
+    # hr_expense shape: {"count_per_employee": int, "approved_pct": int} (R19).
+    # Field name must be "hr_expense", not "expenses" — matches WANTED_MODULES'
+    # Odoo technical module name and orchestrator.py's module_order key, same
+    # convention as hr_recruitment/hr_timesheet (see run_config.py's own note
+    # on this).
 
     def get(self, key: str, default=None):
         return getattr(self, key, default)
@@ -76,6 +88,10 @@ class RunContext:
     confirmed_order_ids: List[int] = field(default_factory=list)
     opportunity_ids: List[int] = field(default_factory=list)
     lead_ids: List[int] = field(default_factory=list)
+    # Opportunity ids sale.py successfully linked to an order (R11) — lets
+    # mark_lost_opportunities operate only on the unlinked remainder without
+    # an extra search_read against the rate-limited live instance.
+    linked_opportunity_ids: List[int] = field(default_factory=list)
     workcenter_ids: List[int] = field(default_factory=list)
     # Components/raw materials created by MRP (purchase_ok=True, sale_ok=False).
     # Kept separate from product_ids (sellable finished goods) so vendor bills
