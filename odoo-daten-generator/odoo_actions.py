@@ -256,15 +256,20 @@ MODEL_ACCESS_PROBES: Dict[str, List[str]] = {
     "hr_work_entry": ["hr.work.entry.type"],
     "project": ["project.project", "project.task"],
     "hr_timesheet": ["account.analytic.line"],
+    # quality.check (S14/R18): secondary, same reasoning as quality.point —
+    # a blocked quality.check access degrades only check creation, not
+    # quality.point or the rest of the mrp module (see mrp.py's per-branch
+    # gating, not a shared one).
     "mrp": ["mrp.bom", "mrp.production", "mrp.workcenter",
-           "mrp.routing.workcenter", "quality.point"],
+           "mrp.routing.workcenter", "quality.point", "quality.check"],
     "hr_recruitment": ["hr.job", "hr.applicant", "hr.skill.type"],
     "purchase": ["purchase.order"],
-    # stock.location/stock.warehouse/stock.lot: secondary (S13/R13-R15) —
-    # stock.quant stays primary (see PRIMARY_MODEL_PER_MODULE below), a
-    # blocked location/warehouse/lot access degrades that one sub-feature,
-    # not the whole module.
-    "stock": ["stock.quant", "stock.location", "stock.warehouse", "stock.lot"],
+    # stock.location/stock.warehouse/stock.lot: secondary (S13/R13-R15),
+    # stock.warehouse.orderpoint likewise (S14/R12) — stock.quant stays
+    # primary (see PRIMARY_MODEL_PER_MODULE below), a blocked secondary
+    # access degrades that one sub-feature, not the whole module.
+    "stock": ["stock.quant", "stock.location", "stock.warehouse", "stock.lot",
+              "stock.warehouse.orderpoint"],
     "hr_expense": ["hr.expense"],
     "documents": ["ir.attachment"],  # always probed (pseudo-module, see run_config)
 }
@@ -538,6 +543,21 @@ FIELD_COMPAT_WHITELIST: Dict[str, Tuple[Optional[str], List[str]]] = {
     'hr.expense': ('hr_expense', ['employee_id', 'product_id', 'name', 'payment_mode',
                    'total_amount', 'date', 'currency_id', 'approval_state']),
     'stock.location': ('stock', ['name', 'usage', 'location_id', 'barcode']),
+    # S14/R18: model-gap-safe, not field-gap-safe like applicant_skill_ids
+    # above — a quality-less mrp install is missing the whole model, which
+    # model_access (probed under "mrp") already filters before fields_get
+    # ever runs, and the field list itself is live-verified against
+    # demo-test5 (measure_on deliberately absent — doesn't exist on this
+    # instance despite the odoo-fields MCP tool's cache claiming it does,
+    # see ODOO_GOTCHAS.md).
+    'quality.point': ('mrp', ['name', 'team_id', 'picking_type_ids', 'company_id',
+                      'test_type_id', 'test_report_type', 'apply_to', 'product_ids']),
+    'quality.check': ('mrp', ['point_id', 'production_id', 'team_id', 'test_type_id',
+                      'company_id', 'product_id', 'quality_state']),
+    # S14/R12: unconditionally safe — stock is only probed when selected, no
+    # sub-app split like mrp/quality.
+    'stock.warehouse.orderpoint': ('stock', ['product_id', 'location_id', 'product_min_qty',
+                                    'product_max_qty', 'trigger', 'company_id']),
 }
 
 

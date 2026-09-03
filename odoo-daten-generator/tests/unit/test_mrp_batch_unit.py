@@ -318,6 +318,172 @@ def run():
         results.append(("create_mrp_data: template-id lookups via 2 bulk search_read calls, not N per-product",
                         False, str(e)))
 
+    # ==================================================================
+    # S14/WP3 — R18 Quality Points + Checks
+    # ==================================================================
+
+    def _mock_client_quality(company_id=555, picking_type_id=321, action_confirm_fails=False,
+                              random_always_confirms=True):
+        """Extends _mock_client's product.product/create_batch behaviour with
+        the models Section D (and Section C's MO path) needs: res.company,
+        stock.picking.type, quality.alert.team, quality.point.test_type, plus
+        create_batch/call_method for mrp.production/quality.point/quality.check."""
+        client = _mock_client()
+        base_search_read = client.search_read.side_effect
+
+        def _search_read(model, domain=None, fields=None, limit=None, **kw):
+            if model == 'res.company':
+                return [{"id": company_id}] if company_id else []
+            if model == 'stock.picking.type':
+                return [{"id": picking_type_id}] if picking_type_id else []
+            if model == 'quality.alert.team':
+                return [{"id": 10}]
+            if model == 'quality.point.test_type':
+                return [{"id": 20}]
+            return base_search_read(model, domain=domain, fields=fields, limit=limit, **kw)
+
+        def _call_method(model, method, ids=None, kwargs=None, **kw):
+            if model == 'mrp.production' and method == 'action_confirm':
+                if action_confirm_fails:
+                    raise Exception("simulated action_confirm failure")
+                return True
+            return MagicMock()
+
+        client.search_read.side_effect = _search_read
+        client.call_method.side_effect = _call_method
+        return client
+
+    def _batches(client, model):
+        return [c for c in client.create_batch.call_args_list if c.args[0] == model]
+
+    # Pattern 3: create_quality_points=False -> no quality.point/quality.check
+    # calls at all, even with manufacturing orders confirmed.
+    try:
+        client = _mock_client_quality()
+        with patch("modules.mrp.random.random", return_value=0.0):  # always confirm
+            ctx = _make_ctx({
+                "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
+                "num_workcenters": 0, "num_manufacturing_orders": 3, "create_quality_points": False,
+            })
+            ctx.feature_flags = {"mrp_routings": False, "quality": True}
+            with patch("modules.mrp.odoo_actions.create_product"):
+                mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+        assert _batches(client, 'quality.point') == [], _batches(client, 'quality.point')
+        assert _batches(client, 'quality.check') == [], _batches(client, 'quality.check')
+        results.append(("create_mrp_data: create_quality_points=False -> no quality calls (Pattern 3)", True, ""))
+    except AssertionError as e:
+        results.append(("create_mrp_data: create_quality_points=False -> no quality calls (Pattern 3)", False, str(e)))
+
+    # Decoupling (core of S14/R18): num_manufacturing_orders=0 must NOT skip
+    # quality.point creation any more (`if created_bom_ids:`, not the old
+    # combined `if num_manufacturing_orders > 0 and created_bom_ids:`).
+    try:
+        client = _mock_client_quality()
+        ctx = _make_ctx({
+            "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
+            "num_workcenters": 0, "num_manufacturing_orders": 0, "create_quality_points": True,
+        })
+        ctx.feature_flags = {"mrp_routings": False, "quality": True}
+        with patch("modules.mrp.odoo_actions.create_product"):
+            mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+        qp_batches = _batches(client, 'quality.point')
+        assert len(qp_batches) == 1 and len(qp_batches[0].args[1]) == 1, qp_batches
+        # No MOs at all -> nothing to link a quality.check to.
+        assert _batches(client, 'quality.check') == [], _batches(client, 'quality.check')
+        results.append(("create_mrp_data: num_manufacturing_orders=0 -> quality.point still created (decoupled)", True, ""))
+    except AssertionError as e:
+        results.append(("create_mrp_data: num_manufacturing_orders=0 -> quality.point still created (decoupled)", False, str(e)))
+
+    # Pre-existing UnboundLocalError: if no MO is ever selected for confirm
+    # (random.random() always >= 0.7), the function must not raise, and
+    # quality.point must still be created (quality.check has nothing to
+    # link to and must stay empty).
+    try:
+        client = _mock_client_quality()
+        with patch("modules.mrp.random.random", return_value=0.99):  # never confirm
+            ctx = _make_ctx({
+                "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
+                "num_workcenters": 0, "num_manufacturing_orders": 3, "create_quality_points": True,
+            })
+            ctx.feature_flags = {"mrp_routings": False, "quality": True}
+            with patch("modules.mrp.odoo_actions.create_product"):
+                mrp.create_mrp_data(client, gemini=None, ctx=ctx)  # must not raise
+        assert len(_batches(client, 'quality.point')) == 1, _batches(client, 'quality.point')
+        assert _batches(client, 'quality.check') == [], _batches(client, 'quality.check')
+        results.append(("create_mrp_data: no MO ever confirmed -> no UnboundLocalError, quality.point still created", True, ""))
+    except Exception as e:
+        results.append(("create_mrp_data: no MO ever confirmed -> no UnboundLocalError, quality.point still created", False, str(e)))
+
+    # Happy path + field shape: test_report_type='pdf' (not the invalid
+    # 'none'), apply_to='products'+product_ids (not the compute-facade
+    # bom_id), one batch call each for quality.point/quality.check creation
+    # (Pattern 8), quality.check carries point_id/production_id but NOT
+    # quality_state (set via a batched do_pass/do_fail call instead, native-
+    # over-manual — see data_factory.assign_quality_state).
+    try:
+        client = _mock_client_quality()
+        with patch("modules.mrp.random.random", return_value=0.0):  # always confirm
+            ctx = _make_ctx({
+                "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
+                "num_workcenters": 0, "num_manufacturing_orders": 4, "create_quality_points": True,
+                "quality_fail_pct": 100,
+            })
+            ctx.feature_flags = {"mrp_routings": False, "quality": True}
+            with patch("modules.mrp.odoo_actions.create_product"):
+                mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+        qp_batches = _batches(client, 'quality.point')
+        assert len(qp_batches) == 1, qp_batches  # Pattern 8
+        qp_vals = qp_batches[0].args[1][0]
+        assert qp_vals["test_report_type"] == "pdf", qp_vals
+        assert qp_vals["apply_to"] == "products", qp_vals
+        assert "product_ids" in qp_vals and qp_vals["product_ids"][0][0] == 6, qp_vals
+        assert "bom_id" not in qp_vals, qp_vals
+
+        qc_batches = _batches(client, 'quality.check')
+        assert len(qc_batches) == 1, qc_batches  # Pattern 8
+        qc_vals_list = qc_batches[0].args[1]
+        assert qc_vals_list, "expected at least one quality.check"
+        for v in qc_vals_list:
+            assert v.get("point_id") and v.get("production_id"), v
+            assert "quality_state" not in v, v  # native do_pass/do_fail sets this, not create()
+
+        do_fail_calls = [c for c in client.call_method.call_args_list
+                         if c.args[0] == 'quality.check' and c.args[1] == 'do_fail']
+        do_pass_calls = [c for c in client.call_method.call_args_list
+                         if c.args[0] == 'quality.check' and c.args[1] == 'do_pass']
+        assert len(do_fail_calls) == 1, do_fail_calls  # Pattern 8: one batched call
+        assert do_pass_calls == [], do_pass_calls  # quality_fail_pct=100 -> nothing passes
+        fail_ids_sent = do_fail_calls[0].kwargs.get("ids")
+        assert fail_ids_sent and len(fail_ids_sent) == len(qc_vals_list), (fail_ids_sent, qc_vals_list)
+        results.append((
+            "create_mrp_data: quality.point/quality.check field shape + native do_pass/do_fail (Pattern 8)",
+            True, f"{len(qp_batches[0].args[1])} points, {len(qc_vals_list)} checks",
+        ))
+    except AssertionError as e:
+        results.append(("create_mrp_data: quality.point/quality.check field shape + native do_pass/do_fail (Pattern 8)",
+                        False, str(e)))
+
+    # model_access: blocked quality.check must not prevent quality.point
+    # creation — a blocked check access degrades only check creation.
+    try:
+        client = _mock_client_quality()
+        with patch("modules.mrp.random.random", return_value=0.0):
+            ctx = _make_ctx({
+                "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
+                "num_workcenters": 0, "num_manufacturing_orders": 2, "create_quality_points": True,
+            })
+            ctx.feature_flags = {"mrp_routings": False, "quality": True}
+            ctx.model_access = {"quality.check": False}
+            with patch("modules.mrp.odoo_actions.create_product"):
+                mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+        assert len(_batches(client, 'quality.point')) == 1, _batches(client, 'quality.point')
+        assert _batches(client, 'quality.check') == [], _batches(client, 'quality.check')
+        results.append(("create_mrp_data: model_access blocks quality.check without blocking quality.point (Pattern 3)",
+                        True, ""))
+    except AssertionError as e:
+        results.append(("create_mrp_data: model_access blocks quality.check without blocking quality.point (Pattern 3)",
+                        False, str(e)))
+
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results
 

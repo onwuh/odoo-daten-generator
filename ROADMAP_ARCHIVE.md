@@ -841,3 +841,53 @@ jedem erzeugten Datensatz gesetzt ist, ein Beweis, dass die Genehmigung als 2 ge
 Batch-Writes läuft statt 2×N Einzel-Calls), 3 neue Live-Integrationsschritte — erster Lauf
 durchgehend grün, kein einziger Fehlschlag.
 
+### R13 ✅ Erledigt (2026-09-02/03, als Teil von Sprint S13/WP2-4) — Seriennummern-/Chargenverfolgung
+
+`data_factory.assign_tracking` setzt `tracking='lot'`/`'serial'`/`'none'` auf einen
+konfigurierbaren Anteil frisch erzeugter Storables — strikt gegated auf `RunContext.
+new_product_ids` (neues additives Feld: nur was `master_data._create_products` in diesem
+Lauf selbst anlegt, nie `use_existing`-Bestandsprodukte oder MRP-Komponenten/-Fertigprodukte,
+die trotz echtem Odoo-Tracking-Wert unberührt bleiben müssen). `inventory.py`: `tracking='lot'`
+bekommt 1 `stock.lot` + Quant mit `lot_id`; `tracking='serial'` bekommt N Einzel-Quants
+(Menge je 1, eigener Lot) statt eines Bulk-Quants — Peer-Review-Korrektur aus der ursprünglichen
+Planung, live bestätigt korrekt. Lauf-weiter Deckel `_MAX_SERIAL_RECORDS_PER_RUN=500` (nicht
+GUI-exponiert, analog `assign_barcodes`s `max_attempts`), degradiert bei Erschöpfung auf die
+Serial-Mindestrepräsentation statt auf 0 oder einen ungültigen Bulk-Quant. Ein blockierter
+`stock.lot`-Zugriff degradiert (WP5-Fix) betroffene Produkte auf normale Bestände statt das
+ganze Modul mitzureißen. **Bewusst offen geblieben, kein stiller Gap:** MRP-Fertigmeldung
+(`lot_producing_id`) — `mrp.py` hat weiterhin keinen Abschluss-Call für Fertigungsaufträge,
+bleibt eigenes künftiges Item; `purchase.py`-Wareneingang bleibt ohne Lot-Zuordnung.
+
+Details, Live-Befunde und Testabdeckung: siehe "S13 — WP-Sequenz" in `ROADMAP.md`,
+[PR #30](https://github.com/pahuodoo/odoo-daten-generator/pull/30).
+
+### R15 ✅ Erledigt (2026-09-02/03, als Teil von Sprint S13/WP2-4) — Lagerplätze (Sub-Locations)
+
+`inventory.py`: konfigurierbare Anzahl `stock.location`-Kindknoten unter der
+Warehouse-Stock-Location (`usage='internal'`, EAN-13-Barcode über `data_factory.
+assign_barcodes` — R16-Anknüpfung), bestehende Quant-Erzeugung (S8) verteilt sich per
+Round-Robin über einen Location-Pool (Warehouse-Root + optionales zweites Warehouse + alle
+Sub-Locations) statt immer auf die Warehouse-Root. `run_journal.ARCHIVE_FALLBACK_MODELS`
+(neuer Mechanismus): `stock.location`s Unlink schlägt fehl, solange sie einen Quant
+enthält — Archive-Fallback (`active=False`) hilft nur, wenn eine Sub-Location diesen Lauf
+leer geblieben ist (live bestätigte Einschränkung, keine falsche Symmetrie-Behauptung
+gegenüber `stock.warehouse`, das auch mit Bestand archivierbar ist). `stock.putaway.rule`
+(Stretch aus der ursprünglichen Planung) nicht umgesetzt — kein Demo-Mehrwert ggü. dem
+Round-Robin-Ansatz für den ersten Wurf, kein stiller Gap, einfach nicht gebraucht.
+
+Details: siehe "S13 — WP-Sequenz" in `ROADMAP.md`, [PR #30](https://github.com/pahuodoo/odoo-daten-generator/pull/30).
+
+### R16 ✅ Erledigt (Produkt-Ebene 2026-09-02 S12/WP1, Location-Ebene 2026-09-02/03 S13/WP2) — Barcode
+
+Produkt-Ebene (S12): `data_factory.py` erzeugt valide EAN-13 (12 Zufallsziffern +
+Standard-Prüfziffer), `master_data.py` schreibt sie bei Produkterzeugung, Kollisionsvermeidung
+gegen bereits vorhandene **und** in diesem Lauf bereits vergebene Barcodes (ein `search_read`
+bei Laufbeginn, kein N+1), Cap 20 Versuche. Location-Ebene (S13): dieselbe
+`assign_barcodes`-Hilfsfunktion unverändert wiederverwendet für R15s Sub-Locations —
+`stock.location.barcode` und `product.product.barcode` live bestätigt getrennte
+Namensräume, kein Cross-Model-Dedup nötig. `odoo_actions.FIELD_COMPAT_WHITELIST` um
+`product.product.barcode` und `stock.location` ergänzt.
+
+Details: siehe "S12 — WP-Sequenz"/"S13 — WP-Sequenz" in `ROADMAP.md`,
+[PR #29](https://github.com/pahuodoo/odoo-daten-generator/pull/29)/[PR #30](https://github.com/pahuodoo/odoo-daten-generator/pull/30).
+

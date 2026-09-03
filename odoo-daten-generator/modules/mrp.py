@@ -7,6 +7,7 @@ import logging
 import datetime
 import random
 
+import data_factory
 import odoo_actions  # kept for create_product (shared with master_data module)
 from config import RunContext
 
@@ -130,6 +131,7 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
     num_workcenters = max(0, int(mrp_config.get("num_workcenters", 3)))
     num_manufacturing_orders = max(0, int(mrp_config.get("num_manufacturing_orders", 0)))
     create_quality_points = bool(mrp_config.get("create_quality_points", False))
+    quality_fail_pct = max(0, min(100, int(mrp_config.get("quality_fail_pct", 0))))
     if sub_boms_per_product > components_per_bom:
         sub_boms_per_product = components_per_bom
     if num_mrp_products <= 0:
@@ -379,6 +381,17 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
             logger.info(f"Arbeitsgaenge konnten nicht erstellt werden: {e}")
 
     # --- SECTION C: Manufacturing Orders ---
+    # S14/R18: company_id/picking_type_id/confirmed_mo_ids/mo_bom_map are
+    # read by Section D below regardless of whether this section runs (or
+    # runs successfully) — pre-declared here, not just inside the
+    # `if to_confirm:` branch, which is also the pre-existing
+    # UnboundLocalError fix (an unlucky 0.7-roll on a small mo_vals_list
+    # could leave to_confirm empty, and confirmed_mo_ids was only ever
+    # assigned inside that branch).
+    company_id = None
+    picking_type_id = None
+    confirmed_mo_ids = []
+    mo_bom_map = {}  # mo_id -> bom_id, for Section D's quality.check linkage
     if num_manufacturing_orders > 0 and created_bom_ids:
         try:
             logger.info("\n--- MANUFACTURING: Erstelle Fertigungsauftraege ---")
@@ -390,24 +403,8 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
             if not picking_type_id:
                 logger.warning("Kein Fertigungs-Vorgangstyp gefunden - Fertigungsauftraege uebersprungen.")
             else:
-                # Pre-fetch quality references once (only if needed)
-                qp_team_id = None
-                qp_test_type_id = None
-                # Same open-by-default reasoning as mrp_routings_ok above:
-                # feature_flags['quality'] defaults closed on a missing key,
-                # ctx.model_access.get(..., True) is the guard against a probe
-                # that simply never ran.
-                if (create_quality_points and ctx.feature_flags.get('quality', False)
-                        and ctx.model_access.get('quality.point', True)):
-                    try:
-                        teams = client.search_read('quality.alert.team', [], fields=["id"], limit=1)
-                        qp_team_id = teams[0]["id"] if teams else None
-                        test_types = client.search_read('quality.point.test_type', [], fields=["id"], limit=1)
-                        qp_test_type_id = test_types[0]["id"] if test_types else None
-                    except Exception:
-                        pass  # quality module likely not installed
-
                 mo_vals_list = []
+                mo_bom_list = []
                 for _ in range(num_manufacturing_orders):
                     bom_id = random.choice(created_bom_ids)
                     product_id = bom_product_map.get(bom_id)
@@ -420,8 +417,10 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
                         "company_id": company_id,
                         "date_start": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     })
+                    mo_bom_list.append(bom_id)
                 mo_ids = client.create_batch('mrp.production', mo_vals_list) if mo_vals_list else []
                 created_mo_count = len(mo_ids)
+                mo_bom_map = dict(zip(mo_ids, mo_bom_list))
                 to_confirm = [mo_id for mo_id in mo_ids if random.random() < 0.7]
 
                 if to_confirm:
@@ -437,25 +436,114 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
                         ]
 
                 logger.info(f"Fertigungsauftraege: {created_mo_count} erstellt, {len(confirmed_mo_ids)} bestaetigt.")
-
-                # Quality Points (per BOM)
-                if create_quality_points and qp_team_id and qp_test_type_id:
-                    try:
-                        qp_vals_list = [
-                            {
-                                "name": f"QP-BOM-{bom_id}",
-                                "team_id": qp_team_id,
-                                "picking_type_ids": [(4, picking_type_id)],
-                                "company_id": company_id,
-                                "test_type_id": qp_test_type_id,
-                                "test_report_type": "none",
-                                "bom_id": bom_id,
-                            }
-                            for bom_id in created_bom_ids
-                        ]
-                        client.create_batch('quality.point', qp_vals_list)
-                        logger.info(f"Qualitaetspruefpunkte erstellt: {len(qp_vals_list)}")
-                    except Exception as qp_e:
-                        logger.info(f"Qualitaetspruefpunkte konnten nicht erstellt werden: {qp_e}")
         except Exception as e:
             logger.info(f"Fertigungsauftraege konnten nicht erstellt werden: {e}")
+
+    # --- SECTION D: Quality Points + Checks ---
+    # S14/R18: structurally independent of Section C — quality points need
+    # only a BOM + manufacturing picking type, never an MO count
+    # (`if created_bom_ids:`, not `if num_manufacturing_orders > 0 and
+    # created_bom_ids:` like the old combined block). Reuses Section C's
+    # company_id/picking_type_id when that ran first, otherwise resolves
+    # them itself — a quality-points-only run (num_manufacturing_orders=0)
+    # must not silently skip. Two separate try/except blocks (points,
+    # checks) so a failure in one never takes the other down.
+    if create_quality_points and created_bom_ids:
+        if company_id is None:
+            company_id = _get_company_id()
+        if picking_type_id is None and company_id:
+            picking_type_id = get_manufacturing_picking_type_id(client, company_id)
+
+        qp_team_id = None
+        qp_test_type_id = None
+        # Same open-by-default reasoning as mrp_routings_ok above:
+        # feature_flags['quality'] defaults closed on a missing key,
+        # ctx.model_access.get(..., True) is the guard against a probe
+        # that simply never ran.
+        if (picking_type_id and ctx.feature_flags.get('quality', False)
+                and ctx.model_access.get('quality.point', True)):
+            try:
+                teams = client.search_read('quality.alert.team', [], fields=["id"], limit=1)
+                qp_team_id = teams[0]["id"] if teams else None
+                test_types = client.search_read('quality.point.test_type', [], fields=["id"], limit=1)
+                qp_test_type_id = test_types[0]["id"] if test_types else None
+            except Exception:
+                pass  # quality module likely not installed
+
+        # Quality Points (per BOM). apply_to='products' + product_ids is the
+        # real, writable link to a BOM's product — bom_id is a compute
+        # facade Odoo silently discards on write (live-confirmed, S14/WP1).
+        # test_report_type: 'pdf', not 'none' — 'none' is not a valid
+        # selection value and 500s (live-confirmed, S14/WP1); this path had
+        # never succeeded before this fix.
+        bom_to_qp = {}
+        if qp_team_id and qp_test_type_id:
+            try:
+                qp_vals_list = []
+                qp_bom_list = []
+                for bom_id in created_bom_ids:
+                    product_id = bom_product_map.get(bom_id)
+                    if not product_id:
+                        continue
+                    qp_vals_list.append({
+                        "name": f"QP-BOM-{bom_id}",
+                        "team_id": qp_team_id,
+                        "picking_type_ids": [(4, picking_type_id)],
+                        "company_id": company_id,
+                        "test_type_id": qp_test_type_id,
+                        "test_report_type": "pdf",
+                        "apply_to": "products",
+                        "product_ids": [(6, 0, [product_id])],
+                    })
+                    qp_bom_list.append(bom_id)
+                qp_ids = client.create_batch('quality.point', qp_vals_list) if qp_vals_list else []
+                bom_to_qp = dict(zip(qp_bom_list, qp_ids))
+                logger.info(f"Qualitaetspruefpunkte erstellt: {len(qp_ids)}")
+            except Exception as qp_e:
+                logger.info(f"Qualitaetspruefpunkte konnten nicht erstellt werden: {qp_e}")
+
+        # Quality Checks (per confirmed MO, linked to its BOM's point).
+        # Gated on its own model_access probe — a blocked quality.check
+        # access degrades only check creation, not quality.point or the
+        # rest of this module. No duplicate risk from Section C confirming
+        # MOs before this section creates the points: live-confirmed
+        # action_confirm alone never auto-generates a quality.check even
+        # when a matching point already exists (S14/WP4) — Odoo only does
+        # that at stock.picking validation, which this codebase never
+        # reaches (see module docstring).
+        if (bom_to_qp and confirmed_mo_ids and qp_team_id and qp_test_type_id
+                and ctx.model_access.get('quality.check', True)):
+            try:
+                qc_vals_list = []
+                for mo_id in confirmed_mo_ids:
+                    bom_id = mo_bom_map.get(mo_id)
+                    point_id = bom_to_qp.get(bom_id)
+                    product_id = bom_product_map.get(bom_id)
+                    if not point_id or not product_id:
+                        continue
+                    qc_vals_list.append({
+                        "point_id": point_id,
+                        "production_id": mo_id,
+                        "product_id": product_id,
+                        "team_id": qp_team_id,
+                        "test_type_id": qp_test_type_id,
+                        "company_id": company_id,
+                    })
+                qc_ids = client.create_batch('quality.check', qc_vals_list) if qc_vals_list else []
+                # Native do_pass/do_fail (live-confirmed to exist, S14/WP1)
+                # instead of writing quality_state directly — sets
+                # control_date/user_id the way a real inspection would, same
+                # native-over-manual precedent as action_apply_inventory/
+                # action_confirm/action_create_invoice/action_reset. Two
+                # batched call_method calls (Pattern 8), never per-check.
+                pass_ids, fail_ids = data_factory.assign_quality_state(qc_ids, quality_fail_pct)
+                if pass_ids:
+                    client.call_method('quality.check', 'do_pass', ids=pass_ids)
+                if fail_ids:
+                    client.call_method('quality.check', 'do_fail', ids=fail_ids)
+                logger.info(
+                    f"Qualitaetspruefungen erstellt: {len(qc_ids)} "
+                    f"({len(pass_ids)} bestanden, {len(fail_ids)} fehlgeschlagen)."
+                )
+            except Exception as qc_e:
+                logger.info(f"Qualitaetspruefungen konnten nicht erstellt werden: {qc_e}")

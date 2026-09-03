@@ -2,7 +2,8 @@
 and MRP components (R3), plus S13's warehouse-depth features — a second
 stock.warehouse (R14, quant-share only, see ROADMAP.md's R14 scope-split
 note), sub-locations under the first warehouse with location-level barcodes
-(R15/R16), and lot/serial tracking (R13).
+(R15/R16), and lot/serial tracking (R13) — and S14's R12 replenishment
+rules (stock.warehouse.orderpoint), independent of quant seeding.
 
 No LLM calls — pure structure. Independent of purchase.py's receipts (no
 stock.picking validation this sprint — see ROADMAP.md R3/S8): a
@@ -35,14 +36,16 @@ _MAX_SERIAL_RECORDS_PER_RUN = 500
 def create_inventory_data(client, gemini, ctx: RunContext) -> None:
     """Seeds stock.quant on-hand quantities for storable products/components,
     plus S13's optional second warehouse, sub-locations, and lot/serial
-    tracking."""
+    tracking, and S14's optional replenishment rules (orderpoints)."""
     stock_config = ctx.module_selections.stock
     if not isinstance(stock_config, dict) or not stock_config:
         return
     avg_qty = max(0, int(stock_config.get("avg_qty", 0)))
     sub_locations = max(0, int(stock_config.get("sub_locations", 0)))
     second_warehouse = bool(stock_config.get("second_warehouse", False))
-    if avg_qty <= 0 and sub_locations <= 0 and not second_warehouse:
+    orderpoints_pct = max(0, min(100, int(stock_config.get("orderpoints_pct", 0))))
+    if (avg_qty <= 0 and sub_locations <= 0 and not second_warehouse
+            and orderpoints_pct <= 0):
         return
 
     logger.info("\n--- INVENTORY: Seede Lagerbestände ---")
@@ -88,15 +91,21 @@ def create_inventory_data(client, gemini, ctx: RunContext) -> None:
         except Exception as e:
             logger.warning(f"⚠️  Lagerplätze konnten nicht erstellt werden ({e}).")
 
-    if avg_qty <= 0:
-        return
-    if not ctx.company_ids:
+    # S14/Befund 6: this guard is a Pattern-5 proxy for the quant/tracking
+    # branch only ("does this run have any customer contacts at all") — it
+    # is not a real prerequisite for orderpoints, which never read
+    # ctx.company_ids (company_id comes from get_main_company_id above).
+    # Must not be a `return`: an orderpoint-only run (avg_qty=0 or empty
+    # company_ids, orderpoints_pct>0) must still reach the loop below.
+    seed_quants = avg_qty > 0 and bool(ctx.company_ids)
+    if avg_qty > 0 and not ctx.company_ids:
         logger.info("-> Keine Firmen vorhanden — Bestands-Seeding übersprungen")
+    if not seed_quants and orderpoints_pct <= 0:
         return
 
     candidate_ids = ctx.product_ids + ctx.component_ids
     if not candidate_ids:
-        logger.info("-> Keine Produkte/Komponenten vorhanden — Bestands-Seeding übersprungen")
+        logger.info("-> Keine Produkte/Komponenten vorhanden — Seeding übersprungen")
         return
     storable = client.search_read(
         'product.product',
@@ -104,13 +113,23 @@ def create_inventory_data(client, gemini, ctx: RunContext) -> None:
         fields=["id", "tracking"], limit=0,
     )
     if not storable:
-        logger.info("-> Keine lagerfähigen Produkte vorhanden — Bestands-Seeding übersprungen")
+        logger.info("-> Keine lagerfähigen Produkte vorhanden — Seeding übersprungen")
         return
 
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     new_ids = set(ctx.new_product_ids)
     tracking_serial_max = max(1, int(stock_config.get("tracking_serial_max", 10) or 10))
     serial_budget = _MAX_SERIAL_RECORDS_PER_RUN
+
+    # S14/R12: orderpoints target products this run provably just created —
+    # ctx.new_product_ids (master_data.py) and ctx.component_ids (mrp.py,
+    # never pre-seeded from existing data, see run_config.build_context) —
+    # never a use_existing/prior-run product, which could already carry a
+    # stock.warehouse.orderpoint on the same (product, warehouse, location)
+    # triple (live-confirmed unique constraint, S14/Befund 3).
+    orderpoint_ids = new_ids | set(ctx.component_ids)
+    orderpoint_min_qty = max(1, int(stock_config.get("orderpoint_min_qty", 5)))
+    orderpoint_max_qty = max(1, int(stock_config.get("orderpoint_max_qty", 20)))
 
     quant_vals_list = []
     lot_vals_list = []
@@ -120,31 +139,53 @@ def create_inventory_data(client, gemini, ctx: RunContext) -> None:
     # returned ids re-associates them correctly (Pattern 8: one
     # create_batch call for lots, one for quants, regardless of N).
     groups = []
+    orderpoint_vals_list = []
 
     for idx, p in enumerate(storable):
         pid = p["id"]
         location_id = location_pool[idx % len(location_pool)]
-        # S13/Befund 4: only products master_data.py created THIS run are
-        # ever tracking-branched — pre-existing (use_existing) customer
-        # products and MRP components/finished goods keep today's untouched
-        # bulk-quant behaviour regardless of their real tracking value.
-        tracking = p.get("tracking", "none") if pid in new_ids else "none"
 
-        if tracking == "lot":
-            lot_vals_list.append({"product_id": pid, "name": f"LOT-{pid}-0000", "company_id": company_id})
-            groups.append({"pid": pid, "location_id": location_id, "kind": "lot", "n": 1})
-        elif tracking == "serial":
-            n = random.randint(1, tracking_serial_max)
-            n = min(n, max(serial_budget, 0)) or 1  # never fully skip a serial product
-            serial_budget -= n
-            for i in range(n):
-                lot_vals_list.append({"product_id": pid, "name": f"LOT-{pid}-{i:04d}", "company_id": company_id})
-            groups.append({"pid": pid, "location_id": location_id, "kind": "serial", "n": n})
-        else:
-            qty = random.randint(round(avg_qty * 0.5), round(avg_qty * 1.5))
-            quant_vals_list.append({
-                "product_id": pid, "location_id": location_id, "company_id": company_id,
-                "inventory_quantity": qty, "in_date": now_str,
+        if seed_quants:
+            # S13/Befund 4: only products master_data.py created THIS run are
+            # ever tracking-branched — pre-existing (use_existing) customer
+            # products and MRP components/finished goods keep today's
+            # untouched bulk-quant behaviour regardless of their real
+            # tracking value.
+            tracking = p.get("tracking", "none") if pid in new_ids else "none"
+
+            if tracking == "lot":
+                lot_vals_list.append({"product_id": pid, "name": f"LOT-{pid}-0000", "company_id": company_id})
+                groups.append({"pid": pid, "location_id": location_id, "kind": "lot", "n": 1})
+            elif tracking == "serial":
+                n = random.randint(1, tracking_serial_max)
+                n = min(n, max(serial_budget, 0)) or 1  # never fully skip a serial product
+                serial_budget -= n
+                for i in range(n):
+                    lot_vals_list.append({"product_id": pid, "name": f"LOT-{pid}-{i:04d}", "company_id": company_id})
+                groups.append({"pid": pid, "location_id": location_id, "kind": "serial", "n": n})
+            else:
+                qty = random.randint(round(avg_qty * 0.5), round(avg_qty * 1.5))
+                quant_vals_list.append({
+                    "product_id": pid, "location_id": location_id, "company_id": company_id,
+                    "inventory_quantity": qty, "in_date": now_str,
+                })
+
+        # S14/R12: independent of quant/tracking seeding above — an
+        # orderpoint-only run (seed_quants=False) still reaches this.
+        if (orderpoints_pct > 0 and pid in orderpoint_ids
+                and random.uniform(0, 100) < orderpoints_pct):
+            orderpoint_vals_list.append({
+                # warehouse_id deliberately omitted — live-confirmed Odoo
+                # derives it from location_id (S14/Befund 8); no source for
+                # it exists in this codebase (location_pool carries only
+                # location ids, WH2's own warehouse_id never survives past
+                # its own log line).
+                "location_id": location_id, "product_id": pid,
+                "product_min_qty": orderpoint_min_qty,
+                "product_max_qty": orderpoint_max_qty,
+                "trigger": "manual", "company_id": company_id,
+                # name deliberately omitted — live-confirmed Odoo auto-fills
+                # it via sequence (required+readonly).
             })
 
     if lot_vals_list and not ctx.feature_flags.get('stock_lots', True):
@@ -191,22 +232,38 @@ def create_inventory_data(client, gemini, ctx: RunContext) -> None:
                     "inventory_quantity": 1, "in_date": now_str, "lot_id": lot_id,
                 })
 
-    quant_ids = client.create_batch('stock.quant', quant_vals_list)
-    if not quant_ids:
-        return
+    # S14/Befund 5: quant/lot tail and orderpoint batch are two independent,
+    # equally-ranked blocks — neither gates the other. The `if
+    # quant_vals_list else []` guard matters even though create_batch itself
+    # already no-ops on an empty list (Pattern 1): it's what makes "no call
+    # at all" observable on an orderpoint-only run, not just "a call with an
+    # empty result".
+    quant_ids = client.create_batch('stock.quant', quant_vals_list) if quant_vals_list else []
+    if quant_ids:
+        applied = False
+        try:
+            client.call_method('stock.quant', 'action_apply_inventory', ids=quant_ids)
+            applied = True
+        except Exception as e:
+            logger.warning(f"⚠️  action_apply_inventory fehlgeschlagen ({e}) — "
+                            f"Quants angelegt, aber nicht angewendet.")
 
-    applied = False
-    try:
-        client.call_method('stock.quant', 'action_apply_inventory', ids=quant_ids)
-        applied = True
-    except Exception as e:
-        logger.warning(f"⚠️  action_apply_inventory fehlgeschlagen ({e}) — "
-                        f"Quants angelegt, aber nicht angewendet.")
+        logger.info(
+            f"✅ {len(quant_ids)} Lagerbestände erstellt, "
+            f"{'angewendet' if applied else 'NICHT angewendet'}."
+        )
 
-    logger.info(
-        f"✅ {len(quant_ids)} Lagerbestände erstellt, "
-        f"{'angewendet' if applied else 'NICHT angewendet'}."
-    )
+    # S14/Befund 3 (Mechanismus-Korrektur): create_batch is not atomic — a
+    # 404/422 falls back to sequential per-record creates, so a genuine
+    # failure here (outside the collision-proof product selection above)
+    # must not propagate and retroactively taint the quants already created
+    # in the block above (or vice versa).
+    if orderpoint_vals_list:
+        try:
+            op_ids = client.create_batch('stock.warehouse.orderpoint', orderpoint_vals_list)
+            logger.info(f"✅ {len(op_ids)} Nachbestellregeln erstellt.")
+        except Exception as e:
+            logger.warning(f"⚠️  Nachbestellregeln konnten nicht erstellt werden ({e}).")
 
 
 def _create_sub_locations(client, parent_location_id, count):

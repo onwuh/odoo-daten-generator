@@ -158,19 +158,21 @@ def run(client, ctx):
     # mrp_routings disabled to keep this test scoped to D3 (products/BOMs),
     # independent of the still-open B15 workcenter default.
     #
-    # create_quality_points stays False by default — that path never runs
-    # here otherwise, which is exactly why R18's test_report_type="none" bug
-    # went unnoticed (see ROADMAP.md). S11/WP1 flips it under
-    # ODOO_GENERATOR_CAPTURE_FIELDS so a manifest-capture run also sees
-    # quality.point/quality.check's real fields; expect this step to fail on
-    # that known bug when captured this way — capture happens at payload
-    # construction, before the request goes out, so the failure doesn't lose
-    # the fields.
+    # create_quality_points stays False (and num_manufacturing_orders 0) by
+    # default — that path never runs here otherwise, which is exactly why
+    # R18's test_report_type="none" bug went unnoticed (see ROADMAP.md).
+    # S11/WP1 flips both under ODOO_GENERATOR_CAPTURE_FIELDS so a
+    # manifest-capture run also sees quality.point/quality.check's real
+    # fields — quality.check needs a confirmed MO to link to
+    # (production_id), so num_manufacturing_orders must be >0 here too, not
+    # just create_quality_points (S14/R18 fix, see ROADMAP.md's S14 WP-
+    # Sequenz note on this exact gap).
     try:
+        _capture = os.environ.get("ODOO_GENERATOR_CAPTURE_FIELDS") == "1"
         rctx = _make_rctx({
             "num_products": 2, "components_per_bom": 2, "sub_boms_per_product": 1,
-            "num_workcenters": 0, "num_manufacturing_orders": 0,
-            "create_quality_points": os.environ.get("ODOO_GENERATOR_CAPTURE_FIELDS") == "1",
+            "num_workcenters": 0, "num_manufacturing_orders": 2 if _capture else 0,
+            "create_quality_points": _capture, "quality_fail_pct": 50,
         })
         rctx.feature_flags = {
             "mrp_routings": False,
@@ -195,6 +197,61 @@ def run(client, ctx):
         ))
     except Exception as e:
         results.append(("mrp: create_mrp_data end-to-end (D3 batch, inlined bom_line_ids), read-back", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # Step 8 — S14/R18: Quality Points + Checks live end-to-end,
+    # unconditional (not gated behind ODOO_GENERATOR_CAPTURE_FIELDS like
+    # Step 7 above) — Step 7 leaving the flag off by default is exactly why
+    # the test_report_type="none" bug went unnoticed for so long. Uses the
+    # real ctx.feature_flags from test_suite.py's live probe, not a
+    # hardcoded one; skips gracefully if this instance has no Quality app.
+    # ------------------------------------------------------------------
+    if not getattr(ctx, 'feature_flags', {}).get('quality', False):
+        results.append(("mrp: R18 quality points+checks SKIP — quality feature not active", True, "skipped"))
+    else:
+        try:
+            q_rctx = _make_rctx({
+                "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
+                "num_workcenters": 0, "num_manufacturing_orders": 6,
+                "create_quality_points": True, "quality_fail_pct": 50,
+            })
+            q_rctx.feature_flags = {"mrp_routings": False, "quality": True}
+            create_mrp_data(client, None, q_rctx)
+
+            points = client.search_read(
+                'quality.point', [["product_ids", "in", q_rctx.product_ids]],
+                fields=["apply_to", "product_ids", "test_report_type", "picking_type_ids"], limit=0,
+            )
+            assert points, "no quality.point created"
+            for p in points:
+                assert p["apply_to"] == "products", p
+                assert p["test_report_type"] == "pdf", p
+
+            checks = client.search_read(
+                'quality.check', [["product_id", "in", q_rctx.product_ids]],
+                fields=["point_id", "production_id", "quality_state"], limit=0,
+            )
+            assert checks, "no quality.check created"
+            for c in checks:
+                assert c["quality_state"] in ("pass", "fail"), c
+                pid = c["point_id"]
+                pid = pid[0] if isinstance(pid, (list, tuple)) else pid  # Pattern 6
+                assert pid, c
+                prod = c["production_id"]
+                prod = prod[0] if isinstance(prod, (list, tuple)) else prod  # Pattern 6
+                assert prod, c
+
+            results.append((
+                "mrp: R18 quality points+checks live end-to-end — apply_to/test_report_type/"
+                "quality_state read-back (Pattern 4/6)",
+                True, f"{len(points)} points, {len(checks)} checks",
+            ))
+        except Exception as e:
+            results.append((
+                "mrp: R18 quality points+checks live end-to-end — apply_to/test_report_type/"
+                "quality_state read-back (Pattern 4/6)",
+                False, str(e),
+            ))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

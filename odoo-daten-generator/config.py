@@ -29,6 +29,10 @@ class ModuleSelections:
     tasks_per_project: int = 10
     hr_timesheet: int = 0
     mrp: dict = field(default_factory=dict)
+    # mrp shape: {"num_products": int, "components_per_bom": int, "sub_boms_per_product": int,
+    # "num_workcenters": int, "num_manufacturing_orders": int, "create_quality_points": bool,
+    # "quality_fail_pct": int} — quality_fail_pct (S14/R18 additive) only has an effect when
+    # create_quality_points is True; read in modules/mrp.py next to that flag.
     hr_recruitment: dict = field(default_factory=dict)
     hr_timeoff: dict = field(default_factory=dict)
     crm_chatter: dict = field(default_factory=dict)
@@ -51,14 +55,18 @@ class ModuleSelections:
     purchase_confirm_pct: int = 70       # % of created POs to confirm, mirrors sale_confirm_pct
     stock: dict = field(default_factory=dict)
     # stock shape: {"avg_qty": int, "sub_locations": int, "second_warehouse": bool,
-    # "tracking_lot_pct": int, "tracking_serial_pct": int, "tracking_serial_max": int}
-    # (S13/R13-R15 additive) — dict-gated like mrp/documents, NOT a bare int:
+    # "tracking_lot_pct": int, "tracking_serial_pct": int, "tracking_serial_max": int,
+    # "orderpoints_pct": int, "orderpoint_min_qty": int, "orderpoint_max_qty": int}
+    # (S13/R13-R15, S14/R12 additive) — dict-gated like mrp/documents, NOT a bare int:
     # orchestrator.py's module_order key must equal this field's name ("stock") exactly,
     # since ModuleSelections.get(module_code) is getattr(self, module_code) below and the
     # gate is `elif not sel: continue` — a scalar int field named e.g. stock_avg_qty paired
     # with module_code "stock" would look up a nonexistent attribute and always skip silently.
-    # avg_qty==0 with another key set (e.g. sub_locations>0) still runs the step —
-    # inventory.py's own early-return checks all three trigger keys, not avg_qty alone.
+    # avg_qty==0 with another key set (e.g. sub_locations>0, orderpoints_pct>0) still runs
+    # the step — inventory.py's own early-return checks all four trigger keys, not avg_qty
+    # alone. orderpoint_min_qty/orderpoint_max_qty are independent config values, not
+    # derived from avg_qty (would degenerate to 0.0 on the avg_qty=0 path otherwise, S14/
+    # Befund 7 — same reasoning as tracking_serial_max's own decoupling from avg_qty).
     hr_expense: dict = field(default_factory=dict)
     # hr_expense shape: {"count_per_employee": int, "approved_pct": int} (R19).
     # Field name must be "hr_expense", not "expenses" — matches WANTED_MODULES'

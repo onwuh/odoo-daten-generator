@@ -262,3 +262,28 @@ def assign_tracking(vals_list: List[dict], lot_pct: int, serial_pct: int) -> Non
             vals['tracking'] = 'lot'
         elif roll < lot_pct + serial_pct:
             vals['tracking'] = 'serial'
+
+
+def assign_quality_state(ids: List[int], fail_pct: int) -> Tuple[List[int], List[int]]:
+    """Splits already-created quality.check ids into (pass_ids, fail_ids),
+    for one batched do_pass call and one batched do_fail call each (S14/
+    R18) — Odoo's own record actions, live-confirmed to exist on
+    quality.check and to correctly set quality_state/control_date/user_id,
+    preferred over writing quality_state directly at create() time (which
+    would leave control_date/user_id empty, reading as synthetic). Same
+    native-over-manual precedent as action_apply_inventory/action_confirm/
+    action_create_invoice/action_reset elsewhere in this codebase.
+
+    Clamps fail_pct into [0, 100] rather than trusting the caller, same
+    defensive posture as assign_tracking. Pattern 1: an empty ids is a
+    no-op (both returned lists empty).
+    """
+    fail_pct = max(0, min(100, fail_pct))
+    pass_ids: List[int] = []
+    fail_ids: List[int] = []
+    for i in ids:
+        if random.uniform(0, 100) < fail_pct:
+            fail_ids.append(i)
+        else:
+            pass_ids.append(i)
+    return pass_ids, fail_ids
