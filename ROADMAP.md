@@ -926,11 +926,12 @@ Orderpoints/Quality-Points/-Checks).
 **Stand 2026-09-03.** WP1 (gebündelte Live-Verifikation gegen
 `demo-test5.odoo.com`) gelaufen — Ergebnisse und die beiden Korrekturen am
 ursprünglichen R20-Text stehen oben im R20-Abschnitt selbst (nicht hier
-verdoppelt). **Cold-Review 1 von 2 gelaufen** (fremder Opus-Agent,
-Plan-Text + Live-Repo, keine Konversationshistorie, S5-S14-Verfahren) —
-fand **1 echten Blocker + 5 Should-Fixes**, alle unten eingearbeitet.
-Runde 2 (nach Einarbeitung) noch ausstehend, analog S13/S14s
-Zwei-Runden-Verfahren.
+verdoppelt). **Beide Cold-Review-Runden gelaufen** (2× fremder Opus-Agent, Plan-Text +
+Live-Repo, keine Konversationshistorie, S5-S14-Verfahren) — Runde 1 fand
+1 echten Blocker + 5 Should-Fixes, Runde 2 (nach Einarbeitung) fand 0
+Blocker + 3 weitere Should-Fixes, alle unten eingearbeitet (kein dritter
+Durchgang nötig, analog S13). Plan ist damit freigegeben zur
+Implementierung.
 
 **Zentrale Design-Entscheidung (Grund für den eigenen WP2/WP3-Schnitt):**
 R20 ist — anders als R12/R18 in S14 — **kein neues orchestriertes Modul**.
@@ -1028,8 +1029,51 @@ Check) braucht einen neuen `"analytic"`-Eintrag, sobald
 `build_selections` `sel.analytic` setzt — derselbe Test, den S14/WP2
 schon einmal wegen eines neuen `stock`-Keys anpassen musste.
 
-**Offene Ergonomie-Frage für WP2 (kein Blocker, in Runde 2 zu
-bestätigen):** eigene kompakte GUI-Karte "Kostenrechnung" mit drei
+**Cold-Review Runde 2 (2026-09-03, zweiter fremder Opus-Agent, Plan-Text +
+Live-Repo, keine Konversationshistorie) — 0 Blocker, 3 Should-Fixes, alle
+eingearbeitet:**
+
+1. **Load-bearing und ungetestet:** Blocker-1-Fix hängt daran, dass
+   `write()` auf einer bereits **bestätigten** (`state='sale'`)
+   `sale.order.line` funktioniert — WP1 hatte das nur für eine bereits
+   **gebuchte** `account.move.line` bestätigt, ein anderes Modell in
+   anderem Lebenszyklus-Zustand. **Live nachgeprüft (2026-09-03):** Order
+   erzeugt, bestätigt (`state` → `sale`), `write()` mit
+   `analytic_distribution` auf die jetzt bestätigte Zeile — `True`,
+   Read-back zeigt den neuen Wert. Blocker-1-Fix ist damit vollständig
+   live abgesichert, kein Restrisiko mehr.
+2. **`purchase.py`s Vals-Form passt nicht direkt.** `purchase.py:196-206`
+   baut `lines` als Liste von `(0, 0, {...})`-Tupeln **innerhalb** der
+   Order-Schleife, nie als eigene flache Liste — anders als `expenses.py`
+   (dort passt `assign_analytic_distribution` direkt auf den flachen
+   `vals_list`). Fix: beim Bau jeder Zeile das innere Dict zusätzlich in
+   eine separate `po_line_vals_list` einhängen (Python hält nur eine
+   Referenz — Mutation dieses Dicts über die separate Liste mutiert
+   dasselbe Objekt, das auch im `(0,0,dict)`-Tupel steckt), danach
+   **einmal** `assign_analytic_distribution(po_line_vals_list, ...)`
+   aufrufen, bevor `client.create_batch('purchase.order', po_vals_list)`
+   läuft. `expenses.py` bleibt beim direkten flachen Aufruf.
+3. **`ModuleSelections.analytic` hatte keine Shape-Skizze** — jedes
+   andere Dict-Feld (`stock`, `mrp`, `hr_expense`, `documents`) trägt
+   einen `# shape: {...}`-Kommentar (`config.py:31-75`). Nachgetragen:
+
+   ```python
+   analytic: dict = field(default_factory=dict)
+   # analytic shape: {"sale_pct": int, "purchase_pct": int, "expense_pct": int}
+   # (S15/R20 additive) — jeder Key wird unabhängig von sale.py/purchase.py/
+   # expenses.py gelesen, nicht unter dem enabled-Gate eines einzelnen
+   # Eltern-Moduls verschachtelt (anders als crm_lost unter crm) — näher an
+   # documents' Top-Level-Form. 0 auf einem Key ist dessen eigener
+   # Aus-Schalter, gleiches Präzedens wie S14s orderpoints_pct/
+   # quality_fail_pct — kein separates enabled-Bool.
+   ```
+
+Zeitablauf (`sale` vor `account`) und die "eine `write()` pro
+Kostenstellen-Gruppe"-Batching-Idee wurden in Runde 2 gegen den echten
+Code bestätigt, keine Änderung nötig.
+
+**Offene Ergonomie-Frage für WP2 (kein Blocker, bei Implementierung final
+zu entscheiden):** eigene kompakte GUI-Karte "Kostenrechnung" mit drei
 Reglern (Verkauf/Einkauf/Spesen %) vs. je ein Regler direkt in den
 bestehenden Verkauf-/Einkauf-/Spesen-Karten. Entwurf setzt auf die eigene
 Karte — Analytic Accounting ist konzeptionell ein eigenständiges Feature,
@@ -1039,9 +1083,9 @@ eine benannte Karte.
 
 | WP | Inhalt | 🔒 | Voraussetzung |
 |---|---|---|---|
-| **WP1** ✅ | Gebündelte Live-Verifikation gegen `demo-test5.odoo.com` (`analytic_distribution`-Format auf allen 5 Zielmodellen, Plan-1-Sättigung, Wizard-Propagation, gebuchte-Move-Line-Schreibbarkeit, `hr.department`-Bestand, `account.analytic.account`-Pflichtfelder) | nein | — |
-| **WP2** | Infrastruktur: `odoo_actions.get_or_create_analytic_accounts` (neuer Plan + Kostenstellen, lazy+memoized über `ctx.analytic_account_ids: Optional[List[int]] = None`, `is None`-Check), `data_factory.assign_analytic_distribution` (Vals-Mutations-Form, analog `assign_tracking` — für `purchase.py`/`expenses.py`), `config.py`/`run_config.py`-Wiring (`ModuleSelections.analytic`, `RunContext.analytic_account_ids`, `build_selections`, `estimate_record_counts`, `test_run_config_unit.py`s `_FULL`-Payload), `static/app.js`-UI (eigene Karte, siehe Ergonomie-Frage oben) | nein | WP1 |
-| **WP3** | Einbindung: `purchase.py`/`expenses.py` nutzen den WP2-`data_factory`-Helper direkt an der bestehenden Vals-Bau-Stelle (vor `create_batch`). `sale.py` bekommt einen eigenen Read-nach-Confirm-dann-write-Schritt (siehe Blocker-1-Fix oben, gruppiertes `write()` pro Kostenstelle) — kein Vals-Mutations-Aufruf des WP2-Helpers | nein | WP2 |
+| **WP1** ✅ | Gebündelte Live-Verifikation gegen `demo-test5.odoo.com` (`analytic_distribution`-Format auf allen 5 Zielmodellen, Plan-1-Sättigung, Wizard-Propagation, gebuchte-Move-Line-Schreibbarkeit, `hr.department`-Bestand, `account.analytic.account`-Pflichtfelder, `write()` auf bestätigter `sale.order.line`) | nein | — |
+| **WP2** | Infrastruktur: `odoo_actions.get_or_create_analytic_accounts` (neuer Plan + Kostenstellen, lazy+memoized über `ctx.analytic_account_ids: Optional[List[int]] = None`, `is None`-Check), `data_factory.assign_analytic_distribution` (Vals-Mutations-Form, analog `assign_tracking` — für `expenses.py` direkt, für `purchase.py` über eine separate flache Line-Vals-Liste, siehe Runde-2-Fund 2), `config.py`/`run_config.py`-Wiring (`ModuleSelections.analytic`, Shape siehe Runde-2-Fund 3, `RunContext.analytic_account_ids`, `build_selections`, `estimate_record_counts`, `test_run_config_unit.py`s `_FULL`-Payload), `static/app.js`-UI (eigene Karte, siehe Ergonomie-Frage oben) | nein | WP1 |
+| **WP3** | Einbindung: `purchase.py`/`expenses.py` nutzen den WP2-`data_factory`-Helper (Details siehe Runde-2-Fund 2). `sale.py` bekommt einen eigenen Read-nach-Confirm-dann-write-Schritt (siehe Blocker-1-Fix oben, gruppiertes `write()` pro Kostenstelle, live abgesichert) — kein Vals-Mutations-Aufruf des WP2-Helpers | nein | WP2 |
 | **WP4** | Peer-Review vor Merge (S5-S14-Verfahren), grüner Live-`test_suite.py` | — | WP2-WP3 Code steht |
 
 **Pro Arbeitspaket verbindlich:** dieselben Testing Design Patterns wie
