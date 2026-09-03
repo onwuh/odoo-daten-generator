@@ -1084,9 +1084,34 @@ eine benannte Karte.
 | WP | Inhalt | 🔒 | Voraussetzung |
 |---|---|---|---|
 | **WP1** ✅ | Gebündelte Live-Verifikation gegen `demo-test5.odoo.com` (`analytic_distribution`-Format auf allen 5 Zielmodellen, Plan-1-Sättigung, Wizard-Propagation, gebuchte-Move-Line-Schreibbarkeit, `hr.department`-Bestand, `account.analytic.account`-Pflichtfelder, `write()` auf bestätigter `sale.order.line`) | nein | — |
-| **WP2** | Infrastruktur: `odoo_actions.get_or_create_analytic_accounts` (neuer Plan + Kostenstellen, lazy+memoized über `ctx.analytic_account_ids: Optional[List[int]] = None`, `is None`-Check), `data_factory.assign_analytic_distribution` (Vals-Mutations-Form, analog `assign_tracking` — für `expenses.py` direkt, für `purchase.py` über eine separate flache Line-Vals-Liste, siehe Runde-2-Fund 2), `config.py`/`run_config.py`-Wiring (`ModuleSelections.analytic`, Shape siehe Runde-2-Fund 3, `RunContext.analytic_account_ids`, `build_selections`, `estimate_record_counts`, `test_run_config_unit.py`s `_FULL`-Payload), `static/app.js`-UI (eigene Karte, siehe Ergonomie-Frage oben) | nein | WP1 |
-| **WP3** | Einbindung: `purchase.py`/`expenses.py` nutzen den WP2-`data_factory`-Helper (Details siehe Runde-2-Fund 2). `sale.py` bekommt einen eigenen Read-nach-Confirm-dann-write-Schritt (siehe Blocker-1-Fix oben, gruppiertes `write()` pro Kostenstelle, live abgesichert) — kein Vals-Mutations-Aufruf des WP2-Helpers | nein | WP2 |
-| **WP4** | Peer-Review vor Merge (S5-S14-Verfahren), grüner Live-`test_suite.py` | — | WP2-WP3 Code steht |
+| **WP2** ✅ | Infrastruktur: `odoo_actions.get_or_create_analytic_accounts` (neuer Plan + Kostenstellen, lazy+memoized über `ctx.analytic_account_ids: Optional[List[int]] = None`, `is None`-Check), `data_factory.assign_analytic_distribution` (Vals-Mutations-Form, analog `assign_tracking` — für `expenses.py` direkt, für `purchase.py` über eine separate flache Line-Vals-Liste, siehe Runde-2-Fund 2), `config.py`/`run_config.py`-Wiring (`ModuleSelections.analytic`, Shape siehe Runde-2-Fund 3, `RunContext.analytic_account_ids`, `build_selections`, `estimate_record_counts`, `test_run_config_unit.py`s `_FULL`-Payload), `static/app.js`-UI (eigene Karte, siehe Ergonomie-Frage oben) | nein | WP1 |
+| **WP3** ✅ | Einbindung: `purchase.py`/`expenses.py` nutzen den WP2-`data_factory`-Helper (Details siehe Runde-2-Fund 2). `sale.py` bekommt einen eigenen Read-nach-Confirm-dann-write-Schritt (siehe Blocker-1-Fix oben, gruppiertes `write()` pro Kostenstelle, live abgesichert) — kein Vals-Mutations-Aufruf des WP2-Helpers | nein | WP2 |
+| **WP4** ✅ | Peer-Review vor Merge (S5-S14-Verfahren), grüner Live-`test_suite.py` | — | WP2-WP3 Code steht |
+
+**WP2/WP3-Ergebnisse (2026-09-03):** wie im zweifach cold-reviewten Plan
+umgesetzt. Live per Browser bis zum `/api/preflight`-Response
+durchgetestet (UI → Payload → `estimate_record_counts`): "Kostenrechnung"-
+Karte, alle drei Prozent-Regler, alle vier neuen Vorschau-Zeilen
+(`Kostenrechnungs-Zeilen Verkauf/Einkauf/Spesen (ca.)`, `Kostenstellen`)
+erscheinen korrekt. Unit-Suite 448/448 grün (23 neue Tests), Live-
+`test_suite.py` 95/95 grün (3 neue Live-Endpunkte, je einer pro Modul,
+gegen `demo-test5.odoo.com`).
+
+**WP4-Ergebnisse (2026-09-03):** unabhängiger Cold-Review-Agent (Diff
+statt Plan-Text, gleiches Verfahren wie S12-S14/WP5) fand **0 Blocker, 0
+Should-Fixes** — bestätigte explizit, dass beide vorherigen Cold-Review-
+Runden-Funde (Blocker-1-Redesign in `sale.py`, `is None`-Memoization,
+`purchase.py`s Referenz-Trick) korrekt im Code ankamen, sowie die
+Referenz-Semantik der `po_line_vals_list`-Mutation, die Gruppierungslogik
+von `sale.py`s `write()`-Aufrufen gegen Odoos "identische Vals pro Call"-
+Regel, und die Key-Namen-Konsistenz zwischen `static/app.js`,
+`run_config.py` und den drei konsumierenden Modulen. Ein Randfall notiert
+(kein Blocker): `get_or_create_analytic_accounts` gated nicht explizit auf
+`'account' in ctx.installed_modules` — in der Praxis eine harte Odoo-
+Abhängigkeit aller drei aufrufenden Module, und der eigene `try/except`
+degradiert ohnehin sauber auf `[]`. Branch
+`s15-analytic-accounting-planning` bereit zum Merge nach `main`
+(Freigabe ausstehend).
 
 **Pro Arbeitspaket verbindlich:** dieselben Testing Design Patterns wie
 jedes bisherige Sprintpaket (siehe CLAUDE.md) — Pattern 1 (leerer
