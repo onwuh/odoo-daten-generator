@@ -825,7 +825,7 @@ exakter Gleichheit — jeder neue Key braucht eine Testanpassung).
 | **WP2** ✅ | R15 Lagerplätze + R16 Location-Ebene Barcode: Sub-Locations, Location-Pool-Refactor der Quant-Schleife (Round-Robin statt Zufalls-Draw), `ARCHIVE_FALLBACK_MODELS`+`stock.location`, `MODEL_ACCESS_PROBES`/`FIELD_COMPAT_WHITELIST` additiv | nein | WP1 |
 | **WP3** ✅ | R14 Multi-Warehouse (Quant-Anteil): 2. Warehouse vor dem `get_default_warehouse`-Lookup erzeugt (braucht kein 1. Warehouse), in WP2s Location-Pool eingehängt, `ARCHIVE_FALLBACK_MODELS`+`stock.warehouse` | nein | WP1, WP2 (Pool) |
 | **WP4** ✅ | R13 Lot-/Serial-Tracking: `data_factory.assign_tracking`, `RunContext.new_product_ids`, tracking-bewusste Quant-/Lot-Erzeugung mit Lauf-weitem Serial-Deckel (`_MAX_SERIAL_RECORDS_PER_RUN`, entkoppelt von `avg_qty`) | nein | WP1, WP2 (Pool) |
-| **WP5** | Peer-Review vor Merge (S5-S12-Verfahren), grüner Live-`test_suite.py` | — | WP1-WP4 Code steht |
+| **WP5** ✅ | Peer-Review vor Merge (S5-S12-Verfahren), grüner Live-`test_suite.py` | — | WP1-WP4 Code steht |
 
 **WP1-Ergebnisse (live gegen `demo-test5.odoo.com`, 2026-09-02):** 7 von 8
 Checks bestätigten die Planannahme direkt. Eine Korrektur: Archive-Fallback
@@ -843,7 +843,25 @@ Testing Design Patterns unten erfüllt. Unit-Suite 399/399 grün, Live-
 `test_suite.py` 90/90 grün (Erstlauf); ein Zweitlauf zeigte den
 vorbestehenden, dokumentierten Rate-Limit-Flake in `ODOO_ACTIONS`
 (`has_create_access`-POST-Zähler) — alle S13-eigenen Schritte blieben in
-beiden Läufen grün. WP5 (Diff-Review vor Merge) noch offen.
+beiden Läufen grün.
+
+**WP5-Ergebnisse (2026-09-03):** unabhängiger Cold-Review-Agent (Opus,
+Diff statt Plan-Text, gleiches Verfahren wie S12/WP5) fand keine Blocker,
+5 echte Should-Fixes — alle behoben: (1) Produkt-Batch-Create war
+All-or-Nothing auf dem Tracking-Feld, jetzt Retry ohne `tracking` bei
+Fehlschlag; (2) blockierte `stock.lot`-Erstellung riss vorher das ganze
+Stock-Modul mit, degradiert jetzt betroffene Produkte auf normale
+Bestände; (3) Archiv-Fallback in `run_journal.py` meldete bei eigenem
+Fehlschlag den falschen (Unlink-)Grund statt des eigenen — Mark-Punkt
+korrigiert; (4) Testlücke geschlossen — kein Test prüfte, dass ein
+explizit deaktiviertes Feature-Flag (`stock_multi_locations`/
+`stock_lots`) die Erstellung nicht überspringt, nur den Hinweis auslöst;
+(5) Live-Integrationstest für das zweite Warehouse konnte auf Altdaten
+der geteilten Testinstanz falsch-positiv laufen, jetzt ID-basiert
+abgegrenzt. `ODOO_GOTCHAS.md` um S13s Live-Befunde ergänzt. Unit-Suite
+404/404 grün, Live-`test_suite.py` 90/90 grün (inkl. des vorher flakigen
+`ODOO_ACTIONS`-Tests). Branch `s13-lager-tiefe` bereit zum Merge nach
+`main` (Freigabe ausstehend).
 
 **Pro Arbeitspaket verbindlich:** dieselben Testing Design Patterns wie jedes
 bisherige Sprintpaket (siehe CLAUDE.md) — Pattern 1 (Location-Pool nie leer,
