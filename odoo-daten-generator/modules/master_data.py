@@ -91,7 +91,23 @@ def _create_products(client, atoms: Dict[str, Any], ctx: RunContext) -> None:
                 vals['invoice_policy'] = 'delivery'
                 vals['service_type'] = 'timesheet'
 
-    ids = client.create_batch('product.product', all_vals)
+    # S13/WP5-review: the whole product batch (services+consumables+storables,
+    # not just the tracked share) rides on this one call — if the target
+    # instance rejects the tracking write (ACL/group restriction, untested
+    # beyond demo-test5), don't let that take down the entire run's products.
+    # Retry once with tracking stripped rather than propagating.
+    try:
+        ids = client.create_batch('product.product', all_vals)
+    except Exception as e:
+        if any('tracking' in vals for vals in all_vals):
+            logger.warning(
+                f"⚠️  Produkt-Batch mit Tracking-Feldern fehlgeschlagen ({e}) — "
+                f"erneuter Versuch ohne 'tracking'.")
+            for vals in all_vals:
+                vals.pop('tracking', None)
+            ids = client.create_batch('product.product', all_vals)
+        else:
+            raise
     ctx.product_ids.extend(ids)
     # S13/Befund 4: ids this run actually created here — inventory.py's
     # lot/serial branch reads this to never touch a use_existing customer's

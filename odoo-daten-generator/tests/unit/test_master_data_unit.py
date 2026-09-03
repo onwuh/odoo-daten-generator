@@ -207,6 +207,48 @@ def run():
     except AssertionError as e:
         results.append(("S13/Befund 4: new_product_ids holds only this run's own creates", False, str(e)))
 
+    # ------------------------------------------------------------------
+    # S13/WP5-review: a create_batch failure while 'tracking' is present in
+    # the vals (e.g. an ACL/group restriction on the field, untested beyond
+    # demo-test5) must retry once with 'tracking' stripped rather than take
+    # down the whole product batch — services/consumables have no
+    # 'tracking' key either way and must not be affected.
+    # ------------------------------------------------------------------
+    try:
+        client = MagicMock()
+        counter = {"n": 2000}
+        calls = []
+
+        def _create_batch(model, values_list, context=None):
+            calls.append([dict(v) for v in values_list])
+            if len(calls) == 1 and any('tracking' in v for v in values_list):
+                raise Exception("tracking: insufficient access rights")
+            ids = []
+            for _ in values_list:
+                counter["n"] += 1
+                ids.append(counter["n"])
+            return ids
+
+        client.create_batch.side_effect = _create_batch
+        ctx = _make_ctx()
+        ctx.installed_modules = {"stock"}
+        ctx.module_selections.stock = {"avg_qty": 10, "tracking_lot_pct": 100, "tracking_serial_pct": 0}
+        atoms = {"product_names": {"services": [], "consumables": [], "storables": ["Regal"]}}
+        master_data._create_products(client, atoms, ctx)
+        assert len(calls) == 2, f"expected exactly one retry, got {len(calls)} calls"
+        assert any('tracking' in v for v in calls[0]), "first attempt should still carry tracking"
+        assert all('tracking' not in v for v in calls[1]), "retry must strip tracking"
+        assert len(ctx.product_ids) == 1, ctx.product_ids
+        results.append((
+            "S13/WP5-review: create_batch failure with tracking set -> retries once without tracking",
+            True, "",
+        ))
+    except AssertionError as e:
+        results.append((
+            "S13/WP5-review: create_batch failure with tracking set -> retries once without tracking",
+            False, str(e),
+        ))
+
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results
 

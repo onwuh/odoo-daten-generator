@@ -157,14 +157,25 @@ def run(client, ctx):
         rctx.new_product_ids = []
         rctx.module_selections.stock = {"avg_qty": 20, "second_warehouse": True}
 
+        # A name-`like` search alone can match "Lager 2 (NNNN)" residue left
+        # over from an earlier run on this shared demo tenant and pass
+        # without this run having created anything — exclude ids that
+        # already existed before this call runs.
+        pre_existing_ids = {
+            w["id"] for w in client.search_read(
+                'stock.warehouse', [["name", "like", "Lager 2"]], fields=["id"], limit=0,
+            )
+        }
+
         inventory.create_inventory_data(client, None, rctx)
 
         warehouses = client.search_read(
             'stock.warehouse', [["name", "like", "Lager 2"]],
-            fields=["code", "lot_stock_id"], limit=1,
+            fields=["code", "lot_stock_id"], limit=0,
         )
-        assert warehouses, "no second warehouse found by name pattern"
-        wh = warehouses[0]
+        new_warehouses = [w for w in warehouses if w["id"] not in pre_existing_ids]
+        assert new_warehouses, f"no NEW second warehouse found (pre-existing: {pre_existing_ids})"
+        wh = new_warehouses[0]
         assert wh.get("code"), wh
         assert wh.get("lot_stock_id"), wh
 

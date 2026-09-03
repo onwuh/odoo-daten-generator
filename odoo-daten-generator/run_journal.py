@@ -255,6 +255,18 @@ CANCEL_BEFORE_UNLINK = {
 # attempt is cheap and correct for that case); the code must not claim a
 # symmetric guarantee between warehouse and location here.
 #
+# The `write(active=False)` below is one call for the whole id group
+# (matching the batching convention every other step in this function
+# follows), not per-location — so a mixed group (some locations still
+# holding stock, some empty) fails atomically as one Odoo write and lands
+# entirely in `failed`, not split into `archived`/`failed`. Given the
+# round-robin quant distribution in inventory.py, the realistic cases are
+# already close to all-or-nothing (avg_qty=0 → every location in the group
+# is empty; avg_qty>0 with storables >= locations → every location in the
+# group holds stock) — a per-location loop would only help the narrow case
+# of fewer storables than sub-locations in a single run, at the cost of N
+# individual write calls in the cleanup path. Not worth it here.
+#
 # stock.lot has no `active` field at all (live-verified) — deliberately
 # absent from this set. A tracked lot with a live-referencing quant is
 # permanent residue; no fix in this sprint (Befund 2).
@@ -315,13 +327,14 @@ def delete_run(client: OdooJson2Client, journal: RunJournal) -> Dict[str, Any]:
         except Exception as exc:
             reason = _first_new_error(client, mark) or str(exc)[:200]
             if model in ARCHIVE_FALLBACK_MODELS:
+                archive_mark = len(client.errors)
                 try:
                     client.write(model, ids, {"active": False})
                     archived += len(ids)
                     logger.info(f"ℹ️  {len(ids)}× {model} nicht löschbar ({reason}) — archiviert.")
                     continue
                 except Exception as exc2:
-                    reason = _first_new_error(client, mark) or str(exc2)[:200]
+                    reason = _first_new_error(client, archive_mark) or str(exc2)[:200]
             failed.append({"model": model, "count": len(ids), "error": reason})
             logger.warning(f"⚠️  Löschen von {len(ids)}× {model} fehlgeschlagen: {reason}")
     return {"deleted": deleted, "archived": archived, "failed": failed,

@@ -417,6 +417,68 @@ def run():
     except AssertionError as e:
         results.append(("S13/B-B: serial budget exhaustion degrades to 1 quant+1 lot, never to bulk", False, str(e)))
 
+    # ==================================================================
+    # S13/WP5-review: Befund 3 coverage gap — a feature flag explicitly
+    # False must still let sub-locations/lots be CREATED (only a log hint
+    # differs), never skip creation. _make_ctx defaults feature_flags to
+    # {}, so .get(key, True) always resolved True in every test above —
+    # none of them actually exercised the False branch this design decision
+    # is about.
+    # ==================================================================
+
+    try:
+        client = _mock_client(storable_products=[{"id": 1}])
+        ctx = _make_ctx(stock_sel={"avg_qty": 0, "sub_locations": 2},
+                         feature_flags={"stock_multi_locations": False})
+        inventory.create_inventory_data(client, gemini=None, ctx=ctx)
+        loc_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.location']
+        assert len(loc_batches) == 1 and len(loc_batches[0].args[1]) == 2, (
+            "stock_multi_locations=False must not skip sub-location creation")
+        results.append(("S13/Befund3: stock_multi_locations=False -> sub-locations still created (hint only)", True, ""))
+    except AssertionError as e:
+        results.append(("S13/Befund3: stock_multi_locations=False -> sub-locations still created (hint only)", False, str(e)))
+
+    try:
+        client = _mock_client(storable_products=[{"id": 1, "tracking": "lot"}])
+        ctx = _make_ctx(stock_sel={"avg_qty": 20}, product_ids=[1], new_product_ids=[1],
+                         feature_flags={"stock_lots": False})
+        inventory.create_inventory_data(client, gemini=None, ctx=ctx)
+        lot_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.lot']
+        assert len(lot_batches) == 1 and len(lot_batches[0].args[1]) == 1, (
+            "stock_lots=False must not skip lot creation")
+        results.append(("S13/Befund3: stock_lots=False -> lot still created (hint only)", True, ""))
+    except AssertionError as e:
+        results.append(("S13/Befund3: stock_lots=False -> lot still created (hint only)", False, str(e)))
+
+    # ==================================================================
+    # S13/WP5-review: a blocked stock.lot create must degrade the affected
+    # products to plain untracked bulk quants, not crash the whole module
+    # (the already-queued "none"-tracking quants must still go through).
+    # ==================================================================
+    try:
+        client = _mock_client(storable_products=[{"id": 1, "tracking": "lot"}, {"id": 2, "tracking": "none"}])
+        base_batch = client.create_batch.side_effect
+
+        def _create_batch_lot_blocked(model, values_list, context=None):
+            if model == 'stock.lot':
+                raise Exception("no create rights on stock.lot")
+            return base_batch(model, values_list, context=context)
+
+        client.create_batch.side_effect = _create_batch_lot_blocked
+        ctx = _make_ctx(stock_sel={"avg_qty": 20}, product_ids=[1, 2], new_product_ids=[1, 2])
+        inventory.create_inventory_data(client, gemini=None, ctx=ctx)  # must not raise
+        lot_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.lot']
+        assert len(lot_batches) == 1, "expected exactly one (failed) stock.lot attempt"
+        quant_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.quant']
+        assert len(quant_batches) == 1, quant_batches
+        quant_vals = quant_batches[0].args[1]
+        assert len(quant_vals) == 2, quant_vals
+        assert all("lot_id" not in v for v in quant_vals), (
+            "blocked lot create must degrade every quant to plain bulk, none carrying a stale lot_id")
+        results.append(("S13/WP5-review: blocked stock.lot create degrades to bulk quants, no crash", True, ""))
+    except Exception as e:
+        results.append(("S13/WP5-review: blocked stock.lot create degrades to bulk quants, no crash", False, str(e)))
+
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results
 

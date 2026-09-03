@@ -153,10 +153,28 @@ def create_inventory_data(client, gemini, ctx: RunContext) -> None:
             "Seriennummern\" ist deaktiviert — die erzeugten Chargen/Seriennummern sind angelegt, "
             "aber in der Odoo-UI erst nach Aktivieren dieser Einstellung sichtbar.")
 
-    lot_ids = client.create_batch('stock.lot', lot_vals_list) if lot_vals_list else []
+    # S13/WP5-review: a blocked stock.lot create (ACL, untested beyond
+    # demo-test5) must degrade to plain untracked bulk quants for the
+    # affected products, not take down the already-assembled quant_vals_list
+    # (plain "none"-tracking products queued above) along with it.
+    lot_ids = None
+    if lot_vals_list:
+        try:
+            lot_ids = client.create_batch('stock.lot', lot_vals_list)
+        except Exception as e:
+            logger.warning(
+                f"⚠️  stock.lot-Erstellung fehlgeschlagen ({e}) — "
+                f"betroffene Produkte fallen auf normale Bestände zurück.")
+
     cursor = 0
     for g in groups:
-        if g["kind"] == "lot":
+        if lot_ids is None:
+            qty = random.randint(round(avg_qty * 0.5), round(avg_qty * 1.5))
+            quant_vals_list.append({
+                "product_id": g["pid"], "location_id": g["location_id"], "company_id": company_id,
+                "inventory_quantity": qty, "in_date": now_str,
+            })
+        elif g["kind"] == "lot":
             lot_id = lot_ids[cursor]
             cursor += 1
             qty = random.randint(round(avg_qty * 0.5), round(avg_qty * 1.5))

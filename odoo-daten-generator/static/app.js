@@ -507,8 +507,8 @@
         body.appendChild(checkLine("stock-wh2", "Zweites Lager anlegen", "", false));
         body.appendChild(el("div", "field-hint",
           "Zweites Lager kann über die Bereinigungs-Funktion nicht vollständig entfernt werden, nur archiviert."));
-        body.appendChild(slider("stock-lot-pct", "Chargen-Tracking (Lot) %", 0, 0, 100));
-        body.appendChild(slider("stock-serial-pct", "Seriennummern-Tracking %", 0, 0, 100));
+        body.appendChild(slider("stock-lot-pct", "Chargen-Tracking (Lot)", 0, 0, 100));
+        body.appendChild(slider("stock-serial-pct", "Seriennummern-Tracking", 0, 0, 100));
         body.appendChild(grid([stepper("stock-serial-max", "Max. Seriennummern je Produkt", "", 10, 1, 100)]));
         body.appendChild(el("div", "field-hint",
           "Chargen-/Seriennummern-Zuweisung braucht die Stammdaten-Erzeugung dieses Laufs — " +

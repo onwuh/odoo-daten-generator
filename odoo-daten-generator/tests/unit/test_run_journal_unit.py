@@ -503,6 +503,41 @@ def run():
                          "scheitert ebenfalls -> landet in 'failed', nicht verloren", False, str(e)))
 
     try:
+        # S13/WP5-review: when the archive write ALSO fails, the reported
+        # reason must be the write's own error, not the unlink's — a real
+        # OdooJson2Client appends a structured entry to client.errors on
+        # every failed call, so _first_new_error(client, mark) would return
+        # the unlink's (earlier) entry unless delete_run re-marks before the
+        # write attempt. Simulate that append behaviour explicitly, since a
+        # bare MagicMock never grows client.errors on its own — the earlier
+        # "write also fails" test above leaves client.errors empty and so
+        # cannot catch this class of bug.
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = run_journal.RunJournal("demo-archive-reason", Path(tmp))
+            journal.record("stock.location", [11])
+            client = MagicMock()
+            client.errors = []
+
+            def _call_method(model, method, ids=None, **kw):
+                client.errors.append({"error_body": "unlink: still contains products"})
+                raise Exception("unlink failed")
+
+            def _write(model, ids, values, context=None):
+                client.errors.append({"error_body": "archive: still contains products (write)"})
+                raise Exception("write failed")
+
+            client.call_method.side_effect = _call_method
+            client.write.side_effect = _write
+            summary = run_journal.delete_run(client, journal)
+            assert len(summary["failed"]) == 1, summary
+            assert summary["failed"][0]["error"] == "archive: still contains products (write)", summary
+        results.append(("delete_run: Archive-Fallback scheitert -> gemeldeter Grund ist der "
+                         "der Write, nicht der (frühere) Unlink-Grund", True, ""))
+    except Exception as e:
+        results.append(("delete_run: Archive-Fallback scheitert -> gemeldeter Grund ist der "
+                         "der Write, nicht der (frühere) Unlink-Grund", False, str(e)))
+
+    try:
         # stock.lot is deliberately NOT in ARCHIVE_FALLBACK_MODELS (no
         # active field, live-verified) — unlink failure must go straight to
         # "failed" without ever calling write().
