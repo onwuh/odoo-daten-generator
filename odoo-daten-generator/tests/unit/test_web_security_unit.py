@@ -132,7 +132,10 @@ def run():
     # Rate-limit backoff — the demo SaaS instance answers 429 under load
     # ------------------------------------------------------------------
     try:
-        client = odoo_client.OdooJson2Client("https://demo-x.odoo.com", "db", "key")
+        # D10: min_request_interval=0 — time.sleep is mocked below to assert
+        # exact backoff-sleep counts; the proactive throttle would otherwise
+        # add its own sleep calls since mocked time never actually advances.
+        client = odoo_client.OdooJson2Client("https://demo-x.odoo.com", "db", "key", min_request_interval=0)
         calls = {"n": 0}
 
         def _post(url, json=None, timeout=None, allow_redirects=None):
@@ -153,7 +156,10 @@ def run():
         results.append(("Rate-Limit: 429 wird mit Backoff wiederholt", False, str(e)))
 
     try:
-        client = odoo_client.OdooJson2Client("https://demo-x.odoo.com", "db", "key")
+        # D10: min_request_interval=0 — time.sleep is mocked below to assert
+        # exact backoff-sleep counts; the proactive throttle would otherwise
+        # add its own sleep calls since mocked time never actually advances.
+        client = odoo_client.OdooJson2Client("https://demo-x.odoo.com", "db", "key", min_request_interval=0)
         calls = {"n": 0}
 
         def _always_429(url, json=None, timeout=None, allow_redirects=None):

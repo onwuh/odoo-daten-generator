@@ -81,7 +81,11 @@ def _default_responder(url, payload):
 
 def _make_client_with_fake_post(responder=None):
     """responder(url, payload) -> _FakeResponse. Defaults to B11's fake server."""
-    client = OdooJson2Client("https://example.test", "db", "key")
+    # D10: min_request_interval=0 — these tests fake session.post directly and
+    # often mock time.sleep to a no-op to assert retry/backoff behavior, so
+    # real time never advances between attempts; the proactive throttle would
+    # otherwise see "no time passed" and sleep on every attempt too.
+    client = OdooJson2Client("https://example.test", "db", "key", min_request_interval=0)
     sent = []
     active_responder = responder or _default_responder
 
@@ -591,6 +595,119 @@ def run():
                 os.remove(tmp_path)
     except AssertionError as e:
         results.append(("field capture: dump_captured_fields writes sorted JSON manifest", False, str(e)))
+
+    # ==================================================================
+    # D10 — proactive throttle (_throttle / min_request_interval)
+    # ==================================================================
+
+    # A fresh client's first _throttle() call must not sleep — there is no
+    # prior request to space out from (Pattern 1-style empty-state guard).
+    try:
+        client = OdooJson2Client("https://example.test", "db", "key", min_request_interval=1.0)
+        orig_sleep = odoo_client.time.sleep
+        slept = []
+        odoo_client.time.sleep = lambda s: slept.append(s)
+        try:
+            client._throttle()
+        finally:
+            odoo_client.time.sleep = orig_sleep
+        assert slept == [], slept
+        results.append(("_throttle: first call on a fresh client never sleeps", True, ""))
+    except AssertionError as e:
+        results.append(("_throttle: first call on a fresh client never sleeps", False, str(e)))
+
+    # Two calls in quick succession: the second must sleep roughly the
+    # configured interval, since (mocked) time hasn't actually advanced.
+    try:
+        client = OdooJson2Client("https://example.test", "db", "key", min_request_interval=1.0)
+        orig_sleep = odoo_client.time.sleep
+        slept = []
+        odoo_client.time.sleep = lambda s: slept.append(s)
+        try:
+            client._throttle()
+            client._throttle()
+        finally:
+            odoo_client.time.sleep = orig_sleep
+        assert len(slept) == 1, slept
+        assert 0.9 <= slept[0] <= 1.0, slept
+        results.append(("_throttle: back-to-back calls sleep ~the configured interval", True, f"{slept}"))
+    except AssertionError as e:
+        results.append(("_throttle: back-to-back calls sleep ~the configured interval", False, str(e)))
+
+    # min_request_interval=0 disables it outright — no sleep, no matter how
+    # close together the calls are.
+    try:
+        client = OdooJson2Client("https://example.test", "db", "key", min_request_interval=0)
+        orig_sleep = odoo_client.time.sleep
+        slept = []
+        odoo_client.time.sleep = lambda s: slept.append(s)
+        try:
+            client._throttle()
+            client._throttle()
+            client._throttle()
+        finally:
+            odoo_client.time.sleep = orig_sleep
+        assert slept == [], slept
+        results.append(("_throttle: min_request_interval=0 disables throttling entirely (Pattern 3)", True, ""))
+    except AssertionError as e:
+        results.append(("_throttle: min_request_interval=0 disables throttling entirely (Pattern 3)", False, str(e)))
+
+    # Explicit negative value clamps to 0 rather than trusting the caller —
+    # same defensive posture as data_factory's own pct clamps.
+    try:
+        client = OdooJson2Client("https://example.test", "db", "key", min_request_interval=-5)
+        assert client._min_request_interval == 0, client._min_request_interval
+        results.append(("OdooJson2Client: negative min_request_interval clamps to 0", True, ""))
+    except AssertionError as e:
+        results.append(("OdooJson2Client: negative min_request_interval clamps to 0", False, str(e)))
+
+    # min_request_interval=None (the default) reads the env var at
+    # construction time — an explicit value must win, an unset/invalid env
+    # var must fall back to the documented ~1 req/s default.
+    try:
+        orig_env = os.environ.get(odoo_client._MIN_REQUEST_INTERVAL_ENV)
+        try:
+            os.environ["ODOO_GENERATOR_MIN_REQUEST_INTERVAL"] = "2.5"
+            client_env = OdooJson2Client("https://example.test", "db", "key")
+            assert client_env._min_request_interval == 2.5, client_env._min_request_interval
+
+            client_explicit = OdooJson2Client("https://example.test", "db", "key", min_request_interval=0.3)
+            assert client_explicit._min_request_interval == 0.3, client_explicit._min_request_interval
+
+            os.environ["ODOO_GENERATOR_MIN_REQUEST_INTERVAL"] = "not-a-number"
+            client_invalid = OdooJson2Client("https://example.test", "db", "key")
+            assert client_invalid._min_request_interval == 1.0, client_invalid._min_request_interval
+
+            del os.environ["ODOO_GENERATOR_MIN_REQUEST_INTERVAL"]
+            client_unset = OdooJson2Client("https://example.test", "db", "key")
+            assert client_unset._min_request_interval == 1.0, client_unset._min_request_interval
+        finally:
+            if orig_env is None:
+                os.environ.pop("ODOO_GENERATOR_MIN_REQUEST_INTERVAL", None)
+            else:
+                os.environ["ODOO_GENERATOR_MIN_REQUEST_INTERVAL"] = orig_env
+        results.append(("OdooJson2Client: min_request_interval=None reads env var at construction, explicit wins", True, ""))
+    except AssertionError as e:
+        results.append(("OdooJson2Client: min_request_interval=None reads env var at construction, explicit wins", False, str(e)))
+
+    # End-to-end: _send itself calls _throttle before every attempt,
+    # including retries — not just the first.
+    try:
+        client, sent = _make_client_with_fake_post()
+        client._min_request_interval = 1.0
+        throttle_calls = []
+        orig_throttle = client._throttle
+        client._throttle = lambda: (throttle_calls.append(1), orig_throttle())[-1]
+        orig_sleep = odoo_client.time.sleep
+        odoo_client.time.sleep = lambda *_a, **_k: None
+        try:
+            client._send("https://example.test/json/2/res.partner/search_read", {})
+        finally:
+            odoo_client.time.sleep = orig_sleep
+        assert len(throttle_calls) == 1, throttle_calls  # one attempt, one throttle check
+        results.append(("_send: calls _throttle before sending", True, ""))
+    except AssertionError as e:
+        results.append(("_send: calls _throttle before sending", False, str(e)))
 
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results
