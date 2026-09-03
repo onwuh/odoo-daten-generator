@@ -435,153 +435,23 @@ S8), Pattern 4 (Read-back `product_min_qty`/`product_max_qty`).
 
 **Komplexität:** Mittel (Minimal-Scope) · **Benefit:** Mittel-Hoch
 
-### R13 🆕 Geplant (S13) — Seriennummern-/Chargenverfolgung
+### R14 🟠 Quant-Anteil ✅ erledigt (S13/WP2-4, siehe `ROADMAP_ARCHIVE.md`), Wareneingangs-Anteil noch offen — Multi-Warehouse
 
-**Live bestätigt (`stock.lot`, saas-19.4):** vollständiges Feldschema — `product_id`
-(`required`), `name` (`required`, "Lot/Serial Number"), `company_id`, `location_id`.
-`stock.quant` (S8, bereits im Code) hat laut vorherigem Sprint bereits einen `lot_id`-fähigen
-Schreibpfad (nicht explizit genutzt bisher).
-
-**Dev Tasks:**
-- `master_data.py` (oder `mrp.py` für Fertigprodukte): `product.template.tracking` auf
-  einen konfigurierbaren Anteil der Storables setzen (`'lot'`/`'serial'`/`'none'`) —
-  Feldname vor Umsetzung gegen `product.template` (nicht `product.product`) verifizieren.
-- `inventory.py`: für **`tracking='lot'`**-Produkte vor/bei `stock.quant`-Erzeugung
-  passenden `stock.lot` anlegen (`product_id`, `name` z. B. fortlaufend `LOT-0001`,
-  `company_id`) und `lot_id` auf den Quant setzen. Kein Move-basierter Umbau nötig —
-  Quant-Ansatz aus S8 bleibt, nur um `lot_id` ergänzt.
-- **`tracking='serial'` NICHT über denselben Pfad** (Peer-Review-Korrektur): der
-  bestehende Quant-Code (`inventory.py:62-70`) schreibt einen Quant mit Menge 5–15 pro
-  Produkt — für Serial-Tracking ist eine Menge > 1 pro Lot ungültig (jede Seriennummer ist
-  genau 1 Stück). Serial-getrackte Produkte brauchen eine eigene Schleife: N einzelne
-  Quants (Menge je 1) mit je eigenem `stock.lot`, statt eines Bulk-Quants.
-- **MRP-Anbindung (`lot_producing_id` bei Fertigungsauftrag-Abschluss) aus dem Scope
-  gestrichen** (Peer-Review-Korrektur): `modules/mrp.py` hat aktuell **keinen**
-  Abschluss-Call für Fertigungsaufträge — Produktionen werden nur `action_confirm`t, nie
-  fertiggemeldet (kein `button_mark_done`/`mark_done` im gesamten `modules/`-Baum). Ohne
-  einen Abschlussschritt gibt es keinen Ort, an dem `lot_producing_id` gesetzt würde — R13
-  bleibt bei einer echten MRP-Fertigmeldung als Voraussetzung offen (eigenes künftiges
-  Item, nicht Teil von S12).
-- `purchase.py`: bewusst **nicht** in S12-Scope — Wareneingang läuft dort weiterhin ohne
-  Lot-Zuordnung (Move-basierter Pfad, größerer Umbau, kein Demo-Mehrwert ggü. dem
-  Quant-Ansatz für den ersten Wurf).
-
-**Tests:** Pattern 1 (keine getrackten Produkte → normaler Quant-Pfad wie bisher, kein
-Crash), Pattern 4 (Read-back `stock.lot.product_id`/`name`), Pattern 6 (m2o-Tupel bei
-`lot_id`-Read-back).
-
-**Komplexität:** Mittel · **Benefit:** Mittel
-
-### R14 🆕 Quant-Anteil in Umsetzung (S13), Wareneingangs-Anteil zurückgestellt — Multi-Warehouse
-
-**Scope-Split (2026-09-02, S13-Sprintplanung, siehe "S13 — WP-Sequenz" unten):**
-`orchestrator.py`s `module_order` lässt `purchase` vor `stock` laufen — das
-zweite Warehouse aus diesem Abschnitt entsteht aber erst im `stock`-Schritt,
-`purchase.py` kann es zum Zeitpunkt seines eigenen Laufs also nicht sehen.
-**S13 setzt deshalb nur den Quant-Anteil um** (zweites Warehouse bekommt
-einen Anteil der von `inventory.py` erzeugten `stock.quant`-Bestände);
-**der Wareneingangs-Anteil unten (`purchase.py`-Bullet) bleibt offen**,
-analog zu R16s "Produkt-Ebene ✅ … Location-Ebene noch offen"-Split — kein
-neues Item, dieser Abschnitt bleibt der richtige Ort dafür, bis eine
+**Verbleibender offener Anteil:** `orchestrator.py`s `module_order` lässt
+`purchase` vor `stock` laufen — das zweite Warehouse entsteht aber erst im
+`stock`-Schritt, `purchase.py` kann es zum Zeitpunkt seines eigenen Laufs
+also nicht sehen. S13 hat deshalb nur den Quant-Anteil umgesetzt (zweites
+Warehouse bekommt einen Anteil der von `inventory.py` erzeugten
+`stock.quant`-Bestände, siehe `ROADMAP_ARCHIVE.md`s R14-Statusblock). Dieser
+Abschnitt bleibt der richtige Ort für den Wareneingangs-Anteil, bis eine
 Pipeline-Reorder-Entscheidung (🔒, Architekten-Freigabe) das auflöst.
 
-**Live bestätigt (`stock.warehouse`, saas-19.4):** vollständiges Feldschema — `name`/`code`
-(`required`), `view_location_id`/`lot_stock_id` (`required`, m2o → `stock.location`),
-`reception_steps`/`delivery_steps`/`manufacture_steps` (Selections für 1-3-stufige Routen),
-`resupply_wh_ids` (m2m, für automatische Resupply-Routen zwischen Lagern).
-
-**Dev Tasks:**
-- `inventory.py`: optional ein zweites `stock.warehouse` anlegen (`name`, `code` z. B.
-  "WH2"). ⚠️ Unverifiziert, ob `view_location_id`/`lot_stock_id` beim `create()` trotz
-  `required: true` serverseitig automatisch befüllt werden (Odoo-Core-Verhalten bei realen
-  Warehouses) oder explizit mitgegeben werden müssen — kurzer Live-Spike vor Umsetzung.
-- `purchase.py`/`inventory.py`: konfigurierbarer Anteil der Wareneingänge/Quants aufs
-  zweite Lager statt immer `get_default_warehouse`.
-- `ModuleSelections.stock` (Dict, bereits vorhanden) additiv um `"second_warehouse": bool`
-  erweitern.
-
-**Tests:** Pattern 3 (Flag aus → nur ein Warehouse wie bisher, keine zusätzlichen Calls),
-Pattern 4 (Read-back zweites Warehouse `code`/`lot_stock_id`).
+**Dev Task (offen):** `purchase.py`: konfigurierbarer Anteil der
+Wareneingänge aufs zweite Lager statt immer `get_default_warehouse` — braucht
+entweder die Pipeline-Reorder-Entscheidung oder einen anderen Weg, das zweite
+Warehouse vor `purchase.py`s Lauf verfügbar zu machen.
 
 **Komplexität:** Mittel · **Benefit:** Mittel
-
-### R15 🆕 Geplant (S13) — Lagerplätze (Sub-Locations, Putaway)
-
-**Live bestätigt (`stock.location`, saas-19.4):** vollständiges Feldschema — `usage`
-(Selection: `supplier`/`view`/`internal`/`customer`/`inventory`/`production`/`transit`),
-`location_id` (Parent), `barcode` (char, R16-Anknüpfung), `putaway_rule_ids`,
-`storage_category_id`.
-
-**Dev Tasks:**
-- `inventory.py`: mehrere `stock.location`-Kindknoten unter `warehouse["stock_location_id"]`
-  anlegen (`usage='internal'`, z. B. "Regal A/Fach 1" … "Regal A/Fach 3"), `barcode` setzen
-  (R16).
-- Bestehende `stock.quant`-Erzeugung (S8) auf diese Sub-Locations verteilen statt immer
-  auf die Warehouse-Root-Location.
-- Optional/Stretch: 1-2 `stock.putaway.rule`-Demo-Records (Kategorie → Ziel-Sub-Location) —
-  nicht S12-Pflicht.
-
-**Tests:** Pattern 1 (kein Warehouse → skip, bereits vorhandener Guard erweitern),
-Pattern 4 (Read-back `complete_name`/`location_id`-Hierarchie).
-
-**Komplexität:** Mittel · **Benefit:** Mittel-Hoch
-
-### R16 🟠 Produkt-Ebene ✅ erledigt (S12/WP1, 2026-09-02), Location-Ebene noch offen (S13) — Barcode
-
-**Live bestätigt:** `product.product.barcode` (char) **und** `stock.location.barcode`
-(char) existieren beide auf saas-19.4.
-
-**Dev Tasks:**
-- Reine Python-Hilfsfunktion (`data_factory.py`, kein Odoo-/Netzwerk-Call, analog
-  `pdf_factory.py`-Philosophie): valide EAN-13 generieren (12 Zufallsziffern + Prüfziffer
-  nach Standardalgorithmus).
-- **Kollisionsvermeidung — Entscheidung (2026-09-02, gegen Code verifiziert, Cold-Review
-  bestätigt korrekt, 4 Ergänzungen eingearbeitet):**
-  `odoo_client.py:436-459` bestätigt, `create_batch` fällt **nur** bei HTTP 404/422 auf
-  sequenzielle Einzel-`create`-Calls zurück; ein Unique-Constraint-Verstoß (doppelter
-  Barcode) läuft serverseitig als Validation-Fehler — voraussichtlich HTTP 400 (nicht
-  belegt, s. u.), also **außerhalb** des Fallback-Fensters. **Konkreter Fehlerpfad, nicht
-  nur "unbehandelte Exception":** `master_data.py:67`s `create_batch`-Aufruf läuft unter
-  `orchestrator._run_module`, das die Exception zu **einer** Log-Warnung schluckt
-  (`orchestrator.py:107-110`); `_ensure_fallback_products` seedet danach 1-2
-  Fallback-Produkte. Sichtbares Resultat bei einem Duplikat: eine Warnzeile, ein fast
-  leerer Produkt-Pool, Lauf läuft trotzdem weiter — still genug, dass es ohne die
-  Dedup-Logik unten leicht unbemerkt bliebe. Ein `run_id`-Präfix scheidet aus (EAN-13 ist
-  exakt 13 Ziffern, kein Platz für einen Textpräfix, und Kollisionsraum wird kleiner statt
-  eliminiert). Gewählter Ansatz: bei Laufbeginn einmalig alle vorhandenen
-  `product.product.barcode`-Werte per `search_read` lesen (ein Call, kein N+1), Kandidaten
-  dagegen **und** gegen die in diesem Lauf bereits vergebenen prüfen, bei Kollision neu
-  generieren (Cap: 20 Versuche — 10¹²-Zufallsraum macht das nur als Absicherung gegen
-  pathologische Testdaten relevant, nicht als Normalfall). **Archivierte Produkte:** Standard-
-  `search_read` blendet archivierte (`active=False`) Records aus — ob Odoos
-  Unique-Constraint auf saas-19.4 auch archivierte Barcodes einschließt, ist offen; falls ja,
-  braucht der Dedup-Read `context={'active_test': False}` (von `client.search_read`
-  bereits unterstützt, `odoo_client.py:406-408`, also billige Anpassung). **Wer den
-  Used-Set führt:** `data_factory.py` ist reines Python ohne Client (`build_products`,
-  `data_factory.py:181`) — das Used-Set (initial aus dem Dedup-Read, dann pro Kandidat
-  erweitert) gehört `master_data.py`, nicht `data_factory.py`, und wird bei jedem
-  Generator-Aufruf durchgereicht. ⚠️ Unverifiziert (optional, gate't WP1 nicht — die
-  Dedup-Logik ist richtig unabhängig vom exakten Status): exakter HTTP-Status eines
-  Unique-Constraint-Verstoßes auf `product.product.barcode` — falls Zeit übrig in der
-  gebündelten Live-Session (S12-WP-Sequenz, WP-Reihenfolge unten), sonst nachrangig.
-- `master_data.py`: `barcode` bei Produkterzeugung mitschreiben (S12, Produkt-Ebene —
-  Produkte existieren erst ab S3/S12, nicht S11; Tippfehler aus der S11/S12-Umnummerierung
-  am 2026-09-02 korrigiert).
-- `inventory.py`: `barcode` bei den R15-Sub-Locations mitschreiben (S13, da Locations
-  erst dort entstehen; Tippfehler ebenso korrigiert — Header sagte S13, Dev-Task-Zeile
-  sagte S12).
-- `odoo_actions.py` additiv: `FIELD_COMPAT_WHITELIST['product.product']`
-  (Zeile 440-442) hat noch kein `barcode` — ergänzen, damit S11s Kompat-Check das neue Feld
-  mit abdeckt (kein Blocker, S11-Konsistenz).
-
-**Tests:** EAN-13-Prüfziffer-Validierung (reiner Unit-Test ohne Odoo-Mock, wie ursprünglich
-geplant) **plus**, da die Dedup-Logik ein echtes Verhaltensstück ist, kein reiner
-Pure-Function-Zusatz mehr: Pattern 1 (leerer bestehender-Barcodes-Pool beim Dedup-Read →
-normaler Start, kein Crash) und ein Integrationstest-Schritt gemäß CLAUDE.md
-(Verhaltensänderung → Test in `tests/integration/` Pflicht, nicht nur Unit).
-
-**Komplexität:** Niedrig · **Benefit:** Niedrig-Mittel (zahlt sich nur aus, wenn later
-Odoos eigene Barcode-App/ein Scanner gegen die Demo-DB verwendet wird)
 
 ### R17 🆕 Geplant (S16, Architektur-Spike zuerst) — Multicompany
 
@@ -870,6 +740,82 @@ Calls), Pattern 4 (Read-back auf allen neuen Feldern), Pattern 5 (fehlende
 Prerequisites → Skip, inkl. Koexistenz mit einem bereits erzeugten 2.
 Warehouse), Pattern 6 (`lot_id`-m2o-Tupel), Pattern 7 (Tracking-Verteilung,
 `assign_tracking` isoliert), Pattern 8 (`stock.lot`-Batch-Call-Count).
+
+### S14 — WP-Sequenz (Prozess-Tiefe: R12, R18)
+
+**Stand 2026-09-03.** Plan **zweimal** cold-reviewed vor Umsetzungsstart
+(2× fremder Opus-Agent, Plan-Text + Live-Repo, keine Konversationshistorie,
+S5-S13-Verfahren) — Runde 1 fand 6 Blocker + 9 Should-Fix, Runde 2 (nach
+Einarbeitung) fand 1 Blocker + 13 Should-Fix, alle mechanisch/lokal begrenzt
+(kein dritter Entwurf nötig, analog S13). WP1 (gebündelte Live-Verifikation
+gegen `demo-test5.odoo.com`) lief **vor** Runde 1 und deckte dabei zwei
+Fehler in diesem Dokuments eigenem R12/R18-Text auf (siehe unten) — beide
+Cold-Review-Runden wurden entsprechend gebrieft, den ROADMAP-Text als
+unzuverlässig zu behandeln, nicht als Bestätigung.
+
+**Zwei Korrekturen an R12/R18s ursprünglichem Text, live gefunden (WP1):**
+1. **`quality.check`/`quality.point.measure_on` existiert auf `demo-test5`
+   (saas-19.4) auf **keinem** der beiden Modelle** — R18s ursprünglicher Text
+   ("required + readonly, vom `point_id` abgeleitet") stammte aus dem
+   `odoo-fields`-MCP-Tool-Cache, dessen Antwort zusätzliche Felder
+   (`spreadsheet_id`, `obox_device_id`, `measure_frequency_*`) enthält, die
+   auf eine vollständigere Quality-Control-Installation hindeuten als das,
+   was auf `demo-test5` tatsächlich läuft. Live per echtem `fields_get`
+   zweifach verifiziert. Nie setzen, nie in einem `search_read`-`fields`-
+   Parameter anfragen (bricht sonst den ganzen Call).
+2. **R18s bestehender `quality.point`-Erzeugungspfad in `mrp.py` schlägt
+   heute live fehl**, nicht nur mit einem falschen Wert: `test_report_type:
+   "none"` (heutiger Code) → `500`, `"Wrong value for
+   quality.point.test_report_type: 'none'"`. Der Fehler wird von einem
+   `except Exception`-Block geschluckt, nie sichtbar, weil der einzige Test
+   den Pfad standardmäßig deaktiviert lässt. R18 ist deshalb kein "erweitere
+   einen funktionierenden Pfad", sondern "repariere einen Pfad, der nie
+   erfolgreich lief".
+
+**Weitere zentrale Design-Entscheidungen:**
+- `stock.warehouse.orderpoint.warehouse_id` wird **nie** gesetzt — live
+  bestätigt, Odoo leitet es korrekt aus `location_id` her; im Code existiert
+  ohnehin keine Quelle dafür (`get_default_warehouse` liefert nur die
+  Location-ID zurück).
+- `quality.point.bom_id` ist eine Compute-Fassade (live bestätigt: wird beim
+  Schreiben kommentarlos verworfen, auch mit nicht-existenter ID) — der
+  echte, schreibbare Verknüpfungspfad ist `apply_to='products'` +
+  `product_ids`.
+- R12s Zielmenge ist `(RunContext.new_product_ids | ctx.component_ids) ∩
+  storable` — nicht nur `new_product_ids` wie ursprünglich geplant.
+  `ctx.component_ids` wird nie aus Bestandsdaten vorbefüllt, jeder Eintrag
+  ist also per Konstruktion ein Produkt, das `mrp.py` in diesem Lauf gerade
+  erst angelegt hat — genauso kollisionssicher gegen `stock.warehouse.
+  orderpoint`s live bestätigte Uniqueness-Constraint auf
+  `(product_id, warehouse_id, location_id)`.
+- `mrp.py`s Quality-Block wird von der Fertigungsauftrags-Erzeugung
+  strukturell entkoppelt (`if created_bom_ids:` statt
+  `if num_manufacturing_orders > 0 and created_bom_ids:`) — Quality Points
+  brauchen keine MOs, die Kopplung war ein Verschachtelungs-Nebenprodukt.
+  Zwei getrennte `try/except`-Blöcke (MO-Erzeugung, Quality-Erzeugung), damit
+  ein MO-Fehlschlag Quality nicht mitreißt und umgekehrt.
+- Zwei vorbestehende, unabhängige Bugs im selben Codebereich mitgefixt (nicht
+  S14-Scope, aber in der Region, die WP3 ohnehin umbaut): `confirmed_mo_ids`
+  `UnboundLocalError` bei leerem `to_confirm`; `test_mrp.py`s
+  `CAPTURE_FIELDS`-Testzweig ließ den Quality-Block trotz Flag-Freischaltung
+  nie erreichen (`num_manufacturing_orders` blieb 0).
+
+| WP | Inhalt | 🔒 | Voraussetzung |
+|---|---|---|---|
+| **WP1** | Gebündelte Live-Verifikation gegen `demo-test5.odoo.com` (`quality.point`/`quality.check`-Vals inkl. `measure_on`-Fund, `stock.warehouse.orderpoint`-Name-Autofill + Uniqueness-Constraint, `bom_id`-Compute-Fassaden-Fund) | nein | — |
+| **WP2** | R12 Nachbestellregeln: `stock.warehouse.orderpoint`-Erzeugung in `inventory.py`, eigenständige `orderpoint_min_qty`/`orderpoint_max_qty` (nicht von `avg_qty` abgeleitet), Funktionsende als zwei unabhängige Blöcke (Quant-Tail/Orderpoint-Batch) | nein | WP1 |
+| **WP3** | R18 Quality Checks: `test_report_type`-Bugfix, `quality.check`-Erzeugung (neu), MO-Entkopplung, `data_factory.assign_quality_state` (neu, analog `assign_tracking`) | nein | WP1 |
+| **WP4** | Peer-Review vor Merge (S5-S13-Verfahren), grüner Live-`test_suite.py` | — | WP2-WP3 Code steht |
+
+**Pro Arbeitspaket verbindlich:** dieselben Testing Design Patterns wie jedes
+bisherige Sprintpaket (siehe CLAUDE.md) — Pattern 1 (Empty-Pool-Guards),
+Pattern 3 (Prozent=0/Flag-aus-Skip), Pattern 4 (Read-back auf allen neuen
+Feldern), Pattern 5 (fehlende Prerequisites → Skip, inkl. der neuen
+`company_ids`-Guard-Präzisierung — Orderpoint-Zweig darf nicht mit dem
+Quant-Zweig sterben), Pattern 7 (`orderpoints_pct`- **und**
+`quality_state`-Verteilung, letztere über eine eigenständige, isoliert
+testbare `data_factory`-Funktion), Pattern 8 (Batch-Call-Count für
+Orderpoints/Quality-Points/-Checks).
 
 ## 5. Umsetzungsreihenfolge
 
