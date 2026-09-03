@@ -303,6 +303,7 @@ def build_selections(payload: Dict[str, Any]) -> Tuple[ModuleSelections, Set[str
             "num_manufacturing_orders": _as_int(mrp.get("num_manufacturing_orders"),
                                                 "mrp.num_manufacturing_orders", 0, 200, default=5),
             "create_quality_points": _as_bool(mrp.get("create_quality_points")),
+            "quality_fail_pct": _as_pct(mrp.get("quality_fail_pct"), "mrp.quality_fail_pct", default=0),
         }
 
     recruitment = _as_dict(modules.get("hr_recruitment"), "modules.hr_recruitment")
@@ -336,6 +337,17 @@ def build_selections(payload: Dict[str, Any]) -> Tuple[ModuleSelections, Set[str
             # Same clamp as data_factory.assign_tracking's own internal
             # guard (S13/S8) — defense in depth, not a substitute for it.
             serial_pct = 100 - lot_pct
+        # S14/R12: independent of avg_qty (would degenerate to 0.0 on the
+        # avg_qty=0 path otherwise, Befund 7) — minimum=1 on both so "max >
+        # min" can't be satisfied by a meaningless min=0/max=1 pair either.
+        # Cross-field relationship clamped here, not rejected — same
+        # precedent as tracking_lot_pct+tracking_serial_pct above.
+        orderpoint_min_qty = _as_int(
+            stock.get("orderpoint_min_qty"), "stock.orderpoint_min_qty", 1, 100000, default=5)
+        orderpoint_max_qty = _as_int(
+            stock.get("orderpoint_max_qty"), "stock.orderpoint_max_qty", 1, 100000, default=20)
+        if orderpoint_max_qty <= orderpoint_min_qty:
+            orderpoint_max_qty = orderpoint_min_qty + 1
         sel.stock = {
             "avg_qty": _as_int(stock.get("avg_qty"), "stock.avg_qty", 0, 100000, default=50),
             "sub_locations": _as_int(stock.get("sub_locations"), "stock.sub_locations", 0, 50, default=0),
@@ -344,6 +356,9 @@ def build_selections(payload: Dict[str, Any]) -> Tuple[ModuleSelections, Set[str
             "tracking_serial_pct": serial_pct,
             "tracking_serial_max": _as_int(
                 stock.get("tracking_serial_max"), "stock.tracking_serial_max", 1, 1000, default=10),
+            "orderpoints_pct": _as_pct(stock.get("orderpoints_pct"), "stock.orderpoints_pct", default=0),
+            "orderpoint_min_qty": orderpoint_min_qty,
+            "orderpoint_max_qty": orderpoint_max_qty,
         }
 
     hr_expense = _as_dict(modules.get("hr_expense"), "modules.hr_expense")
@@ -519,7 +534,11 @@ def estimate_record_counts(ctx: RunContext, selected: Set[str]) -> Dict[str, int
     if "purchase" in selected and sel.purchase:
         counts["Bestellungen"] = sel.purchase
     if "stock" in selected and sel.stock:
-        counts["Lagerbestände"] = c.num_storables or 0
+        # S14: gated on avg_qty>0 — an orderpoints-only run (avg_qty=0,
+        # orderpoints_pct>0) never seeds any stock quantities, and S14 turns
+        # that from an edge case into a normal config path.
+        if int(sel.stock.get("avg_qty", 0)) > 0:
+            counts["Lagerbestände"] = c.num_storables or 0
         counts["Lagerplätze"] = int(sel.stock.get("sub_locations", 0))
         if sel.stock.get("second_warehouse"):
             counts["Zweites Lager"] = 1
@@ -542,6 +561,16 @@ def estimate_record_counts(ctx: RunContext, selected: Set[str]) -> Dict[str, int
             # in that edge case rather than lying about a smaller number.
             counts["Seriennummern (max.)"] = min(
                 round((c.num_storables or 0) * serial_pct / 100) * serial_max, 500)
+        orderpoints_pct = int(sel.stock.get("orderpoints_pct", 0))
+        if orderpoints_pct:
+            # Approximate in both directions, not just one (unlike the lot/
+            # serial rows above): undercounts because it only reads
+            # num_storables, not the MRP components S14/Befund 3 also
+            # targets (which aren't part of num_storables at all);
+            # overcounts on a use_existing/skip_master_data run, where
+            # new_product_ids stays empty and the real count is 0. "(ca.)"
+            # signals both, deliberately not "(max.)" like the row above.
+            counts["Nachbestellregeln (ca.)"] = round((c.num_storables or 0) * orderpoints_pct / 100)
     if "hr_expense" in selected and sel.hr_expense:
         counts["Spesen"] = sel.hr * int(sel.hr_expense.get("count_per_employee", 0))
 

@@ -479,6 +479,139 @@ def run():
     except Exception as e:
         results.append(("S13/WP5-review: blocked stock.lot create degrades to bulk quants, no crash", False, str(e)))
 
+    # ==================================================================
+    # S14/WP2 — R12 Nachbestellregeln (stock.warehouse.orderpoint)
+    # ==================================================================
+
+    # Pattern 3: orderpoints_pct=0 (default/absent) -> no orderpoint batch.
+    try:
+        client = _mock_client(storable_products=[{"id": 1}])
+        ctx = _make_ctx(stock_sel={"avg_qty": 20})
+        inventory.create_inventory_data(client, gemini=None, ctx=ctx)
+        op_batches = [c for c in client.create_batch.call_args_list
+                      if c.args[0] == 'stock.warehouse.orderpoint']
+        assert op_batches == [], op_batches
+        results.append(("S14/R12: orderpoints_pct=0 -> no orderpoint calls (Pattern 3)", True, ""))
+    except AssertionError as e:
+        results.append(("S14/R12: orderpoints_pct=0 -> no orderpoint calls (Pattern 3)", False, str(e)))
+
+    # Befund 6/Pattern 5: an orderpoint-only run (avg_qty=0, empty
+    # company_ids) must still create orderpoints — company_ids only gates
+    # the quant/tracking branch, never orderpoints (company_id comes from
+    # get_main_company_id, not ctx.company_ids).
+    try:
+        client = _mock_client(storable_products=[{"id": 1}])
+        ctx = _make_ctx(stock_sel={"avg_qty": 0, "orderpoints_pct": 100},
+                         company_ids=[], product_ids=[1], component_ids=[],
+                         new_product_ids=[1])
+        inventory.create_inventory_data(client, gemini=None, ctx=ctx)
+        op_batches = [c for c in client.create_batch.call_args_list
+                      if c.args[0] == 'stock.warehouse.orderpoint']
+        assert len(op_batches) == 1 and len(op_batches[0].args[1]) == 1, op_batches
+        quant_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.quant']
+        assert quant_batches == [], "avg_qty=0 must still skip quant seeding"
+        results.append(("S14/Befund6: orderpoint-only run (avg_qty=0, empty company_ids) still creates orderpoint", True, ""))
+    except AssertionError as e:
+        results.append(("S14/Befund6: orderpoint-only run (avg_qty=0, empty company_ids) still creates orderpoint", False, str(e)))
+
+    # Happy path + field shape: orderpoints_pct=100 -> every eligible
+    # product gets exactly one orderpoint, with min/max qty from config,
+    # no warehouse_id (Odoo derives it), no name (auto-fill), one batch
+    # call (Pattern 8).
+    try:
+        client = _mock_client(storable_products=[{"id": 1}, {"id": 2}])
+        ctx = _make_ctx(stock_sel={"avg_qty": 20, "orderpoints_pct": 100,
+                                    "orderpoint_min_qty": 8, "orderpoint_max_qty": 30},
+                         product_ids=[1, 2], component_ids=[], new_product_ids=[1, 2])
+        inventory.create_inventory_data(client, gemini=None, ctx=ctx)
+        op_batches = [c for c in client.create_batch.call_args_list
+                      if c.args[0] == 'stock.warehouse.orderpoint']
+        assert len(op_batches) == 1, op_batches  # Pattern 8: one batch call
+        vals_list = op_batches[0].args[1]
+        assert len(vals_list) == 2, vals_list
+        for v in vals_list:
+            assert v["product_min_qty"] == 8 and v["product_max_qty"] == 30, v
+            assert "warehouse_id" not in v, v
+            assert "name" not in v, v
+            assert v["trigger"] == "manual" and "company_id" in v and "location_id" in v, v
+        results.append(("S14/R12: orderpoints_pct=100 -> one orderpoint per eligible product, correct fields (Pattern 8)", True, ""))
+    except AssertionError as e:
+        results.append(("S14/R12: orderpoints_pct=100 -> one orderpoint per eligible product, correct fields (Pattern 8)", False, str(e)))
+
+    # Eligibility: only new_product_ids | component_ids are ever candidates
+    # for an orderpoint — a pre-existing (use_existing) product must never
+    # get one, even at orderpoints_pct=100 (collision-safety against the
+    # live-confirmed (product, warehouse, location) uniqueness constraint).
+    try:
+        client = _mock_client(storable_products=[{"id": 1}, {"id": 2}, {"id": 3}])
+        ctx = _make_ctx(stock_sel={"avg_qty": 20, "orderpoints_pct": 100},
+                         product_ids=[1, 2], component_ids=[3], new_product_ids=[1])
+        inventory.create_inventory_data(client, gemini=None, ctx=ctx)
+        op_batches = [c for c in client.create_batch.call_args_list
+                      if c.args[0] == 'stock.warehouse.orderpoint']
+        vals_list = op_batches[0].args[1]
+        op_pids = {v["product_id"] for v in vals_list}
+        assert op_pids == {1, 3}, op_pids  # 2 is pre-existing (use_existing), excluded
+        results.append(("S14/R12: orderpoint eligibility restricted to new_product_ids|component_ids", True, f"{op_pids}"))
+    except AssertionError as e:
+        results.append(("S14/R12: orderpoint eligibility restricted to new_product_ids|component_ids", False, str(e)))
+
+    # Independence (Befund 5): quant/lot tail and orderpoint batch are two
+    # equally-ranked, unrelated blocks — a run with both avg_qty>0 and
+    # orderpoints_pct>0 must produce both a stock.quant and a
+    # stock.warehouse.orderpoint batch call.
+    try:
+        client = _mock_client(storable_products=[{"id": 1}])
+        ctx = _make_ctx(stock_sel={"avg_qty": 20, "orderpoints_pct": 100},
+                         product_ids=[1], component_ids=[], new_product_ids=[1])
+        inventory.create_inventory_data(client, gemini=None, ctx=ctx)
+        quant_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.quant']
+        op_batches = [c for c in client.create_batch.call_args_list
+                      if c.args[0] == 'stock.warehouse.orderpoint']
+        assert len(quant_batches) == 1 and len(op_batches) == 1, (quant_batches, op_batches)
+        results.append(("S14/Befund5: quant seeding and orderpoints run independently in the same call", True, ""))
+    except AssertionError as e:
+        results.append(("S14/Befund5: quant seeding and orderpoints run independently in the same call", False, str(e)))
+
+    # A failed stock.warehouse.orderpoint create_batch must not affect the
+    # quants already created in the block above — non-fatal, no raise.
+    try:
+        client = _mock_client(storable_products=[{"id": 1}])
+        base_batch = client.create_batch.side_effect
+
+        def _create_batch_op_blocked(model, values_list, context=None):
+            if model == 'stock.warehouse.orderpoint':
+                raise Exception("no create rights on stock.warehouse.orderpoint")
+            return base_batch(model, values_list, context=context)
+
+        client.create_batch.side_effect = _create_batch_op_blocked
+        ctx = _make_ctx(stock_sel={"avg_qty": 20, "orderpoints_pct": 100},
+                         product_ids=[1], component_ids=[], new_product_ids=[1])
+        inventory.create_inventory_data(client, gemini=None, ctx=ctx)  # must not raise
+        quant_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.quant']
+        assert len(quant_batches) == 1 and len(quant_batches[0].args[1]) == 1, quant_batches
+        results.append(("S14/Befund3: blocked orderpoint create is non-fatal, quants unaffected", True, ""))
+    except Exception as e:
+        results.append(("S14/Befund3: blocked orderpoint create is non-fatal, quants unaffected", False, str(e)))
+
+    # Pattern 7: orderpoints_pct distribution — at a mid-range pct across
+    # many eligible products, both created and skipped outcomes occur.
+    try:
+        random_module = __import__("random")
+        random_module.seed(42)
+        client = _mock_client(storable_products=[{"id": i} for i in range(1, 101)])
+        ctx = _make_ctx(stock_sel={"avg_qty": 20, "orderpoints_pct": 50},
+                        product_ids=list(range(1, 101)), component_ids=[],
+                        new_product_ids=list(range(1, 101)))
+        inventory.create_inventory_data(client, gemini=None, ctx=ctx)
+        op_batches = [c for c in client.create_batch.call_args_list
+                      if c.args[0] == 'stock.warehouse.orderpoint']
+        n = len(op_batches[0].args[1]) if op_batches else 0
+        assert 0 < n < 100, n
+        results.append(("S14/Pattern7: orderpoints_pct=50 across 100 products -> partial coverage", True, f"n={n}"))
+    except AssertionError as e:
+        results.append(("S14/Pattern7: orderpoints_pct=50 across 100 products -> partial coverage", False, str(e)))
+
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results
 

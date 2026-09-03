@@ -44,7 +44,8 @@ _FULL = {
                            "create_skills": True, "num_skill_types": 2, "skills_per_type": 3},
         "purchase": {"enabled": True, "count": 6, "confirm_pct": 55},
         "stock": {"enabled": True, "avg_qty": 42, "sub_locations": 3, "second_warehouse": True,
-                  "tracking_lot_pct": 20, "tracking_serial_pct": 10, "tracking_serial_max": 7},
+                  "tracking_lot_pct": 20, "tracking_serial_pct": 10, "tracking_serial_max": 7,
+                  "orderpoints_pct": 15, "orderpoint_min_qty": 8, "orderpoint_max_qty": 30},
         "hr_expense": {"enabled": True, "count_per_employee": 4, "approved_pct": 60},
         "documents": {"enabled": True, "bill_pdfs": True, "cv_pdfs": False},
     },
@@ -124,6 +125,7 @@ def run():
         assert sel.stock == {
             "avg_qty": 42, "sub_locations": 3, "second_warehouse": True,
             "tracking_lot_pct": 20, "tracking_serial_pct": 10, "tracking_serial_max": 7,
+            "orderpoints_pct": 15, "orderpoint_min_qty": 8, "orderpoint_max_qty": 30,
         }, sel.stock
         assert sel.hr_expense == {"count_per_employee": 4, "approved_pct": 60}, sel.hr_expense
         assert sel.documents == {"bill_pdfs_enabled": True, "cv_pdfs_enabled": False}

@@ -247,5 +247,57 @@ def run(client, ctx):
             False, str(e),
         ))
 
+    # ------------------------------------------------------------------
+    # Step 6 — S14/R12: orderpoints (stock.warehouse.orderpoint) live
+    # end-to-end, avg_qty=0 (orderpoint-only run, Befund 6) so no quant
+    # noise is mixed in. Read-back product_min_qty/product_max_qty/
+    # location_id/warehouse_id (Pattern 4) — warehouse_id must come back
+    # populated even though the code never sets it (Odoo derives it from
+    # location_id).
+    # ------------------------------------------------------------------
+    try:
+        rctx = _make_rctx()
+        rctx.company_ids = [partner_id]
+        op_product_id = client.create('product.product', {
+            "name": "S14 Orderpoint Test", "type": "consu",
+            "is_storable": True, "sale_ok": False, "purchase_ok": True,
+        })
+        rctx.product_ids = [op_product_id]
+        rctx.new_product_ids = [op_product_id]
+        rctx.module_selections.stock = {
+            "avg_qty": 0, "orderpoints_pct": 100,
+            "orderpoint_min_qty": 8, "orderpoint_max_qty": 30,
+        }
+
+        inventory.create_inventory_data(client, None, rctx)
+
+        quants = client.search_read(
+            'stock.quant', [["product_id", "=", op_product_id]], fields=["id"], limit=0,
+        )
+        assert not quants, f"avg_qty=0 must not seed any quant, found {quants}"
+
+        orderpoints = client.search_read(
+            'stock.warehouse.orderpoint', [["product_id", "=", op_product_id]],
+            fields=["product_min_qty", "product_max_qty", "location_id", "warehouse_id", "trigger"],
+            limit=0,
+        )
+        assert len(orderpoints) == 1, f"expected exactly 1 orderpoint, got {orderpoints}"
+        op = orderpoints[0]
+        assert op["product_min_qty"] == 8 and op["product_max_qty"] == 30, op
+        assert op.get("location_id"), op
+        assert op.get("warehouse_id"), "warehouse_id not derived by Odoo from location_id"
+
+        results.append((
+            "inventory: R12 orderpoints live end-to-end — avg_qty=0, "
+            "read-back min/max/location/warehouse (Pattern 4)",
+            True, f"orderpoint={op}",
+        ))
+    except Exception as e:
+        results.append((
+            "inventory: R12 orderpoints live end-to-end — avg_qty=0, "
+            "read-back min/max/location/warehouse (Pattern 4)",
+            False, str(e),
+        ))
+
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results
