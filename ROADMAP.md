@@ -802,10 +802,45 @@ unzuverlässig zu behandeln, nicht als Bestätigung.
 
 | WP | Inhalt | 🔒 | Voraussetzung |
 |---|---|---|---|
-| **WP1** | Gebündelte Live-Verifikation gegen `demo-test5.odoo.com` (`quality.point`/`quality.check`-Vals inkl. `measure_on`-Fund, `stock.warehouse.orderpoint`-Name-Autofill + Uniqueness-Constraint, `bom_id`-Compute-Fassaden-Fund) | nein | — |
-| **WP2** | R12 Nachbestellregeln: `stock.warehouse.orderpoint`-Erzeugung in `inventory.py`, eigenständige `orderpoint_min_qty`/`orderpoint_max_qty` (nicht von `avg_qty` abgeleitet), Funktionsende als zwei unabhängige Blöcke (Quant-Tail/Orderpoint-Batch) | nein | WP1 |
-| **WP3** | R18 Quality Checks: `test_report_type`-Bugfix, `quality.check`-Erzeugung (neu), MO-Entkopplung, `data_factory.assign_quality_state` (neu, analog `assign_tracking`) | nein | WP1 |
-| **WP4** | Peer-Review vor Merge (S5-S13-Verfahren), grüner Live-`test_suite.py` | — | WP2-WP3 Code steht |
+| **WP1** ✅ | Gebündelte Live-Verifikation gegen `demo-test5.odoo.com` (`quality.point`/`quality.check`-Vals inkl. `measure_on`-Fund, `stock.warehouse.orderpoint`-Name-Autofill + Uniqueness-Constraint, `bom_id`-Compute-Fassaden-Fund) | nein | — |
+| **WP2** ✅ | R12 Nachbestellregeln: `stock.warehouse.orderpoint`-Erzeugung in `inventory.py`, eigenständige `orderpoint_min_qty`/`orderpoint_max_qty` (nicht von `avg_qty` abgeleitet), Funktionsende als zwei unabhängige Blöcke (Quant-Tail/Orderpoint-Batch) | nein | WP1 |
+| **WP3** ✅ | R18 Quality Checks: `test_report_type`-Bugfix, `quality.check`-Erzeugung (neu), MO-Entkopplung, `data_factory.assign_quality_state` (neu, analog `assign_tracking`) | nein | WP1 |
+| **WP4** ✅ | Peer-Review vor Merge (S5-S13-Verfahren), grüner Live-`test_suite.py` | — | WP2-WP3 Code steht |
+
+**WP2-Ergebnisse (2026-09-03):** wie geplant umgesetzt, inkl. der
+`Befund 6`-Präzisierung aus WP1 (Orderpoint-Zweig darf nicht mit dem
+Quant-Zweig an `ctx.company_ids` sterben — `company_id` kommt für
+Orderpoints aus `get_main_company_id`, nie aus `ctx.company_ids`). Volle
+Pattern-1/3/5/7/8-Testabdeckung (Unit + 1 neuer Live-Integrationsschritt).
+
+**WP3-Ergebnisse (2026-09-03):** `test_report_type: "none"` durch `"pdf"`
+ersetzt (Befund 2 aus WP1 — Pfad war vorher noch nie erfolgreich
+gelaufen), `bom_id` durch `apply_to='products'`+`product_ids` ersetzt
+(Compute-Fassade), Quality-Block strukturell von der MO-Erzeugung gelöst
+(`if created_bom_ids:` statt `if num_manufacturing_orders > 0 and
+created_bom_ids:`), `quality.check`-Erzeugung neu, `confirmed_mo_ids`-
+UnboundLocalError (vorbestehend) mitgefixt. `test_mrp.py`s
+`CAPTURE_FIELDS`-Testlücke geschlossen (`num_manufacturing_orders` jetzt
+auch >0 unter Capture) **und** ein unbedingter Live-Testschritt ergänzt,
+der nicht hinter `ODOO_GENERATOR_CAPTURE_FIELDS` hängt — genau diese
+Lücke war der Grund, warum der `test_report_type`-Bug nie auffiel.
+
+**WP4-Ergebnisse (2026-09-03):** `advisor()`-Review (sieht die volle
+Konversation, kein unabhängiger Cold-Review-Agent diesmal) fand 3 echte
+Should-Fixes — alle behoben: (1) `static/app.js` fehlte komplett für die
+vier neuen Config-Keys (`orderpoints_pct`/`orderpoint_min_qty`/
+`orderpoint_max_qty`/`quality_fail_pct`) — `run_config.py` konnte sie
+parsen, aber die UI konnte sie nie senden; live per Browser bis zum
+`/api/preflight`-Response durchgetestet. (2) `quality_state` wurde direkt
+in die `create()`-Vals geschrieben statt über Odoos eigene `do_pass`/
+`do_fail`-Aktionen (live bestätigt: existieren, batch-fähig, setzen
+`control_date`/`user_id` korrekt) — Bruch mit diese Codebase eigener
+Native-vor-Manuell-Konvention, jetzt behoben. (3) `estimate_record_counts`
+hatte keinen Eintrag für Quality Points/Checks. `ODOO_GOTCHAS.md` um
+S14s Live-Befunde ergänzt. Unit-Suite 419/419 grün, Live-`test_suite.py`
+92/92 grün (zweimal, ein bekannter Rate-Limit-Flake in `ODOO_ACTIONS`
+tauchte einmal auf und verschwand beim Zweitlauf). Branch
+`s14-prozess-tiefe` bereit zum Merge nach `main` (Freigabe ausstehend).
 
 **Pro Arbeitspaket verbindlich:** dieselben Testing Design Patterns wie jedes
 bisherige Sprintpaket (siehe CLAUDE.md) — Pattern 1 (Empty-Pool-Guards),
