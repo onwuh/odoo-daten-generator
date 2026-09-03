@@ -924,11 +924,13 @@ Orderpoints/Quality-Points/-Checks).
 ### S15 — WP-Sequenz (Analytic Accounting: R20)
 
 **Stand 2026-09-03.** WP1 (gebündelte Live-Verifikation gegen
-`demo-test5.odoo.com`) bereits gelaufen — Ergebnisse und die beiden
-Korrekturen am ursprünglichen R20-Text stehen oben im R20-Abschnitt selbst
-(nicht hier verdoppelt). Cold-Review von WP2/WP3 (2× fremder Opus-Agent,
-Plan-Text + Live-Repo, keine Konversationshistorie, S5-S14-Verfahren) noch
-ausstehend — WP2/WP3 unten sind ein Entwurf, kein freigegebener Plan.
+`demo-test5.odoo.com`) gelaufen — Ergebnisse und die beiden Korrekturen am
+ursprünglichen R20-Text stehen oben im R20-Abschnitt selbst (nicht hier
+verdoppelt). **Cold-Review 1 von 2 gelaufen** (fremder Opus-Agent,
+Plan-Text + Live-Repo, keine Konversationshistorie, S5-S14-Verfahren) —
+fand **1 echten Blocker + 5 Should-Fixes**, alle unten eingearbeitet.
+Runde 2 (nach Einarbeitung) noch ausstehend, analog S13/S14s
+Zwei-Runden-Verfahren.
 
 **Zentrale Design-Entscheidung (Grund für den eigenen WP2/WP3-Schnitt):**
 R20 ist — anders als R12/R18 in S14 — **kein neues orchestriertes Modul**.
@@ -938,7 +940,9 @@ ein zusätzliches Feld auf bereits erzeugten Zeilen, ohne eigene
 R16 Produkt-Ebene (additiv in `master_data.py`), nicht analog zu R19
 (eigenes Modul). Die "Referenz — Registrierungskette für ein neues
 orchestriertes Modul" oben gilt deshalb **nicht** vollständig; nur die
-Punkte 4-6 (Config-Parsing, Vorschau-Zeile, UI) sind einschlägig.
+Punkte 4-6 (Config-Parsing, Vorschau-Zeile, UI) sind einschlägig — von
+Cold-Review 1 gegen `orchestrator.py`/`run_config.py` bestätigt, kein
+Blocker.
 
 Die Kostenstellen-Erzeugung (Plan + `account.analytic.account`s) braucht
 genau einmal pro Lauf zu passieren, aber wird potenziell von drei
@@ -952,8 +956,79 @@ gleiches Muster wie `mrp.py`s `_get_company_id()`, nur über `ctx` geteilt
 statt über eine lokale Closure, weil hier mehrere getrennte Modul-
 Funktionen denselben Zustand brauchen, nicht nur mehrere Call-Sites
 innerhalb einer Funktion).
+**Cold-Review-Should-Fix 2 (`ctx.analytic_account_ids`-Memoization):**
+`mrp.py`s `_get_company_id()`-Vorbild memoized über eine Wrapper-Liste
+gerade damit ein legitimes leeres Ergebnis trotzdem als "schon versucht"
+zählt — ein `RunContext.analytic_account_ids: List[int]` per
+Wahrheitswert geprüft würde bei einem legitim leeren ersten Versuch die
+Kostenstellen-Erzeugung (und damit einen zweiten `account.analytic.plan`)
+bei jedem weiteren Modul-Aufruf wiederholen. Feld wird stattdessen
+`Optional[List[int]] = None`, geprüft über `is None`, nicht
+Wahrheitswert.
 
-**Offene Ergonomie-Frage für WP2 (kein Blocker, im Cold-Review zu
+**Cold-Review-Blocker 1 (kritisch, ändert WP3s Sale-Ansatz):** die
+"nie einen bereits gesetzten Wert überschreiben"-Garantie lässt sich an
+der ursprünglich geplanten Stelle in `sale.py` **nicht** einhalten.
+`sale.py` baut Order-Zeilen als `(0,0,{...})`-Command-Tupel **inline** in
+einem einzigen `sale.order.create()`-Aufruf (kein separater
+`sale.order.line.create()`-Schritt) — nichts ist zu diesem Zeitpunkt
+persistiert, und die verfügbaren Produkte werden nur mit `id` abgefragt,
+`service_tracking` gar nicht. Odoos eigene serverseitige Analytic-
+Ableitung für `service_tracking='task_in_project'`-Zeilen (S7/R8) läuft
+aber erst bei `action_confirm` — zum Vals-Bau-Zeitpunkt ist "hat diese
+Zeile schon einen Wert" für jede Zeile trivial falsch, die Prüfung hat
+also nichts zu prüfen. WP1s Live-Test (manuell gesetzter Wert überlebt
+`action_confirm` unverändert) deckt außerdem nicht ab, was bei einer
+**echten** `task_in_project`-Zeile passiert, wenn dort vorher schon
+manuell etwas gesetzt wurde — überschreibt Odoos native Ableitung dann,
+wird sie übersprungen, oder gibt es einen Konflikt? Ungetestet, und genau
+das Szenario, das dieses Item explizit vermeiden soll.
+
+**Fix (übernimmt Cold-Review-Should-Fix 3s Vorschlag, ändert `sale.py`s
+Ansatz auf das `assign_quality_state`-Muster statt `assign_tracking`):**
+`sale.py` erzeugt und bestätigt Order-Zeilen **unverändert wie heute**,
+ohne `analytic_distribution` im Erzeugungs-Vals. **Nach**
+`confirm_sale_orders` (aber weiterhin vor `accounting.py`, da `sale.py`
+selbst an Pipeline-Position 3 läuft) liest ein neuer Schritt die
+tatsächlichen `analytic_distribution`-Werte der bestätigten Order-Zeilen
+zurück (`ctx.confirmed_order_ids`, dort bereits am Ende der Funktion
+vorhanden), filtert auf noch-leere Zeilen, zieht einen konfigurierbaren
+Anteil davon, gruppiert die gezogenen Zeilen nach zufällig zugewiesener
+Kostenstelle (wenige Gruppen, z. B. 3 Konten) und schreibt pro Gruppe
+**einen** `write()`-Aufruf (Pattern 8: wenige Batch-Writes, nicht ein
+`write()` pro Zeile). Robuster als ein Vorab-`service_tracking`-Produkt-
+Ausschluss: lässt Odoos native Ableitung erst wirklich passieren, prüft
+danach den echten Zustand, statt ihn vorherzusagen — entspricht der
+bestehenden "native vor manuell"-Konvention dieser Codebase
+(`action_apply_inventory`/`action_confirm`/`do_pass`/`do_fail` u. a.).
+`purchase.py`/`expenses.py` haben dieses Problem **nicht** — Odoo leitet
+für Purchase-/Expense-Zeilen nichts automatisch her, beide bleiben beim
+einfacheren Vals-vor-`create_batch`-Muster (`assign_analytic_distribution`
+als geteilte `data_factory`-Funktion, analog `assign_tracking`).
+
+**Cold-Review-Should-Fix 6 (Batch-Form-Unterschied, kein Blocker, nur
+Dokumentationslücke):** `sale.py` erzeugt Orders einzeln in einer Schleife
+(`client.create`), `purchase.py` batcht auf Order-Ebene
+(`client.create_batch`, `purchase.py:217`) — der geteilte
+`data_factory`-Helper passt trotzdem für beide (er operiert auf der
+jeweiligen `lines`-Liste vor der Erzeugung, unabhängig davon ob die
+äußere Order-Erzeugung selbst gebatcht ist), aber WP3 muss das explizit
+so benennen statt einheitliches Batching zu unterstellen.
+
+**Cold-Review-Should-Fix 5 (live nachgeprüft, erledigt):**
+`account.analytic.account`s einzige Pflichtfelder sind `name` und
+`plan_id` (live per `fields_get` bestätigt) — `company_id` ist **nicht**
+erforderlich und wird beim Fehlen automatisch auf die aktuelle Firma
+gesetzt (live per Create-ohne-`company_id`+Read-back bestätigt). Der
+WP2-Helper muss `company_id` also nicht selbst auflösen.
+
+**Cold-Review-Should-Fix 4 (Test-Erinnerung für WP2):**
+`tests/unit/test_run_config_unit.py`s `_FULL`-Payload (Exact-Equality-
+Check) braucht einen neuen `"analytic"`-Eintrag, sobald
+`build_selections` `sel.analytic` setzt — derselbe Test, den S14/WP2
+schon einmal wegen eines neuen `stock`-Keys anpassen musste.
+
+**Offene Ergonomie-Frage für WP2 (kein Blocker, in Runde 2 zu
 bestätigen):** eigene kompakte GUI-Karte "Kostenrechnung" mit drei
 Reglern (Verkauf/Einkauf/Spesen %) vs. je ein Regler direkt in den
 bestehenden Verkauf-/Einkauf-/Spesen-Karten. Entwurf setzt auf die eigene
@@ -964,18 +1039,21 @@ eine benannte Karte.
 
 | WP | Inhalt | 🔒 | Voraussetzung |
 |---|---|---|---|
-| **WP1** ✅ | Gebündelte Live-Verifikation gegen `demo-test5.odoo.com` (`analytic_distribution`-Format auf allen 5 Zielmodellen, Plan-1-Sättigung, Wizard-Propagation, gebuchte-Move-Line-Schreibbarkeit, `hr.department`-Bestand) | nein | — |
-| **WP2** | Infrastruktur: `odoo_actions.get_or_create_analytic_accounts` (neuer Plan + Kostenstellen, lazy+memoized über `ctx.analytic_account_ids`), `data_factory.assign_analytic_distribution` (analog `assign_tracking`/`assign_quality_state` — überschreibt nie einen bereits gesetzten Wert), `config.py`/`run_config.py`-Wiring (`ModuleSelections.analytic`, `RunContext.analytic_account_ids`, `build_selections`, `estimate_record_counts`), `static/app.js`-UI (eigene Karte, siehe Ergonomie-Frage oben) | nein | WP1 |
-| **WP3** | Einbindung: `sale.py` (Distribution auf Order-Zeilen ohne bestehenden Wert, vor `accounting.py`), `purchase.py` (Order-Zeilen), `expenses.py` (Expense-Zeilen) — je ein Aufruf des WP2-Helpers + der `data_factory`-Funktion an der jeweils bestehenden Zeilen-Erzeugungsstelle | nein | WP2 |
+| **WP1** ✅ | Gebündelte Live-Verifikation gegen `demo-test5.odoo.com` (`analytic_distribution`-Format auf allen 5 Zielmodellen, Plan-1-Sättigung, Wizard-Propagation, gebuchte-Move-Line-Schreibbarkeit, `hr.department`-Bestand, `account.analytic.account`-Pflichtfelder) | nein | — |
+| **WP2** | Infrastruktur: `odoo_actions.get_or_create_analytic_accounts` (neuer Plan + Kostenstellen, lazy+memoized über `ctx.analytic_account_ids: Optional[List[int]] = None`, `is None`-Check), `data_factory.assign_analytic_distribution` (Vals-Mutations-Form, analog `assign_tracking` — für `purchase.py`/`expenses.py`), `config.py`/`run_config.py`-Wiring (`ModuleSelections.analytic`, `RunContext.analytic_account_ids`, `build_selections`, `estimate_record_counts`, `test_run_config_unit.py`s `_FULL`-Payload), `static/app.js`-UI (eigene Karte, siehe Ergonomie-Frage oben) | nein | WP1 |
+| **WP3** | Einbindung: `purchase.py`/`expenses.py` nutzen den WP2-`data_factory`-Helper direkt an der bestehenden Vals-Bau-Stelle (vor `create_batch`). `sale.py` bekommt einen eigenen Read-nach-Confirm-dann-write-Schritt (siehe Blocker-1-Fix oben, gruppiertes `write()` pro Kostenstelle) — kein Vals-Mutations-Aufruf des WP2-Helpers | nein | WP2 |
 | **WP4** | Peer-Review vor Merge (S5-S14-Verfahren), grüner Live-`test_suite.py` | — | WP2-WP3 Code steht |
 
 **Pro Arbeitspaket verbindlich:** dieselben Testing Design Patterns wie
 jedes bisherige Sprintpaket (siehe CLAUDE.md) — Pattern 1 (leerer
 Kostenstellen-Kandidatenpool), Pattern 3 (Prozent=0/kein Modul gewählt →
 Skip), Pattern 4 (Read-back auf allen drei Zielmodellen, inkl. des
-Wizard-Übertragungspfads), Pattern 5 (fehlende Prerequisites → Skip),
-Pattern 7 (`assign_analytic_distribution`s Anteils-Verteilung, isoliert
-testbar), Pattern 8 (Batch-Call-Count für die Kostenstellen-Erzeugung).
+Wizard-Übertragungspfads und `sale.py`s Read-nach-Confirm-Schritts),
+Pattern 5 (fehlende Prerequisites → Skip), Pattern 7
+(`assign_analytic_distribution`s Anteils-Verteilung UND `sale.py`s
+eigener Zieh-Anteil, isoliert testbar), Pattern 8 (Batch-Call-Count für
+die Kostenstellen-Erzeugung UND `sale.py`s gruppierte
+Kostenstellen-`write()`-Aufrufe — wenige, nicht einer pro Zeile).
 
 ## 5. Umsetzungsreihenfolge
 
