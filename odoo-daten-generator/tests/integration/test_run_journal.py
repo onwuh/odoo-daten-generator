@@ -89,7 +89,7 @@ def run(client, ctx):
         try:
             empty = run_journal.RunJournal("demo-itest-empty", Path(tmp))
             summary = run_journal.delete_run(client, empty)
-            assert summary == {"deleted": 0, "failed": [], "skipped": 0, "total": 0}, summary
+            assert summary == {"deleted": 0, "archived": 0, "failed": [], "skipped": 0, "total": 0}, summary
             results.append(("run_journal: leeres Journal löscht nichts (Pattern 5)", True, ""))
         except Exception as e:
             results.append(("run_journal: leeres Journal löscht nichts (Pattern 5)", False, str(e)))

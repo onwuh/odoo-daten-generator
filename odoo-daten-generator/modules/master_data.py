@@ -62,6 +62,23 @@ def _create_products(client, atoms: Dict[str, Any], ctx: RunContext) -> None:
     existing_barcodes = {rec["barcode"] for rec in existing if rec.get("barcode")}
     data_factory.assign_barcodes(all_vals, existing_barcodes)
 
+    # S13/R13: lot/serial tracking on a configurable share of storables.
+    # Gated on avg_qty>0 (not just "stock dict non-empty") so a product never
+    # ends up marked tracking='lot' with no stock step ever creating a
+    # stock.lot for it — inventory.py's own early-return uses the same
+    # avg_qty<=0 condition, see config.py's stock-dict comment. 'stock' in
+    # installed_modules is a defensive second check — the frontend keeps a
+    # not-installed module's card visible-but-disabled rather than hiding it
+    # (static/app.js), so this can't rely on the card never being submitted.
+    stock_config = ctx.module_selections.stock
+    if (isinstance(stock_config, dict) and stock_config.get("avg_qty", 0) > 0
+            and 'stock' in ctx.installed_modules):
+        data_factory.assign_tracking(
+            all_vals,
+            stock_config.get("tracking_lot_pct", 0),
+            stock_config.get("tracking_serial_pct", 0),
+        )
+
     # R8: tag every service product so Odoo's own automation creates a
     # Project+Task on order confirmation and drives invoicing from delivered
     # (timesheet) quantity — gated on app installation, not per-run selection,
@@ -74,8 +91,29 @@ def _create_products(client, atoms: Dict[str, Any], ctx: RunContext) -> None:
                 vals['invoice_policy'] = 'delivery'
                 vals['service_type'] = 'timesheet'
 
-    ids = client.create_batch('product.product', all_vals)
+    # S13/WP5-review: the whole product batch (services+consumables+storables,
+    # not just the tracked share) rides on this one call — if the target
+    # instance rejects the tracking write (ACL/group restriction, untested
+    # beyond demo-test5), don't let that take down the entire run's products.
+    # Retry once with tracking stripped rather than propagating.
+    try:
+        ids = client.create_batch('product.product', all_vals)
+    except Exception as e:
+        if any('tracking' in vals for vals in all_vals):
+            logger.warning(
+                f"⚠️  Produkt-Batch mit Tracking-Feldern fehlgeschlagen ({e}) — "
+                f"erneuter Versuch ohne 'tracking'.")
+            for vals in all_vals:
+                vals.pop('tracking', None)
+            ids = client.create_batch('product.product', all_vals)
+        else:
+            raise
     ctx.product_ids.extend(ids)
+    # S13/Befund 4: ids this run actually created here — inventory.py's
+    # lot/serial branch reads this to never touch a use_existing customer's
+    # pre-existing product or an mrp.py finished-good/component, both of
+    # which also land in ctx.product_ids but never here.
+    ctx.new_product_ids.extend(ids)
     logger.info(f"✅ {len(ids)} Produkte erstellt.")
 
 

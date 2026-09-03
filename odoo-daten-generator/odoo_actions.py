@@ -7,6 +7,7 @@ Domain-specific helpers live in their respective modules:
 """
 
 import logging
+import random
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import data_factory
@@ -109,6 +110,33 @@ def get_default_warehouse(client, company_id) -> Optional[Dict[str, int]]:
     }
 
 
+def create_second_warehouse(client, company_id) -> Optional[Dict[str, int]]:
+    """Creates an additional stock.warehouse for the company (S13/R14).
+
+    Live-verified (S13/WP1, demo-test5): a minimal {name, code, company_id}
+    create() is enough — Odoo's own create() override derives
+    view_location_id/lot_stock_id/picking types server-side, despite those
+    being `required: true` on the field schema. Random suffix on name/code
+    avoids a collision if this runs more than once against the same
+    instance (no uniqueness guarantee otherwise).
+    """
+    suffix = f"{random.randint(1000, 9999)}"
+    wh_id = client.create('stock.warehouse', {
+        "name": f"Lager 2 ({suffix})", "code": f"WH2{suffix}", "company_id": company_id,
+    })
+    wh = client.search_read(
+        'stock.warehouse', [["id", "=", wh_id]], fields=["lot_stock_id"], limit=1,
+    )
+    if not wh:
+        return None
+    stock_location_id = wh[0].get("lot_stock_id")
+    if isinstance(stock_location_id, (list, tuple)):
+        stock_location_id = stock_location_id[0]
+    if not stock_location_id:
+        return None
+    return {"warehouse_id": wh_id, "stock_location_id": stock_location_id}
+
+
 def get_installed_modules(client, wanted_modules: List[str]) -> Set[str]:
     """Returns a set of installed module technical names from wanted_modules."""
     records = client.search_read(
@@ -168,6 +196,32 @@ def get_enabled_features(client, installed_modules=None) -> Dict[str, bool]:
         except Exception:
             flags['crm_leads'] = False
 
+    # stock_multi_locations/stock_lots (S13/R14-R16, Befund 3): purely
+    # informational — inventory.py always writes the sub-locations/lots
+    # regardless of this flag, it only controls whether a "enable this Odoo
+    # setting to see them" hint is shown (a skip-if-off design was rejected:
+    # the setting mostly gates UI visibility, not write access, so skipping
+    # would silently drop the feature — see ROADMAP.md's S13 section).
+    # res.config.settings is a transient wizard model — reading it means
+    # instantiating one and reading its computed defaults (live-verified,
+    # S13/WP1, works over this repo's JSON2 client). Deliberately leaves the
+    # keys UNSET on failure rather than False — a missing key means "don't
+    # know", read by callers as `.get(key, True)` (never show a wrong hint),
+    # same missing-key convention as RunContext.model_access (config.py).
+    if 'stock' in installed:
+        try:
+            settings_id = client.create('res.config.settings', {})
+            settings = client.search_read(
+                'res.config.settings', [["id", "=", settings_id]],
+                fields=['group_stock_multi_locations', 'group_stock_production_lot'],
+                limit=1,
+            )
+            if settings:
+                flags['stock_multi_locations'] = bool(settings[0].get('group_stock_multi_locations'))
+                flags['stock_lots'] = bool(settings[0].get('group_stock_production_lot'))
+        except Exception:
+            pass
+
     return flags
 
 
@@ -206,7 +260,11 @@ MODEL_ACCESS_PROBES: Dict[str, List[str]] = {
            "mrp.routing.workcenter", "quality.point"],
     "hr_recruitment": ["hr.job", "hr.applicant", "hr.skill.type"],
     "purchase": ["purchase.order"],
-    "stock": ["stock.quant"],
+    # stock.location/stock.warehouse/stock.lot: secondary (S13/R13-R15) —
+    # stock.quant stays primary (see PRIMARY_MODEL_PER_MODULE below), a
+    # blocked location/warehouse/lot access degrades that one sub-feature,
+    # not the whole module.
+    "stock": ["stock.quant", "stock.location", "stock.warehouse", "stock.lot"],
     "hr_expense": ["hr.expense"],
     "documents": ["ir.attachment"],  # always probed (pseudo-module, see run_config)
 }
@@ -479,6 +537,7 @@ FIELD_COMPAT_WHITELIST: Dict[str, Tuple[Optional[str], List[str]]] = {
     'ir.attachment': (None, ['res_model', 'res_id', 'raw', 'mimetype', 'type', 'name']),
     'hr.expense': ('hr_expense', ['employee_id', 'product_id', 'name', 'payment_mode',
                    'total_amount', 'date', 'currency_id', 'approval_state']),
+    'stock.location': ('stock', ['name', 'usage', 'location_id', 'barcode']),
 }
 
 

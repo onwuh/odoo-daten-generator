@@ -50,11 +50,15 @@ class ModuleSelections:
     purchase: int = 0                    # number of purchase orders to create; 0 = skip
     purchase_confirm_pct: int = 70       # % of created POs to confirm, mirrors sale_confirm_pct
     stock: dict = field(default_factory=dict)
-    # stock shape: {"avg_qty": int} — dict-gated like mrp/documents, NOT a bare int:
+    # stock shape: {"avg_qty": int, "sub_locations": int, "second_warehouse": bool,
+    # "tracking_lot_pct": int, "tracking_serial_pct": int, "tracking_serial_max": int}
+    # (S13/R13-R15 additive) — dict-gated like mrp/documents, NOT a bare int:
     # orchestrator.py's module_order key must equal this field's name ("stock") exactly,
     # since ModuleSelections.get(module_code) is getattr(self, module_code) below and the
     # gate is `elif not sel: continue` — a scalar int field named e.g. stock_avg_qty paired
     # with module_code "stock" would look up a nonexistent attribute and always skip silently.
+    # avg_qty==0 with another key set (e.g. sub_locations>0) still runs the step —
+    # inventory.py's own early-return checks all three trigger keys, not avg_qty alone.
     hr_expense: dict = field(default_factory=dict)
     # hr_expense shape: {"count_per_employee": int, "approved_pct": int} (R19).
     # Field name must be "hr_expense", not "expenses" — matches WANTED_MODULES'
@@ -125,3 +129,10 @@ class RunContext:
     # Vendor partners (supplier_rank>0) created this run — shared between accounting.py's
     # standalone vendor bills and purchase.py's POs so both draw from the same supplier set.
     supplier_ids: List[int] = field(default_factory=list)
+    # Product ids master_data.py's _create_products created THIS run (S13/R13) —
+    # distinct from product_ids, which also holds use_existing's pre-existing
+    # customer product ids (merged in before master_data runs, run_config.py's
+    # build_context) and mrp.py's finished goods/components. inventory.py's
+    # lot/serial-tracking branch reads this to never write tracking-derived
+    # stock.lot records against a real customer's pre-existing product.
+    new_product_ids: List[int] = field(default_factory=list)

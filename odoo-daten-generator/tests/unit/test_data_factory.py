@@ -152,5 +152,57 @@ def run():
     except Exception as e:
         results.append(("Pattern 1: assign_barcodes empty vals_list, no crash", False, str(e)))
 
+    # ------------------------------------------------------------------
+    # S13/R13 — assign_tracking: distribution, storable-only, clamp
+    # ------------------------------------------------------------------
+    try:
+        # Pattern 7: none/lot/serial all appear over enough samples.
+        random.seed(3)
+        vals_list = [{"name": f"S{i}", "is_storable": True} for i in range(200)]
+        data_factory.assign_tracking(vals_list, lot_pct=30, serial_pct=30)
+        trackings = [v.get("tracking", "none") for v in vals_list]
+        assert any(t == "none" for t in trackings), "no 'none' sample"
+        assert any(t == "lot" for t in trackings), "no 'lot' sample"
+        assert any(t == "serial" for t in trackings), "no 'serial' sample"
+        results.append(("Pattern 7: assign_tracking none/lot/serial distribution (n=200)", True, ""))
+    except Exception as e:
+        results.append(("Pattern 7: assign_tracking none/lot/serial distribution (n=200)", False, str(e)))
+
+    try:
+        # Only is_storable=True entries are touched — services (no key) and
+        # consumables (is_storable=False) stay untouched (Odoo default 'none').
+        random.seed(4)
+        vals_list = [
+            {"name": "Service"},  # no is_storable key at all
+            {"name": "Consumable", "is_storable": False},
+            {"name": "Storable", "is_storable": True},
+        ]
+        data_factory.assign_tracking(vals_list, lot_pct=100, serial_pct=0)
+        assert "tracking" not in vals_list[0], vals_list[0]
+        assert "tracking" not in vals_list[1], vals_list[1]
+        assert vals_list[2]["tracking"] == "lot", vals_list[2]
+        results.append(("assign_tracking only touches is_storable=True entries", True, ""))
+    except Exception as e:
+        results.append(("assign_tracking only touches is_storable=True entries", False, str(e)))
+
+    try:
+        # S8: clamps lot_pct+serial_pct at 100 internally rather than trusting
+        # the caller — lot_pct=80, serial_pct=80 must never sum past 100.
+        random.seed(5)
+        vals_list = [{"name": f"S{i}", "is_storable": True} for i in range(300)]
+        data_factory.assign_tracking(vals_list, lot_pct=80, serial_pct=80)
+        assert all(v.get("tracking", "none") != "none" for v in vals_list), \
+            "clamp left some untracked when lot+serial >= 100"
+        results.append(("S8: assign_tracking clamps lot_pct+serial_pct at 100", True, ""))
+    except Exception as e:
+        results.append(("S8: assign_tracking clamps lot_pct+serial_pct at 100", False, str(e)))
+
+    try:
+        # Pattern 1: empty vals_list is a no-op, no crash.
+        data_factory.assign_tracking([], lot_pct=50, serial_pct=50)
+        results.append(("Pattern 1: assign_tracking empty vals_list, no crash", True, ""))
+    except Exception as e:
+        results.append(("Pattern 1: assign_tracking empty vals_list, no crash", False, str(e)))
+
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

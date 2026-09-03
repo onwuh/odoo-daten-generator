@@ -9,7 +9,7 @@ if _ROOT not in sys.path:
 
 from odoo_actions import (get_enabled_features, get_server_version, check_field_compatibility,
                           probe_model_access, MODEL_ACCESS_PROBES, classify_version_status,
-                          LAST_VERIFIED_VERSION, KNOWN_BROKEN_VERSIONS)
+                          LAST_VERIFIED_VERSION, KNOWN_BROKEN_VERSIONS, create_second_warehouse)
 
 
 class _AlwaysHasField(dict):
@@ -370,6 +370,76 @@ def run():
         results.append(("probe_model_access: a model listed once is probed exactly once", True, ""))
     except Exception as e:
         results.append(("probe_model_access: a model listed once is probed exactly once", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # S13/R14 — create_second_warehouse: create() then read-back lot_stock_id
+    # ------------------------------------------------------------------
+    try:
+        mock_client = MagicMock()
+        mock_client.create.return_value = 42
+        mock_client.search_read.return_value = [{"lot_stock_id": [16, "WH2/Stock"]}]
+        result = create_second_warehouse(mock_client, company_id=1)
+        assert result == {"warehouse_id": 42, "stock_location_id": 16}, result
+        create_call = mock_client.create.call_args
+        assert create_call.args[0] == "stock.warehouse", create_call
+        vals = create_call.args[1]
+        assert vals["company_id"] == 1, vals
+        assert "name" in vals and "code" in vals, vals
+        results.append(("S13/R14: create_second_warehouse creates + reads back lot_stock_id", True, ""))
+    except AssertionError as e:
+        results.append(("S13/R14: create_second_warehouse creates + reads back lot_stock_id", False, str(e)))
+
+    try:
+        # Pattern 2-adjacent: no warehouse found on read-back -> None, no crash.
+        mock_client = MagicMock()
+        mock_client.create.return_value = 42
+        mock_client.search_read.return_value = []
+        result = create_second_warehouse(mock_client, company_id=1)
+        assert result is None, result
+        results.append(("S13/R14: create_second_warehouse -> None if read-back finds nothing", True, ""))
+    except AssertionError as e:
+        results.append(("S13/R14: create_second_warehouse -> None if read-back finds nothing", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # S13/Befund 3 — get_enabled_features: stock_multi_locations/stock_lots
+    # are purely-informational feature flags, gated on 'stock' installed,
+    # left UNSET (not False) on any read failure (missing-key convention).
+    # ------------------------------------------------------------------
+    try:
+        mock_client = MagicMock()
+        mock_client.create.return_value = 4
+        mock_client.search_read.return_value = [
+            {"group_stock_multi_locations": True, "group_stock_production_lot": False},
+        ]
+        flags = get_enabled_features(mock_client, {"stock"})
+        assert flags["stock_multi_locations"] is True, flags
+        assert flags["stock_lots"] is False, flags
+        results.append(("S13/Befund 3: get_enabled_features reads stock settings when 'stock' installed", True, ""))
+    except AssertionError as e:
+        results.append(("S13/Befund 3: get_enabled_features reads stock settings when 'stock' installed", False, str(e)))
+
+    try:
+        # 'stock' not installed -> no res.config.settings probe at all.
+        mock_client = MagicMock()
+        flags = get_enabled_features(mock_client, {"crm"})
+        assert "stock_multi_locations" not in flags and "stock_lots" not in flags, flags
+        assert mock_client.create.call_count == 0, "res.config.settings probed without 'stock' installed"
+        results.append(("S13/Befund 3: no stock settings probe when 'stock' not installed (Pattern 3)", True, ""))
+    except AssertionError as e:
+        results.append(("S13/Befund 3: no stock settings probe when 'stock' not installed (Pattern 3)", False, str(e)))
+
+    try:
+        # A failed settings read leaves the keys UNSET, never False — a
+        # caller doing .get(key, True) must never see a false "setting is
+        # off" hint from a probe that simply couldn't run.
+        mock_client = MagicMock()
+        mock_client.create.side_effect = Exception("no res.config.settings access")
+        flags = get_enabled_features(mock_client, {"stock"})
+        assert "stock_multi_locations" not in flags, flags
+        assert "stock_lots" not in flags, flags
+        results.append(("S13/Befund 3: failed settings read leaves keys unset, not False", True, ""))
+    except AssertionError as e:
+        results.append(("S13/Befund 3: failed settings read leaves keys unset, not False", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

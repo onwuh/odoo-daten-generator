@@ -43,7 +43,8 @@ _FULL = {
         "hr_recruitment": {"enabled": True, "num_jobs": 3, "num_candidates": 8,
                            "create_skills": True, "num_skill_types": 2, "skills_per_type": 3},
         "purchase": {"enabled": True, "count": 6, "confirm_pct": 55},
-        "stock": {"enabled": True, "avg_qty": 42},
+        "stock": {"enabled": True, "avg_qty": 42, "sub_locations": 3, "second_warehouse": True,
+                  "tracking_lot_pct": 20, "tracking_serial_pct": 10, "tracking_serial_max": 7},
         "hr_expense": {"enabled": True, "count_per_employee": 4, "approved_pct": 60},
         "documents": {"enabled": True, "bill_pdfs": True, "cv_pdfs": False},
     },
@@ -120,7 +121,10 @@ def run():
         assert sel.mrp["sub_boms_per_product"] == 3, sel.mrp
         assert sel.hr_recruitment["num_candidates"] == 8
         assert sel.purchase == 6 and sel.purchase_confirm_pct == 55
-        assert sel.stock == {"avg_qty": 42}, sel.stock
+        assert sel.stock == {
+            "avg_qty": 42, "sub_locations": 3, "second_warehouse": True,
+            "tracking_lot_pct": 20, "tracking_serial_pct": 10, "tracking_serial_max": 7,
+        }, sel.stock
         assert sel.hr_expense == {"count_per_employee": 4, "approved_pct": 60}, sel.hr_expense
         assert sel.documents == {"bill_pdfs_enabled": True, "cv_pdfs_enabled": False}
         assert selected == _ALL_INSTALLED | {"documents"}, selected
@@ -133,7 +137,7 @@ def run():
     # ------------------------------------------------------------------
     try:
         ctx, _ = _build(_FULL)
-        assert ctx.module_selections.get("stock") == {"avg_qty": 42}
+        assert ctx.module_selections.get("stock")["avg_qty"] == 42
         assert ctx.module_selections.get("purchase") == 6
         assert bool(ctx.module_selections.get("stock")) is True
         empty = ModuleSelections()

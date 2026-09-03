@@ -87,5 +87,165 @@ def run(client, ctx):
     except Exception as e:
         results.append(("inventory: empty company_ids -> graceful skip, no new quant (Pattern 5)", False, str(e)))
 
+    # ------------------------------------------------------------------
+    # Step 3 — S13/R15+R16: sub_locations live end-to-end. Read-back
+    # complete_name/location_id/barcode (Pattern 4), and confirm the
+    # round-robin actually distributes quants across the new locations,
+    # not just the warehouse root.
+    # ------------------------------------------------------------------
+    try:
+        rctx = _make_rctx()
+        rctx.company_ids = [partner_id]
+        product_ids = []
+        for i in range(4):
+            product_ids.append(client.create('product.product', {
+                "name": f"S13 Sub-Location Test {i}", "type": "consu",
+                "is_storable": True, "sale_ok": False, "purchase_ok": True,
+            }))
+        rctx.product_ids = product_ids
+        rctx.new_product_ids = []  # none tracked, only sub-locations under test here
+        rctx.module_selections.stock = {"avg_qty": 20, "sub_locations": 2}
+
+        inventory.create_inventory_data(client, None, rctx)
+
+        quants = client.search_read(
+            'stock.quant', [["product_id", "in", product_ids], ["quantity", ">", 0]],
+            fields=["location_id"], limit=0,
+        )
+        used_location_ids = set()
+        for q in quants:
+            loc = q["location_id"]
+            used_location_ids.add(loc[0] if isinstance(loc, (list, tuple)) else loc)
+        assert len(used_location_ids) >= 2, (
+            f"expected quants spread over >=2 locations (warehouse root + sub-locations), "
+            f"got {used_location_ids}")
+
+        new_locations = client.search_read(
+            'stock.location', [["id", "in", list(used_location_ids)], ["usage", "=", "internal"]],
+            fields=["complete_name", "location_id", "barcode"], limit=0,
+        )
+        sub_locs = [l for l in new_locations if l.get("barcode")]
+        assert sub_locs, f"expected at least one sub-location with a barcode among {new_locations}"
+        for l in sub_locs:
+            assert l.get("complete_name"), l
+            assert l.get("location_id"), l
+
+        results.append((
+            "inventory: sub_locations live end-to-end — quants spread, "
+            "read-back complete_name/location_id/barcode (Pattern 4)",
+            True, f"locations used={used_location_ids}",
+        ))
+    except Exception as e:
+        results.append((
+            "inventory: sub_locations live end-to-end — quants spread, "
+            "read-back complete_name/location_id/barcode (Pattern 4)",
+            False, str(e),
+        ))
+
+    # ------------------------------------------------------------------
+    # Step 4 — S13/R14: second_warehouse live end-to-end. Read-back
+    # code/lot_stock_id (Pattern 4).
+    # ------------------------------------------------------------------
+    try:
+        rctx = _make_rctx()
+        rctx.company_ids = [partner_id]
+        product_id = client.create('product.product', {
+            "name": "S13 Second Warehouse Test", "type": "consu",
+            "is_storable": True, "sale_ok": False, "purchase_ok": True,
+        })
+        rctx.product_ids = [product_id]
+        rctx.new_product_ids = []
+        rctx.module_selections.stock = {"avg_qty": 20, "second_warehouse": True}
+
+        # A name-`like` search alone can match "Lager 2 (NNNN)" residue left
+        # over from an earlier run on this shared demo tenant and pass
+        # without this run having created anything — exclude ids that
+        # already existed before this call runs.
+        pre_existing_ids = {
+            w["id"] for w in client.search_read(
+                'stock.warehouse', [["name", "like", "Lager 2"]], fields=["id"], limit=0,
+            )
+        }
+
+        inventory.create_inventory_data(client, None, rctx)
+
+        warehouses = client.search_read(
+            'stock.warehouse', [["name", "like", "Lager 2"]],
+            fields=["code", "lot_stock_id"], limit=0,
+        )
+        new_warehouses = [w for w in warehouses if w["id"] not in pre_existing_ids]
+        assert new_warehouses, f"no NEW second warehouse found (pre-existing: {pre_existing_ids})"
+        wh = new_warehouses[0]
+        assert wh.get("code"), wh
+        assert wh.get("lot_stock_id"), wh
+
+        results.append((
+            "inventory: second_warehouse live end-to-end — read-back code/lot_stock_id (Pattern 4)",
+            True, f"warehouse={wh}",
+        ))
+    except Exception as e:
+        results.append((
+            "inventory: second_warehouse live end-to-end — read-back code/lot_stock_id (Pattern 4)",
+            False, str(e),
+        ))
+
+    # ------------------------------------------------------------------
+    # Step 5 — S13/R13: lot- and serial-tracking live end-to-end. Read-back
+    # stock.lot.product_id/name (Pattern 4) and the m2o tuple shape on
+    # stock.quant.lot_id (Pattern 6).
+    # ------------------------------------------------------------------
+    try:
+        rctx = _make_rctx()
+        rctx.company_ids = [partner_id]
+        lot_product_id = client.create('product.product', {
+            "name": "S13 Lot Tracking Test", "type": "consu",
+            "is_storable": True, "sale_ok": False, "purchase_ok": True,
+            "tracking": "lot",
+        })
+        serial_product_id = client.create('product.product', {
+            "name": "S13 Serial Tracking Test", "type": "consu",
+            "is_storable": True, "sale_ok": False, "purchase_ok": True,
+            "tracking": "serial",
+        })
+        rctx.product_ids = [lot_product_id, serial_product_id]
+        rctx.new_product_ids = [lot_product_id, serial_product_id]  # Befund 4: only tracked if "new"
+        rctx.module_selections.stock = {
+            "avg_qty": 20, "tracking_lot_pct": 100, "tracking_serial_pct": 0,
+            "tracking_serial_max": 3,
+        }
+
+        inventory.create_inventory_data(client, None, rctx)
+
+        lots = client.search_read(
+            'stock.lot', [["product_id", "in", [lot_product_id, serial_product_id]]],
+            fields=["product_id", "name"], limit=0,
+        )
+        assert lots, "no stock.lot records created"
+        for lot in lots:
+            assert lot.get("name", "").startswith("LOT-"), lot
+            pid = lot["product_id"]
+            pid = pid[0] if isinstance(pid, (list, tuple)) else pid  # Pattern 6
+            assert pid in (lot_product_id, serial_product_id), lot
+
+        lot_quants = client.search_read(
+            'stock.quant', [["product_id", "=", lot_product_id], ["lot_id", "!=", False]],
+            fields=["lot_id", "quantity"], limit=0,
+        )
+        assert lot_quants, "no lot-tracked quant found for the lot-tracking product"
+        lid = lot_quants[0]["lot_id"]
+        assert isinstance(lid, (list, tuple)) and len(lid) == 2, f"lot_id not an m2o tuple: {lid!r}"
+
+        results.append((
+            "inventory: lot/serial tracking live end-to-end — stock.lot read-back, "
+            "lot_id m2o tuple (Pattern 4/6)",
+            True, f"{len(lots)} lots created",
+        ))
+    except Exception as e:
+        results.append((
+            "inventory: lot/serial tracking live end-to-end — stock.lot read-back, "
+            "lot_id m2o tuple (Pattern 4/6)",
+            False, str(e),
+        ))
+
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

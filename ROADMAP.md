@@ -472,7 +472,18 @@ Crash), Pattern 4 (Read-back `stock.lot.product_id`/`name`), Pattern 6 (m2o-Tupe
 
 **Komplexität:** Mittel · **Benefit:** Mittel
 
-### R14 🆕 Geplant (S13) — Multi-Warehouse
+### R14 🆕 Quant-Anteil in Umsetzung (S13), Wareneingangs-Anteil zurückgestellt — Multi-Warehouse
+
+**Scope-Split (2026-09-02, S13-Sprintplanung, siehe "S13 — WP-Sequenz" unten):**
+`orchestrator.py`s `module_order` lässt `purchase` vor `stock` laufen — das
+zweite Warehouse aus diesem Abschnitt entsteht aber erst im `stock`-Schritt,
+`purchase.py` kann es zum Zeitpunkt seines eigenen Laufs also nicht sehen.
+**S13 setzt deshalb nur den Quant-Anteil um** (zweites Warehouse bekommt
+einen Anteil der von `inventory.py` erzeugten `stock.quant`-Bestände);
+**der Wareneingangs-Anteil unten (`purchase.py`-Bullet) bleibt offen**,
+analog zu R16s "Produkt-Ebene ✅ … Location-Ebene noch offen"-Split — kein
+neues Item, dieser Abschnitt bleibt der richtige Ort dafür, bis eine
+Pipeline-Reorder-Entscheidung (🔒, Architekten-Freigabe) das auflöst.
 
 **Live bestätigt (`stock.warehouse`, saas-19.4):** vollständiges Feldschema — `name`/`code`
 (`required`), `view_location_id`/`lot_stock_id` (`required`, m2o → `stock.location`),
@@ -761,6 +772,104 @@ R11 Pattern 1/3/5/7 (Pattern 5 neu: leere `opportunity_ids` → Skip, siehe
 `ROADMAP_ARCHIVE.md`s R11-Statusblock).
 
 ---
+
+### S13 — WP-Sequenz (Lager-Tiefe: R14, R15, R13)
+
+**Stand 2026-09-02.** Plan **zweimal** cold-reviewed vor Umsetzungsstart
+(2× fremder Opus-Agent, Plan-Text + Live-Repo, keine Konversationshistorie,
+S5-S12-Verfahren) — ein zusätzlicher Durchlauf gegenüber S11/S12, weil Runde
+1 strukturelle Blocker fand: 6 Blocker + 10 Should-Fix (Verdikt "needs
+another draft pass"). Runde 2 (nach Einarbeitung + eigener
+Live-Schema-Verifikation per `odoo-fields`-MCP-Tool gegen saas-19.4) fand
+4 Blocker + 10 Should-Fix, alle mechanisch/lokal begrenzt (Verdikt "kein
+dritter Entwurf nötig"). Alle 20 Funde eingearbeitet vor Implementierungsstart.
+
+Alle drei Items bleiben innerhalb des bestehenden `orchestrator.py`-"stock"-
+Schritts (`inventory.create_inventory_data`) bzw. im bereits laufenden
+`master_data`-Schritt (R13s Tracking-Zuweisung) — kein neuer
+`module_order`-Eintrag. "Keine neue Registrierungskette nötig" (§3-Referenz)
+stimmt für 6 von 7 Punkten; einzige Ausnahme ist der Test-Link
+(`test_run_config_unit.py`s `_FULL`-Payload prüft den `stock`-Dict per
+exakter Gleichheit — jeder neue Key braucht eine Testanpassung).
+
+**Vier zentrale Design-Entscheidungen aus der Planungsphase:**
+1. **R14-Scope-Cut:** `purchase` läuft vor `stock` (`orchestrator.py`s
+   `module_order`) — das zweite Warehouse existiert zum Zeitpunkt von
+   `purchase.py`s Lauf noch nicht. S13 setzt nur den Quant-Anteil um, der
+   Wareneingangs-Anteil bleibt offen (siehe R14-Abschnitt oben).
+2. **`run_journal.py` bekommt einen neuen `ARCHIVE_FALLBACK_MODELS`-
+   Mechanismus:** Archivieren (`active=False`) statt Hart-Löschen, wenn
+   `unlink` scheitert — für `stock.warehouse`/`stock.location` (beide haben
+   ein `active`-Feld, live bestätigt). `stock.lot` hat keins — bleibt
+   dokumentierte Einschränkung, kein Fix. `delete_run`s Rückgabe bekommt ein
+   drittes Feld `archived` (zusätzlich zu `deleted`/`failed`/`skipped`),
+   UI-Cleanup-Meldung entsprechend erweitert.
+3. **Settings-Gates** (`group_stock_multi_locations`/
+   `group_stock_production_lot`, live bestätigt): Records werden **immer**
+   erzeugt, nie vom Einstellungs-Zustand abhängig gemacht — bei nachweislich
+   deaktivierter Einstellung nur ein Hinweis ("Einstellung X in Odoo
+   aktivieren, um die erzeugten Daten in der UI zu sehen"), kein Skip (ein
+   Skip hätte das Feature unsichtbar gemacht, ohne dass die Daten technisch
+   unanlegbar gewesen wären). Probe liegt einmalig in
+   `odoo_actions.get_enabled_features` (analog `crm_leads`), nicht verteilt
+   auf mehrere Module.
+4. **`RunContext.new_product_ids`** (neues additives Feld): nur von
+   `master_data.py` in diesem Lauf frisch erzeugte Produkt-IDs — WP4s
+   Lot-/Serial-Branch feuert nur dafür, nie für `use_existing`-
+   Bestandsprodukte oder MRP-Komponenten/-Fertigprodukte (beide schreiben
+   unabhängig in `ctx.product_ids`, ohne je in `new_product_ids` zu landen).
+
+| WP | Inhalt | 🔒 | Voraussetzung |
+|---|---|---|---|
+| **WP1** ✅ | Gebündelte Live-Verifikation gegen `demo-test5.odoo.com` (`stock.warehouse`-Minimalfall, `tracking='lot'`-Schreib-/Read-back inkl. `product.template`, `stock.lot`-Namenskollision, `stock.location.barcode`-Namensraum, Unlink-/Archive-Verhalten für alle drei neuen Modelle, `action_apply_inventory` mit Lot-/Serial-Quants, Settings-Lesemechanismus) | nein | — |
+| **WP2** ✅ | R15 Lagerplätze + R16 Location-Ebene Barcode: Sub-Locations, Location-Pool-Refactor der Quant-Schleife (Round-Robin statt Zufalls-Draw), `ARCHIVE_FALLBACK_MODELS`+`stock.location`, `MODEL_ACCESS_PROBES`/`FIELD_COMPAT_WHITELIST` additiv | nein | WP1 |
+| **WP3** ✅ | R14 Multi-Warehouse (Quant-Anteil): 2. Warehouse vor dem `get_default_warehouse`-Lookup erzeugt (braucht kein 1. Warehouse), in WP2s Location-Pool eingehängt, `ARCHIVE_FALLBACK_MODELS`+`stock.warehouse` | nein | WP1, WP2 (Pool) |
+| **WP4** ✅ | R13 Lot-/Serial-Tracking: `data_factory.assign_tracking`, `RunContext.new_product_ids`, tracking-bewusste Quant-/Lot-Erzeugung mit Lauf-weitem Serial-Deckel (`_MAX_SERIAL_RECORDS_PER_RUN`, entkoppelt von `avg_qty`) | nein | WP1, WP2 (Pool) |
+| **WP5** ✅ | Peer-Review vor Merge (S5-S12-Verfahren), grüner Live-`test_suite.py` | — | WP1-WP4 Code steht |
+
+**WP1-Ergebnisse (live gegen `demo-test5.odoo.com`, 2026-09-02):** 7 von 8
+Checks bestätigten die Planannahme direkt. Eine Korrektur: Archive-Fallback
+(`active=False`) funktioniert für `stock.warehouse` auch mit vorhandenem
+Bestand, schlägt aber für `stock.location` fehl, solange sie noch einen Quant
+enthält (derselbe Fehler wie beim Unlink) — Design-Entscheidung 2 oben
+dokumentiert diese Asymmetrie bereits korrekt, keine Nacharbeit nötig.
+
+**WP2-WP4-Umsetzung (2026-09-02):** in `modules/inventory.py` einem
+gemeinsamen, überarbeiteten `create_inventory_data` umgesetzt statt drei
+getrennten Anknüpfungspunkten — WP2 selbst sah diesen gemeinsamen
+Location-Pool-Refactor als Grundlage für WP3/WP4 vor. Vollständige
+Testabdeckung (Unit + 3 neue Live-Integrationsschritte) ergänzt, alle
+Testing Design Patterns unten erfüllt. Unit-Suite 399/399 grün, Live-
+`test_suite.py` 90/90 grün (Erstlauf); ein Zweitlauf zeigte den
+vorbestehenden, dokumentierten Rate-Limit-Flake in `ODOO_ACTIONS`
+(`has_create_access`-POST-Zähler) — alle S13-eigenen Schritte blieben in
+beiden Läufen grün.
+
+**WP5-Ergebnisse (2026-09-03):** unabhängiger Cold-Review-Agent (Opus,
+Diff statt Plan-Text, gleiches Verfahren wie S12/WP5) fand keine Blocker,
+5 echte Should-Fixes — alle behoben: (1) Produkt-Batch-Create war
+All-or-Nothing auf dem Tracking-Feld, jetzt Retry ohne `tracking` bei
+Fehlschlag; (2) blockierte `stock.lot`-Erstellung riss vorher das ganze
+Stock-Modul mit, degradiert jetzt betroffene Produkte auf normale
+Bestände; (3) Archiv-Fallback in `run_journal.py` meldete bei eigenem
+Fehlschlag den falschen (Unlink-)Grund statt des eigenen — Mark-Punkt
+korrigiert; (4) Testlücke geschlossen — kein Test prüfte, dass ein
+explizit deaktiviertes Feature-Flag (`stock_multi_locations`/
+`stock_lots`) die Erstellung nicht überspringt, nur den Hinweis auslöst;
+(5) Live-Integrationstest für das zweite Warehouse konnte auf Altdaten
+der geteilten Testinstanz falsch-positiv laufen, jetzt ID-basiert
+abgegrenzt. `ODOO_GOTCHAS.md` um S13s Live-Befunde ergänzt. Unit-Suite
+404/404 grün, Live-`test_suite.py` 90/90 grün (inkl. des vorher flakigen
+`ODOO_ACTIONS`-Tests). Branch `s13-lager-tiefe` bereit zum Merge nach
+`main` (Freigabe ausstehend).
+
+**Pro Arbeitspaket verbindlich:** dieselben Testing Design Patterns wie jedes
+bisherige Sprintpaket (siehe CLAUDE.md) — Pattern 1 (Location-Pool nie leer,
+konstruktionsbedingt), Pattern 3 (jedes neue Flag aus → keine zusätzlichen
+Calls), Pattern 4 (Read-back auf allen neuen Feldern), Pattern 5 (fehlende
+Prerequisites → Skip, inkl. Koexistenz mit einem bereits erzeugten 2.
+Warehouse), Pattern 6 (`lot_id`-m2o-Tupel), Pattern 7 (Tracking-Verteilung,
+`assign_tracking` isoliert), Pattern 8 (`stock.lot`-Batch-Call-Count).
 
 ## 5. Umsetzungsreihenfolge
 

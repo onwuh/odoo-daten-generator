@@ -233,6 +233,45 @@ CANCEL_BEFORE_UNLINK = {
     "hr.expense": ["action_reset"],
 }
 
+# S13/Befund 2: models whose unlink routinely fails not because of a
+# cancellable state (CANCEL_BEFORE_UNLINK above) but because Odoo still
+# considers them "in use" — a stock.warehouse/stock.location referenced by
+# a stock.quant (and quants themselves are never cleanable at all, see
+# below). Both have an `active` field; on unlink failure delete_run tries
+# `write(active=False)` as a soft fallback before giving up, and reports
+# those separately as "archived", never as "deleted".
+#
+# Asymmetric in practice, live-verified (S13/WP1, demo-test5): archiving a
+# stock.warehouse succeeds even with contained stock — `active` is a
+# warehouse-level flag independent of its locations' own state. Archiving a
+# stock.location that still holds a quant is REFUSED by Odoo too ("Sie
+# können die Standorte ... nicht deaktivieren, da sie immer noch Produkte
+# enthalten") — the same referential state that blocks its unlink blocks
+# its archive. Since stock.quant is never actually removed by this function
+# (no delete access for the API user, see ODOO_GOTCHAS.md), a
+# S13-created stock.location that received any stock this run will end up
+# in `failed`, not `archived`, in the common case — the archive fallback
+# only helps a location this run happened to leave empty. Kept anyway (the
+# attempt is cheap and correct for that case); the code must not claim a
+# symmetric guarantee between warehouse and location here.
+#
+# The `write(active=False)` below is one call for the whole id group
+# (matching the batching convention every other step in this function
+# follows), not per-location — so a mixed group (some locations still
+# holding stock, some empty) fails atomically as one Odoo write and lands
+# entirely in `failed`, not split into `archived`/`failed`. Given the
+# round-robin quant distribution in inventory.py, the realistic cases are
+# already close to all-or-nothing (avg_qty=0 → every location in the group
+# is empty; avg_qty>0 with storables >= locations → every location in the
+# group holds stock) — a per-location loop would only help the narrow case
+# of fewer storables than sub-locations in a single run, at the cost of N
+# individual write calls in the cleanup path. Not worth it here.
+#
+# stock.lot has no `active` field at all (live-verified) — deliberately
+# absent from this set. A tracked lot with a live-referencing quant is
+# permanent residue; no fix in this sprint (Befund 2).
+ARCHIVE_FALLBACK_MODELS = {"stock.warehouse", "stock.location"}
+
 
 def _first_new_error(client: OdooJson2Client, mark: int) -> Optional[str]:
     """The first error recorded since `mark` — already redacted by odoo_client.
@@ -271,7 +310,7 @@ def delete_run(client: OdooJson2Client, journal: RunJournal) -> Dict[str, Any]:
             order.append(model)
         grouped[model].append(rec_id)
 
-    deleted, failed, skipped = 0, [], 0
+    deleted, archived, failed, skipped = 0, 0, [], 0
     skipped = sum(1 for model, _ in journal.entries if model in SKIP_ON_CLEANUP)
 
     for model in order:
@@ -287,7 +326,16 @@ def delete_run(client: OdooJson2Client, journal: RunJournal) -> Dict[str, Any]:
             deleted += len(ids)
         except Exception as exc:
             reason = _first_new_error(client, mark) or str(exc)[:200]
+            if model in ARCHIVE_FALLBACK_MODELS:
+                archive_mark = len(client.errors)
+                try:
+                    client.write(model, ids, {"active": False})
+                    archived += len(ids)
+                    logger.info(f"ℹ️  {len(ids)}× {model} nicht löschbar ({reason}) — archiviert.")
+                    continue
+                except Exception as exc2:
+                    reason = _first_new_error(client, archive_mark) or str(exc2)[:200]
             failed.append({"model": model, "count": len(ids), "error": reason})
             logger.warning(f"⚠️  Löschen von {len(ids)}× {model} fehlgeschlagen: {reason}")
-    return {"deleted": deleted, "failed": failed,
+    return {"deleted": deleted, "archived": archived, "failed": failed,
             "skipped": skipped, "total": len(journal.entries)}

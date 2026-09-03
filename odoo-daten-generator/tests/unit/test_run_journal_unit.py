@@ -453,6 +453,108 @@ def run():
     except Exception as e:
         results.append(("Cache-Verzeichnis ist per Umgebungsvariable setzbar", False, str(e)))
 
+    # ------------------------------------------------------------------
+    # S13/Befund 2: ARCHIVE_FALLBACK_MODELS — unlink failure on a model in
+    # this set retries as write(active=False) before giving up, and is
+    # reported as "archived", never counted as "deleted" or as "failed".
+    # ------------------------------------------------------------------
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = run_journal.RunJournal("demo-archive", Path(tmp))
+            journal.record("stock.warehouse", [5])
+            client = MagicMock()
+            client.errors = []
+
+            def _call_method(model, method, ids=None, **kw):
+                if method == "unlink":
+                    raise Exception("cannot delete: still referenced")
+                return True
+
+            client.call_method.side_effect = _call_method
+            summary = run_journal.delete_run(client, journal)
+            assert summary["deleted"] == 0, summary
+            assert summary["archived"] == 1, summary
+            assert summary["failed"] == [], summary
+            client.write.assert_called_once_with("stock.warehouse", [5], {"active": False})
+        results.append(("delete_run: ARCHIVE_FALLBACK_MODELS — unlink fehlschlägt, "
+                         "write(active=False) rettet, als 'archived' gemeldet", True, ""))
+    except Exception as e:
+        results.append(("delete_run: ARCHIVE_FALLBACK_MODELS — unlink fehlschlägt, "
+                         "write(active=False) rettet, als 'archived' gemeldet", False, str(e)))
+
+    try:
+        # stock.location live-verified (S13/WP1): the archive write() itself
+        # can ALSO fail while a quant still references the location — must
+        # fall through to the normal "failed" bucket, not silently vanish.
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = run_journal.RunJournal("demo-archive-fail", Path(tmp))
+            journal.record("stock.location", [9])
+            client = MagicMock()
+            client.errors = []
+            client.call_method.side_effect = Exception("cannot delete: still contains products")
+            client.write.side_effect = Exception("cannot deactivate: still contains products")
+            summary = run_journal.delete_run(client, journal)
+            assert summary["deleted"] == 0 and summary["archived"] == 0, summary
+            assert len(summary["failed"]) == 1 and summary["failed"][0]["model"] == "stock.location", summary
+        results.append(("delete_run: ARCHIVE_FALLBACK_MODELS — write(active=False) "
+                         "scheitert ebenfalls -> landet in 'failed', nicht verloren", True, ""))
+    except Exception as e:
+        results.append(("delete_run: ARCHIVE_FALLBACK_MODELS — write(active=False) "
+                         "scheitert ebenfalls -> landet in 'failed', nicht verloren", False, str(e)))
+
+    try:
+        # S13/WP5-review: when the archive write ALSO fails, the reported
+        # reason must be the write's own error, not the unlink's — a real
+        # OdooJson2Client appends a structured entry to client.errors on
+        # every failed call, so _first_new_error(client, mark) would return
+        # the unlink's (earlier) entry unless delete_run re-marks before the
+        # write attempt. Simulate that append behaviour explicitly, since a
+        # bare MagicMock never grows client.errors on its own — the earlier
+        # "write also fails" test above leaves client.errors empty and so
+        # cannot catch this class of bug.
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = run_journal.RunJournal("demo-archive-reason", Path(tmp))
+            journal.record("stock.location", [11])
+            client = MagicMock()
+            client.errors = []
+
+            def _call_method(model, method, ids=None, **kw):
+                client.errors.append({"error_body": "unlink: still contains products"})
+                raise Exception("unlink failed")
+
+            def _write(model, ids, values, context=None):
+                client.errors.append({"error_body": "archive: still contains products (write)"})
+                raise Exception("write failed")
+
+            client.call_method.side_effect = _call_method
+            client.write.side_effect = _write
+            summary = run_journal.delete_run(client, journal)
+            assert len(summary["failed"]) == 1, summary
+            assert summary["failed"][0]["error"] == "archive: still contains products (write)", summary
+        results.append(("delete_run: Archive-Fallback scheitert -> gemeldeter Grund ist der "
+                         "der Write, nicht der (frühere) Unlink-Grund", True, ""))
+    except Exception as e:
+        results.append(("delete_run: Archive-Fallback scheitert -> gemeldeter Grund ist der "
+                         "der Write, nicht der (frühere) Unlink-Grund", False, str(e)))
+
+    try:
+        # stock.lot is deliberately NOT in ARCHIVE_FALLBACK_MODELS (no
+        # active field, live-verified) — unlink failure must go straight to
+        # "failed" without ever calling write().
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = run_journal.RunJournal("demo-lot-no-archive", Path(tmp))
+            journal.record("stock.lot", [3])
+            client = MagicMock()
+            client.errors = []
+            client.call_method.side_effect = Exception("cannot delete: referenced by stock.quant")
+            summary = run_journal.delete_run(client, journal)
+            assert summary["archived"] == 0, summary
+            assert len(summary["failed"]) == 1 and summary["failed"][0]["model"] == "stock.lot", summary
+            client.write.assert_not_called()
+        results.append(("delete_run: stock.lot hat keinen Archive-Fallback (kein active-Feld)", True, ""))
+    except Exception as e:
+        results.append(("delete_run: stock.lot hat keinen Archive-Fallback (kein active-Feld)", False, str(e)))
+
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results
 
