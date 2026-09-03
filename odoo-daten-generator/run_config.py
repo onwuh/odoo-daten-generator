@@ -330,7 +330,21 @@ def build_selections(payload: Dict[str, Any]) -> Tuple[ModuleSelections, Set[str
         selected.add("stock")
         # dict-shaped, not a bare int: orchestrator's module_code "stock" is
         # looked up via getattr(ModuleSelections, "stock") — see config.py.
-        sel.stock = {"avg_qty": _as_int(stock.get("avg_qty"), "stock.avg_qty", 0, 100000, default=50)}
+        lot_pct = _as_pct(stock.get("tracking_lot_pct"), "stock.tracking_lot_pct", default=0)
+        serial_pct = _as_pct(stock.get("tracking_serial_pct"), "stock.tracking_serial_pct", default=0)
+        if lot_pct + serial_pct > 100:
+            # Same clamp as data_factory.assign_tracking's own internal
+            # guard (S13/S8) — defense in depth, not a substitute for it.
+            serial_pct = 100 - lot_pct
+        sel.stock = {
+            "avg_qty": _as_int(stock.get("avg_qty"), "stock.avg_qty", 0, 100000, default=50),
+            "sub_locations": _as_int(stock.get("sub_locations"), "stock.sub_locations", 0, 50, default=0),
+            "second_warehouse": _as_bool(stock.get("second_warehouse")),
+            "tracking_lot_pct": lot_pct,
+            "tracking_serial_pct": serial_pct,
+            "tracking_serial_max": _as_int(
+                stock.get("tracking_serial_max"), "stock.tracking_serial_max", 1, 1000, default=10),
+        }
 
     hr_expense = _as_dict(modules.get("hr_expense"), "modules.hr_expense")
     if _enabled(hr_expense):
@@ -506,6 +520,28 @@ def estimate_record_counts(ctx: RunContext, selected: Set[str]) -> Dict[str, int
         counts["Bestellungen"] = sel.purchase
     if "stock" in selected and sel.stock:
         counts["Lagerbestände"] = c.num_storables or 0
+        counts["Lagerplätze"] = int(sel.stock.get("sub_locations", 0))
+        if sel.stock.get("second_warehouse"):
+            counts["Zweites Lager"] = 1
+        lot_pct = int(sel.stock.get("tracking_lot_pct", 0))
+        serial_pct = int(sel.stock.get("tracking_serial_pct", 0))
+        if lot_pct:
+            counts["Chargen (Lot-Nummern)"] = round((c.num_storables or 0) * lot_pct / 100)
+        if serial_pct:
+            serial_max = int(sel.stock.get("tracking_serial_max", 10))
+            # Upper bound, not exact — N per serial product is random up to
+            # serial_max (crm_lost's "(max.)" pattern above), soft-capped at
+            # modules/inventory.py's own _MAX_SERIAL_RECORDS_PER_RUN (500,
+            # not imported here to avoid reaching into a private module
+            # constant — kept in sync by hand, both are S13 additions). The
+            # min(..., 500) below is a display ceiling, not a hard guarantee:
+            # inventory.py's soft-cap design never drops a serial product to
+            # 0 once the budget is spent (it still gets 1 quant+lot), so the
+            # real total can exceed 500 by up to the count of serial
+            # products processed after exhaustion — this preview undercounts
+            # in that edge case rather than lying about a smaller number.
+            counts["Seriennummern (max.)"] = min(
+                round((c.num_storables or 0) * serial_pct / 100) * serial_max, 500)
     if "hr_expense" in selected and sel.hr_expense:
         counts["Spesen"] = sel.hr * int(sel.hr_expense.get("count_per_employee", 0))
 

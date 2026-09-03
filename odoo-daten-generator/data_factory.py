@@ -237,3 +237,28 @@ def assign_barcodes(vals_list: List[dict], existing_barcodes: Set[str], max_atte
                 break
         else:
             logger.warning("EAN-13-Kollisionslimit erreicht, überspringe Barcode für ein Produkt.")
+
+
+def assign_tracking(vals_list: List[dict], lot_pct: int, serial_pct: int) -> None:
+    """Mutates each dict in vals_list in place, adding a 'tracking' key
+    ('lot'/'serial'/'none') to storables (S13/R13). Wirkt nur auf Einträge
+    mit vals['is_storable'] is True — die _PRODUCT_TYPE_MAP-Kennzeichnung,
+    die build_products beim Vals-Aufbau setzt (siehe oben). Services/
+    Consumables bleiben unangetastet (kein 'tracking'-Key -> Odoo-Default
+    'none').
+
+    Clamps its own percentages rather than trusting the caller (lot_pct +
+    serial_pct capped at 100) — this is a public function Pattern-7 tests
+    call directly, same defensive posture as assign_barcodes' own
+    max_attempts guard above. Pattern 1: an empty vals_list is a no-op.
+    """
+    lot_pct = max(0, min(100, lot_pct))
+    serial_pct = max(0, min(100 - lot_pct, serial_pct))
+    for vals in vals_list:
+        if vals.get('is_storable') is not True:
+            continue
+        roll = random.uniform(0, 100)
+        if roll < lot_pct:
+            vals['tracking'] = 'lot'
+        elif roll < lot_pct + serial_pct:
+            vals['tracking'] = 'serial'

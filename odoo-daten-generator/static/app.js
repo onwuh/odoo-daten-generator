@@ -503,9 +503,30 @@
         body.appendChild(grid([stepper("stock-qty", "Ø Bestand je Lagerartikel", "", 50, 0, 1000)]));
         body.appendChild(el("div", "field-hint",
           "Setzt Bestandskorrekturen auf lagerfähige Artikel und wendet sie an."));
+        body.appendChild(grid([stepper("stock-sublocs", "Lagerplätze (Sub-Locations)", "", 0, 0, 10)]));
+        body.appendChild(checkLine("stock-wh2", "Zweites Lager anlegen", "", false));
+        body.appendChild(el("div", "field-hint",
+          "Zweites Lager kann über die Bereinigungs-Funktion nicht vollständig entfernt werden, nur archiviert."));
+        body.appendChild(slider("stock-lot-pct", "Chargen-Tracking (Lot) %", 0, 0, 100));
+        body.appendChild(slider("stock-serial-pct", "Seriennummern-Tracking %", 0, 0, 100));
+        body.appendChild(grid([stepper("stock-serial-max", "Max. Seriennummern je Produkt", "", 10, 1, 100)]));
+        body.appendChild(el("div", "field-hint",
+          "Chargen-/Seriennummern-Zuweisung braucht die Stammdaten-Erzeugung dieses Laufs — " +
+          "wirkungslos bei \"Vorhandene Daten verwenden\" oder übersprungenen Stammdaten. " +
+          "Seriennummern erzeugen deutlich mehr Einzeldatensätze als Chargen. Chargen-/" +
+          "Seriennummern-Datensätze können über die Bereinigungs-Funktion nicht entfernt werden " +
+          "(weder gelöscht noch archiviert)."));
       },
       collect: function () {
-        return { enabled: true, avg_qty: intVal("stock-qty", 50) };
+        return {
+          enabled: true,
+          avg_qty: intVal("stock-qty", 50),
+          sub_locations: intVal("stock-sublocs", 0),
+          second_warehouse: checked("stock-wh2"),
+          tracking_lot_pct: intVal("stock-lot-pct", 0),
+          tracking_serial_pct: intVal("stock-serial-pct", 0),
+          tracking_serial_max: intVal("stock-serial-max", 10),
+        };
       },
     },
     {
@@ -1212,9 +1233,10 @@
     setText("cleanup-hint", "Lösche…");
     api("/api/runs/" + encodeURIComponent(state.runId) + "/cleanup", { method: "POST", body: {} })
       .then(function (data) {
-        setText("cleanup-hint",
-          data.deleted + " von " + data.total + " Datensätzen gelöscht" +
-          (data.failed && data.failed.length ? ", " + data.failed.length + " Modell(e) fehlgeschlagen" : "."));
+        var parts = [data.deleted + " von " + data.total + " Datensätzen gelöscht"];
+        if (data.archived) parts.push(data.archived + " archiviert (nicht endgültig löschbar)");
+        if (data.failed && data.failed.length) parts.push(data.failed.length + " Modell(e) fehlgeschlagen");
+        setText("cleanup-hint", parts.join(", ") + ".");
       })
       .catch(function (err) { setText("cleanup-hint", err.message); })
       .finally(function () { button.disabled = false; });

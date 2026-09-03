@@ -484,7 +484,7 @@ def api_run_cleanup(run_id: str, session=Depends(get_session_csrf)) -> Dict[str,
     _connected(session)
     journal = RunJournal.load(run_id)
     if not journal.entries:
-        return {"deleted": 0, "failed": [], "skipped": 0, "total": 0}
+        return {"deleted": 0, "archived": 0, "failed": [], "skipped": 0, "total": 0}
     client = OdooJson2Client(session.base_url, session.database, session.odoo_key)
     return delete_run(client, journal)
 
