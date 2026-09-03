@@ -241,5 +241,59 @@ def run():
     except Exception as e:
         results.append(("Pattern 1: assign_quality_state empty ids, no crash", False, str(e)))
 
+    # ------------------------------------------------------------------
+    # S15/R20 — assign_analytic_distribution: distribution, never-overwrite,
+    # clamp, empty guards
+    # ------------------------------------------------------------------
+    try:
+        # Pattern 7: both touched and untouched entries appear over enough samples.
+        random.seed(7)
+        vals_list = [{"product_id": i} for i in range(200)]
+        data_factory.assign_analytic_distribution(vals_list, pct=30, account_ids=[1, 2, 3])
+        touched = [v for v in vals_list if "analytic_distribution" in v]
+        untouched = [v for v in vals_list if "analytic_distribution" not in v]
+        assert touched, "no entry got a distribution"
+        assert untouched, "every entry got a distribution"
+        for v in touched:
+            keys = list(v["analytic_distribution"].keys())
+            assert len(keys) == 1 and int(keys[0]) in (1, 2, 3), v
+            assert v["analytic_distribution"][keys[0]] == 100.0, v
+        results.append(("Pattern 7: assign_analytic_distribution touched/untouched distribution (n=200)", True, ""))
+    except Exception as e:
+        results.append(("Pattern 7: assign_analytic_distribution touched/untouched distribution (n=200)", False, str(e)))
+
+    try:
+        # Never overwrites an entry that already carries the key.
+        vals_list = [{"product_id": 1, "analytic_distribution": {"9": 100.0}}]
+        data_factory.assign_analytic_distribution(vals_list, pct=100, account_ids=[1, 2, 3])
+        assert vals_list[0]["analytic_distribution"] == {"9": 100.0}, vals_list[0]
+        results.append(("assign_analytic_distribution never overwrites an existing value", True, ""))
+    except AssertionError as e:
+        results.append(("assign_analytic_distribution never overwrites an existing value", False, str(e)))
+
+    try:
+        # Clamps pct into [0, 100] rather than trusting the caller.
+        vals_list = [{"product_id": i} for i in range(20)]
+        data_factory.assign_analytic_distribution(vals_list, pct=150, account_ids=[1])
+        assert all("analytic_distribution" in v for v in vals_list), \
+            "pct>100 must clamp to 100, i.e. every entry touched"
+        vals_list2 = [{"product_id": i} for i in range(20)]
+        data_factory.assign_analytic_distribution(vals_list2, pct=-10, account_ids=[1])
+        assert all("analytic_distribution" not in v for v in vals_list2), \
+            "pct<0 must clamp to 0, i.e. no entry touched"
+        results.append(("assign_analytic_distribution clamps pct to [0, 100]", True, ""))
+    except AssertionError as e:
+        results.append(("assign_analytic_distribution clamps pct to [0, 100]", False, str(e)))
+
+    try:
+        # Pattern 1: empty vals_list and empty account_ids are both no-ops.
+        data_factory.assign_analytic_distribution([], pct=50, account_ids=[1])
+        vals_list = [{"product_id": 1}]
+        data_factory.assign_analytic_distribution(vals_list, pct=100, account_ids=[])
+        assert "analytic_distribution" not in vals_list[0], vals_list[0]
+        results.append(("Pattern 1: assign_analytic_distribution empty vals_list/account_ids, no crash", True, ""))
+    except Exception as e:
+        results.append(("Pattern 1: assign_analytic_distribution empty vals_list/account_ids, no crash", False, str(e)))
+
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

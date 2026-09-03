@@ -17,15 +17,19 @@ from config import DemoCriteria, ModuleSelections, RunContext
 from modules import purchase
 
 
-def _make_ctx(num_purchase=1, confirm_pct=70, component_ids=None, company_ids=None, supplier_ids=None):
+def _make_ctx(num_purchase=1, confirm_pct=70, component_ids=None, company_ids=None, supplier_ids=None,
+              analytic=None):
     criteria = DemoCriteria(
         mode="both", industry="IT", num_companies=0,
         num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
         num_services=0, num_consumables=0, num_storables=0,
     )
+    sel_kwargs = {"purchase": num_purchase, "purchase_confirm_pct": confirm_pct}
+    if analytic is not None:
+        sel_kwargs["analytic"] = analytic
     ctx = RunContext(
         criteria=criteria,
-        module_selections=ModuleSelections(purchase=num_purchase, purchase_confirm_pct=confirm_pct),
+        module_selections=ModuleSelections(**sel_kwargs),
         industry="IT", language_name="German", language_code="de", gemini_model_name="test",
     )
     ctx.component_ids = component_ids if component_ids is not None else [1, 2, 3]
@@ -246,6 +250,63 @@ def run():
         results.append(("_create_bills_from_pos_manual: partner_id/product_id tuples unpacked (Pattern 6)", True, ""))
     except AssertionError as e:
         results.append(("_create_bills_from_pos_manual: partner_id/product_id tuples unpacked (Pattern 6)", False, str(e)))
+
+    # ==================================================================
+    # S15/R20 — analytic distribution wiring
+    # ==================================================================
+
+    try:
+        # Pattern 3: analytic disabled (default) -> helper never called, no
+        # analytic_distribution in the created PO-line vals.
+        client = _mock_client()
+        ctx = _make_ctx(num_purchase=2, supplier_ids=[555])
+        with patch("modules.purchase.odoo_actions.get_or_create_analytic_accounts") as mock_helper:
+            purchase.create_purchase_data(client, gemini=None, ctx=ctx)
+            mock_helper.assert_not_called()
+        po_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'purchase.order']
+        for po_vals in po_batches[0].args[1]:
+            for cmd in po_vals["order_line"]:
+                assert "analytic_distribution" not in cmd[2], cmd
+        results.append(("create_purchase_data: analytic disabled -> no helper call, no distribution (Pattern 3)", True, ""))
+    except AssertionError as e:
+        results.append(("create_purchase_data: analytic disabled -> no helper call, no distribution (Pattern 3)", False, str(e)))
+
+    try:
+        # purchase_pct=0 with analytic enabled -> its own sub-off-switch.
+        client = _mock_client()
+        ctx = _make_ctx(num_purchase=2, supplier_ids=[555],
+                        analytic={"enabled": True, "sale_pct": 50, "purchase_pct": 0, "expense_pct": 50})
+        with patch("modules.purchase.odoo_actions.get_or_create_analytic_accounts") as mock_helper:
+            purchase.create_purchase_data(client, gemini=None, ctx=ctx)
+            mock_helper.assert_not_called()
+        results.append(("create_purchase_data: purchase_pct=0 -> no helper call (Pattern 3)", True, ""))
+    except AssertionError as e:
+        results.append(("create_purchase_data: purchase_pct=0 -> no helper call (Pattern 3)", False, str(e)))
+
+    try:
+        # Happy path: the flat po_line_vals_list mutation (assign_analytic_
+        # distribution) must show up INSIDE the (0,0,dict) tuples nested in
+        # each order's order_line — same dict objects by reference.
+        client = _mock_client()
+        ctx = _make_ctx(num_purchase=3, supplier_ids=[555], component_ids=[1, 2, 3, 4, 5],
+                        analytic={"enabled": True, "sale_pct": 0, "purchase_pct": 100, "expense_pct": 0})
+        with patch("modules.purchase.odoo_actions.get_or_create_analytic_accounts",
+                  return_value=[801, 802]) as mock_helper:
+            purchase.create_purchase_data(client, gemini=None, ctx=ctx)
+            mock_helper.assert_called_once()
+        po_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'purchase.order']
+        assert len(po_batches) == 1, po_batches
+        all_line_vals = [cmd[2] for po_vals in po_batches[0].args[1] for cmd in po_vals["order_line"]]
+        assert all_line_vals, "expected at least one PO line"
+        assert all("analytic_distribution" in v for v in all_line_vals), \
+            "purchase_pct=100 must reach every created line"
+        for v in all_line_vals:
+            keys = list(v["analytic_distribution"].keys())
+            assert len(keys) == 1 and int(keys[0]) in (801, 802), v
+        results.append(("create_purchase_data: analytic enabled -> distribution reaches nested order_line tuples", True,
+                        f"{len(all_line_vals)} lines"))
+    except AssertionError as e:
+        results.append(("create_purchase_data: analytic enabled -> distribution reaches nested order_line tuples", False, str(e)))
 
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results

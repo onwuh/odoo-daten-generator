@@ -573,32 +573,68 @@ Payoff im Quality-App-Dashboard)
 
 ### R20 🆕 Geplant (S15) — Analytic Accounting
 
-**Live bestätigt:** `account.analytic.plan` (Hierarchie via `parent_id`/`children_ids`),
-`account.analytic.account` (`plan_id` `required`), `analytic_distribution` (json-Feld,
-Format vermutlich `{"<analytic_account_id>": <prozent>}`) bereits bestätigt auf
-`account.analytic.line` **und** `hr.expense` — auf `sale.order.line`/`purchase.order.
-line`/`account.move.line` mit hoher Wahrscheinlichkeit identisch (Odoo-weit
-vereinheitlichtes Muster seit Version 17), aber **vor Umsetzung live gegenprüfen, nicht
-annehmen**.
+**Live bestätigt (S15/WP1, 2026-09-03, gegen `demo-test5.odoo.com`):**
+`analytic_distribution` (json, nicht required, Format `{"<analytic_account_id als
+String>": <Prozent als Float>}`) existiert **identisch** auf allen fünf Zielmodellen:
+`sale.order.line`, `purchase.order.line`, `account.move.line`, `hr.expense`,
+`account.analytic.line` — die ursprüngliche "mit hoher Wahrscheinlichkeit"-Annahme war
+richtig, jetzt zweifach per echtem `fields_get` bestätigt.
+
+**Zwei Korrekturen an R20s ursprünglichem Text, live gefunden (WP1):**
+1. **Der bestehende Default-Plan (`account.analytic.plan` id=1, "Project Plan") ist
+   bereits stark durch S7/R8s eigene Projekt-Auto-Erzeugung besetzt** (223
+   `account.analytic.account`-Records live gezählt, je einer pro
+   `service_tracking='task_in_project'`-Projekt) — R20 legt seine Kostenstellen
+   ("Vertrieb"/"Produktion"/"Verwaltung") deshalb unter einem **neuen, eigenen** Plan an
+   (`account.analytic.plan.create({"name": ...})`, keine weiteren Pflichtfelder außer
+   `name`), nicht unter Plan 1. Hält die beiden Buchungskreise sauber getrennt: Plan 1
+   bleibt "ein Analytic-Account pro Projekt" (Odoo-eigene Ableitung, siehe unten), der
+   neue Plan ist "eine Handvoll Kostenstellen" (dieses Items eigene Erzeugung).
+2. **`analytic_distribution` lässt sich entgegen dem ursprünglichen Text sehr wohl auf
+   einer bereits `state='posted'` `account.move.line` schreiben** — live getestet:
+   `write()` liefert `True`, Read-back zeigt den neuen Wert. Ändert nichts am gewählten
+   Design (Distribution weiterhin **vor** `accounting.py` auf der `sale.order.line`
+   setzen, native Wizard-Propagation nutzen — sauberer, kein Nachtrags-Write nötig), aber
+   die "kein gangbarer Fallback"-Aussage war falsch; ein Nachtrags-Write auf gebuchte
+   Move-Lines wäre technisch möglich, ist nur nicht der gewählte Weg.
+
+**Weitere Live-Funde:**
+- Nur **110 von 1332** `sale.order.line`-Records (≈8 %) tragen aktuell überhaupt eine
+  `analytic_distribution` — exakt die `service_tracking='task_in_project`-Teilmenge aus
+  S7/R8. Die übrigen ≈92 % sind der reale Zielbereich dieses Items, keine Überschneidung.
+- **End-to-End live bestätigt:** eine manuell auf einer `sale.order.line` gesetzte
+  `analytic_distribution` überlebt `action_confirm` unverändert und wird vom
+  `sale.advance.payment.inv`-Wizard (S7/R8) **automatisch** auf die erzeugte
+  `account.move.line` übertragen — kein eigener Übertragungscode nötig, exakt wie geplant.
+- `account.analytic.line.analytic_distribution` ist **`store: false`** (reines Compute-
+  Feld) — nicht per Domain filterbar (`search_read` mit `!=`/`in` auf dieses Feld liefert
+  einen 500er), bestätigt aber zusätzlich die bestehende "nicht anfassen"-Entscheidung
+  unten: ein Compute-Feld ohne Storage lässt sich ohnehin nicht sinnvoll direkt setzen.
+- `hr.department`: nur **ein** Department existiert live ("Administration"), `hr.py`
+  legt selbst nie welche an — die ursprünglich "optionale" 1:1-Kopplung Kostenstelle↔
+  Department bringt bei nur einem Department keinen Mehrwert. **Gestrichen**, nicht nur
+  zurückgestellt.
 
 **Dev Tasks:**
-- Bestehenden Default-Plan **suchen** (`account.analytic.line.account_id`-Domain zeigt
-  `plan_id child_of 1` — vermutlich existiert bereits ein Default-Plan id=1 für die
-  Projekt-Zeiterfassung aus S7/R8) statt blind einen neuen anzulegen.
-- Eine Handvoll `account.analytic.account`-Kostenstellen anlegen (z. B. "Vertrieb",
-  "Produktion", "Verwaltung") — optional 1:1 an bestehende `hr.department`-Records aus
-  `hr.py` gekoppelt.
+- Ein neuer, gemeinsamer Helper (`odoo_actions.get_or_create_analytic_accounts` o. ä.,
+  Cross-Modul-Helper analog `get_main_company_id`) legt Plan + Kostenstellen lazy und
+  memoized über `ctx.analytic_account_ids` an — egal welches der drei Module (`sale`,
+  `purchase`, `hr_expense`) zuerst läuft, es erzeugt sie einmal, die anderen beiden lesen
+  `ctx.analytic_account_ids` und erzeugen nichts doppelt. Kein `orchestrator.py`-
+  Reihenfolge-🔒 nötig — bewusste Abweichung von "wer zuerst läuft erzeugt sie" (`sale`
+  liefe laut `module_order` immer zuerst, aber sich darauf zu verlassen wäre eine
+  stille, brüchige Kopplung an eine Ausführungsreihenfolge, die dieses Item nicht
+  besitzt).
 - `analytic_distribution` auf einem konfigurierbaren Anteil von Sale-Order-**Zeilen**
-  setzen, **bevor** `accounting.py` läuft (Pipeline-Position 4 vs. 8, siehe
-  Objekt-Pipeline oben) — Rechnungszeilen übernehmen die Distribution serverseitig vom
-  verknüpften `sale.order.line` über den bestehenden `sale.advance.payment.inv`-Wizard
-  (S7/R8). **Peer-Review-Korrektur:** `analytic_distribution` lässt sich auf bereits
-  **gebuchten** `account.move.line`s nicht mehr schreiben — `accounting.post_invoices`
-  bucht sie (Position 8); ein direkter Nachtrag auf Invoice-Zeilen nach dem Post-Schritt
-  ist also kein gangbarer Fallback, es muss vorher über die SO-Zeile laufen.
-- `analytic_distribution` zusätzlich auf einem Anteil der Purchase-Order-Zeilen und (R19 ist
-  seit S12 gelandet, siehe `ROADMAP_ARCHIVE.md`) Expense-Zeilen setzen — beide unabhängig
-  vom Sale/Invoice-Pfad.
+  setzen, **bevor** `accounting.py` läuft (Pipeline-Position 3 vs. 8, siehe
+  Objekt-Pipeline oben) — nur auf Zeilen, deren `analytic_distribution` noch leer ist
+  (die S7/R8-Projekt-Zeilen NIE überschreiben, siehe "Explizit nicht anfassen" unten).
+  Rechnungszeilen übernehmen die Distribution serverseitig vom verknüpften
+  `sale.order.line` über den bestehenden `sale.advance.payment.inv`-Wizard (S7/R8,
+  Übernahme live bestätigt, siehe oben).
+- `analytic_distribution` zusätzlich auf einem Anteil der Purchase-Order-Zeilen und (R19
+  ist seit S12 gelandet, siehe `ROADMAP_ARCHIVE.md`) Expense-Zeilen setzen — beide
+  unabhängig vom Sale/Invoice-Pfad, beide live schreib-/lesbar bestätigt.
 - **Explizit NICHT anfassen:** `project.py`s bestehende Timesheet-Analytic-Anbindung
   (S7/R8). **Peer-Review-Korrektur zur Begründung:** `project.py:210-244` setzt beim
   Anlegen von `account.analytic.line`-Timesheet-Einträgen nur `project_id`/`task_id`/
@@ -606,13 +642,21 @@ annehmen**.
   aus dem Projekt ab). Der Grund, das nicht anzufassen, ist also nicht "wäre bereits
   korrekt gesetzt", sondern: ein zusätzlicher expliziter `account_id`-Write würde die
   bestehende, funktionierende serverseitige Ableitung überschreiben/duplizieren, ohne
-  Mehrwert — dieses Item bleibt additiv auf andere Belegarten beschränkt.
+  Mehrwert — dieses Item bleibt additiv auf andere Belegarten beschränkt. Aus demselben
+  Grund darf die neue Sale-Zeilen-Logik auch nie eine bereits gesetzte (S7/R8-)
+  Distribution überschreiben.
 
-**Tests:** Pattern 3 (Flag aus → keine `analytic_distribution`-Writes), Pattern 4
-(Read-back `analytic_distribution`-JSON-Struktur pro Belegzeile).
+**Tests:** Pattern 1 (leerer Kandidatenpool für den Kostenstellen-Zuweisungs-Draw),
+Pattern 3 (Flag aus → keine `analytic_distribution`-Writes), Pattern 4 (Read-back
+`analytic_distribution`-JSON-Struktur pro Belegzeile, plus des End-to-End-Wizard-
+Übertragungspfads), Pattern 5 (fehlende Prerequisites → Skip), Pattern 7
+(Anteils-Verteilung über eine eigenständige, isoliert testbare `data_factory`-Funktion,
+analog `assign_tracking`/`assign_quality_state`), Pattern 8 (Batch-Call-Count für die
+Kostenstellen-Erzeugung).
 
-**Komplexität:** Hoch (4+ Dateien: `sale.py`, `purchase.py`, `accounting.py`,
-`expenses.py`) · **Benefit:** Mittel-Hoch
+**Komplexität:** Hoch (4+ Dateien: `sale.py`, `purchase.py`, `odoo_actions.py`,
+`expenses.py`, plus `config.py`/`run_config.py`/`static/app.js` für die neue
+Konfigurationsfläche) · **Benefit:** Mittel-Hoch
 
 ---
 
@@ -876,6 +920,209 @@ Quant-Zweig sterben), Pattern 7 (`orderpoints_pct`- **und**
 `quality_state`-Verteilung, letztere über eine eigenständige, isoliert
 testbare `data_factory`-Funktion), Pattern 8 (Batch-Call-Count für
 Orderpoints/Quality-Points/-Checks).
+
+### S15 — WP-Sequenz (Analytic Accounting: R20)
+
+**Stand 2026-09-03.** WP1 (gebündelte Live-Verifikation gegen
+`demo-test5.odoo.com`) gelaufen — Ergebnisse und die beiden Korrekturen am
+ursprünglichen R20-Text stehen oben im R20-Abschnitt selbst (nicht hier
+verdoppelt). **Beide Cold-Review-Runden gelaufen** (2× fremder Opus-Agent, Plan-Text +
+Live-Repo, keine Konversationshistorie, S5-S14-Verfahren) — Runde 1 fand
+1 echten Blocker + 5 Should-Fixes, Runde 2 (nach Einarbeitung) fand 0
+Blocker + 3 weitere Should-Fixes, alle unten eingearbeitet (kein dritter
+Durchgang nötig, analog S13). Plan ist damit freigegeben zur
+Implementierung.
+
+**Zentrale Design-Entscheidung (Grund für den eigenen WP2/WP3-Schnitt):**
+R20 ist — anders als R12/R18 in S14 — **kein neues orchestriertes Modul**.
+Es erweitert drei bestehende (`sale.py`, `purchase.py`, `expenses.py`) um
+ein zusätzliches Feld auf bereits erzeugten Zeilen, ohne eigene
+`WANTED_MODULES`/`MODULE_RUN_ORDER`/`orchestrator.py`-Eintrag — analog zu
+R16 Produkt-Ebene (additiv in `master_data.py`), nicht analog zu R19
+(eigenes Modul). Die "Referenz — Registrierungskette für ein neues
+orchestriertes Modul" oben gilt deshalb **nicht** vollständig; nur die
+Punkte 4-6 (Config-Parsing, Vorschau-Zeile, UI) sind einschlägig — von
+Cold-Review 1 gegen `orchestrator.py`/`run_config.py` bestätigt, kein
+Blocker.
+
+Die Kostenstellen-Erzeugung (Plan + `account.analytic.account`s) braucht
+genau einmal pro Lauf zu passieren, aber wird potenziell von drei
+unabhängig gateten Modulen gebraucht (`sale`/`purchase`/`hr_expense`) —
+ein Modul könnte laufen, ohne dass die anderen beiden es tun. Statt sich
+auf `orchestrator.py`s tatsächliche Reihenfolge zu verlassen (`sale` liefe
+zuerst, aber das zu einer stillen Voraussetzung zu machen wäre brüchig),
+bekommt jedes der drei Module über einen gemeinsamen, lazy+memoized
+`odoo_actions`-Helper Zugriff (`ctx.analytic_account_ids` als Cache,
+gleiches Muster wie `mrp.py`s `_get_company_id()`, nur über `ctx` geteilt
+statt über eine lokale Closure, weil hier mehrere getrennte Modul-
+Funktionen denselben Zustand brauchen, nicht nur mehrere Call-Sites
+innerhalb einer Funktion).
+**Cold-Review-Should-Fix 2 (`ctx.analytic_account_ids`-Memoization):**
+`mrp.py`s `_get_company_id()`-Vorbild memoized über eine Wrapper-Liste
+gerade damit ein legitimes leeres Ergebnis trotzdem als "schon versucht"
+zählt — ein `RunContext.analytic_account_ids: List[int]` per
+Wahrheitswert geprüft würde bei einem legitim leeren ersten Versuch die
+Kostenstellen-Erzeugung (und damit einen zweiten `account.analytic.plan`)
+bei jedem weiteren Modul-Aufruf wiederholen. Feld wird stattdessen
+`Optional[List[int]] = None`, geprüft über `is None`, nicht
+Wahrheitswert.
+
+**Cold-Review-Blocker 1 (kritisch, ändert WP3s Sale-Ansatz):** die
+"nie einen bereits gesetzten Wert überschreiben"-Garantie lässt sich an
+der ursprünglich geplanten Stelle in `sale.py` **nicht** einhalten.
+`sale.py` baut Order-Zeilen als `(0,0,{...})`-Command-Tupel **inline** in
+einem einzigen `sale.order.create()`-Aufruf (kein separater
+`sale.order.line.create()`-Schritt) — nichts ist zu diesem Zeitpunkt
+persistiert, und die verfügbaren Produkte werden nur mit `id` abgefragt,
+`service_tracking` gar nicht. Odoos eigene serverseitige Analytic-
+Ableitung für `service_tracking='task_in_project'`-Zeilen (S7/R8) läuft
+aber erst bei `action_confirm` — zum Vals-Bau-Zeitpunkt ist "hat diese
+Zeile schon einen Wert" für jede Zeile trivial falsch, die Prüfung hat
+also nichts zu prüfen. WP1s Live-Test (manuell gesetzter Wert überlebt
+`action_confirm` unverändert) deckt außerdem nicht ab, was bei einer
+**echten** `task_in_project`-Zeile passiert, wenn dort vorher schon
+manuell etwas gesetzt wurde — überschreibt Odoos native Ableitung dann,
+wird sie übersprungen, oder gibt es einen Konflikt? Ungetestet, und genau
+das Szenario, das dieses Item explizit vermeiden soll.
+
+**Fix (übernimmt Cold-Review-Should-Fix 3s Vorschlag, ändert `sale.py`s
+Ansatz auf das `assign_quality_state`-Muster statt `assign_tracking`):**
+`sale.py` erzeugt und bestätigt Order-Zeilen **unverändert wie heute**,
+ohne `analytic_distribution` im Erzeugungs-Vals. **Nach**
+`confirm_sale_orders` (aber weiterhin vor `accounting.py`, da `sale.py`
+selbst an Pipeline-Position 3 läuft) liest ein neuer Schritt die
+tatsächlichen `analytic_distribution`-Werte der bestätigten Order-Zeilen
+zurück (`ctx.confirmed_order_ids`, dort bereits am Ende der Funktion
+vorhanden), filtert auf noch-leere Zeilen, zieht einen konfigurierbaren
+Anteil davon, gruppiert die gezogenen Zeilen nach zufällig zugewiesener
+Kostenstelle (wenige Gruppen, z. B. 3 Konten) und schreibt pro Gruppe
+**einen** `write()`-Aufruf (Pattern 8: wenige Batch-Writes, nicht ein
+`write()` pro Zeile). Robuster als ein Vorab-`service_tracking`-Produkt-
+Ausschluss: lässt Odoos native Ableitung erst wirklich passieren, prüft
+danach den echten Zustand, statt ihn vorherzusagen — entspricht der
+bestehenden "native vor manuell"-Konvention dieser Codebase
+(`action_apply_inventory`/`action_confirm`/`do_pass`/`do_fail` u. a.).
+`purchase.py`/`expenses.py` haben dieses Problem **nicht** — Odoo leitet
+für Purchase-/Expense-Zeilen nichts automatisch her, beide bleiben beim
+einfacheren Vals-vor-`create_batch`-Muster (`assign_analytic_distribution`
+als geteilte `data_factory`-Funktion, analog `assign_tracking`).
+
+**Cold-Review-Should-Fix 6 (Batch-Form-Unterschied, kein Blocker, nur
+Dokumentationslücke):** `sale.py` erzeugt Orders einzeln in einer Schleife
+(`client.create`), `purchase.py` batcht auf Order-Ebene
+(`client.create_batch`, `purchase.py:217`) — der geteilte
+`data_factory`-Helper passt trotzdem für beide (er operiert auf der
+jeweiligen `lines`-Liste vor der Erzeugung, unabhängig davon ob die
+äußere Order-Erzeugung selbst gebatcht ist), aber WP3 muss das explizit
+so benennen statt einheitliches Batching zu unterstellen.
+
+**Cold-Review-Should-Fix 5 (live nachgeprüft, erledigt):**
+`account.analytic.account`s einzige Pflichtfelder sind `name` und
+`plan_id` (live per `fields_get` bestätigt) — `company_id` ist **nicht**
+erforderlich und wird beim Fehlen automatisch auf die aktuelle Firma
+gesetzt (live per Create-ohne-`company_id`+Read-back bestätigt). Der
+WP2-Helper muss `company_id` also nicht selbst auflösen.
+
+**Cold-Review-Should-Fix 4 (Test-Erinnerung für WP2):**
+`tests/unit/test_run_config_unit.py`s `_FULL`-Payload (Exact-Equality-
+Check) braucht einen neuen `"analytic"`-Eintrag, sobald
+`build_selections` `sel.analytic` setzt — derselbe Test, den S14/WP2
+schon einmal wegen eines neuen `stock`-Keys anpassen musste.
+
+**Cold-Review Runde 2 (2026-09-03, zweiter fremder Opus-Agent, Plan-Text +
+Live-Repo, keine Konversationshistorie) — 0 Blocker, 3 Should-Fixes, alle
+eingearbeitet:**
+
+1. **Load-bearing und ungetestet:** Blocker-1-Fix hängt daran, dass
+   `write()` auf einer bereits **bestätigten** (`state='sale'`)
+   `sale.order.line` funktioniert — WP1 hatte das nur für eine bereits
+   **gebuchte** `account.move.line` bestätigt, ein anderes Modell in
+   anderem Lebenszyklus-Zustand. **Live nachgeprüft (2026-09-03):** Order
+   erzeugt, bestätigt (`state` → `sale`), `write()` mit
+   `analytic_distribution` auf die jetzt bestätigte Zeile — `True`,
+   Read-back zeigt den neuen Wert. Blocker-1-Fix ist damit vollständig
+   live abgesichert, kein Restrisiko mehr.
+2. **`purchase.py`s Vals-Form passt nicht direkt.** `purchase.py:196-206`
+   baut `lines` als Liste von `(0, 0, {...})`-Tupeln **innerhalb** der
+   Order-Schleife, nie als eigene flache Liste — anders als `expenses.py`
+   (dort passt `assign_analytic_distribution` direkt auf den flachen
+   `vals_list`). Fix: beim Bau jeder Zeile das innere Dict zusätzlich in
+   eine separate `po_line_vals_list` einhängen (Python hält nur eine
+   Referenz — Mutation dieses Dicts über die separate Liste mutiert
+   dasselbe Objekt, das auch im `(0,0,dict)`-Tupel steckt), danach
+   **einmal** `assign_analytic_distribution(po_line_vals_list, ...)`
+   aufrufen, bevor `client.create_batch('purchase.order', po_vals_list)`
+   läuft. `expenses.py` bleibt beim direkten flachen Aufruf.
+3. **`ModuleSelections.analytic` hatte keine Shape-Skizze** — jedes
+   andere Dict-Feld (`stock`, `mrp`, `hr_expense`, `documents`) trägt
+   einen `# shape: {...}`-Kommentar (`config.py:31-75`). Nachgetragen:
+
+   ```python
+   analytic: dict = field(default_factory=dict)
+   # analytic shape: {"sale_pct": int, "purchase_pct": int, "expense_pct": int}
+   # (S15/R20 additive) — jeder Key wird unabhängig von sale.py/purchase.py/
+   # expenses.py gelesen, nicht unter dem enabled-Gate eines einzelnen
+   # Eltern-Moduls verschachtelt (anders als crm_lost unter crm) — näher an
+   # documents' Top-Level-Form. 0 auf einem Key ist dessen eigener
+   # Aus-Schalter, gleiches Präzedens wie S14s orderpoints_pct/
+   # quality_fail_pct — kein separates enabled-Bool.
+   ```
+
+Zeitablauf (`sale` vor `account`) und die "eine `write()` pro
+Kostenstellen-Gruppe"-Batching-Idee wurden in Runde 2 gegen den echten
+Code bestätigt, keine Änderung nötig.
+
+**Offene Ergonomie-Frage für WP2 (kein Blocker, bei Implementierung final
+zu entscheiden):** eigene kompakte GUI-Karte "Kostenrechnung" mit drei
+Reglern (Verkauf/Einkauf/Spesen %) vs. je ein Regler direkt in den
+bestehenden Verkauf-/Einkauf-/Spesen-Karten. Entwurf setzt auf die eigene
+Karte — Analytic Accounting ist konzeptionell ein eigenständiges Feature,
+kein Bestandteil von Sales/Purchase/Expenses selbst, und drei über
+unzusammenhängende Karten verstreute Regler wären schwerer zu finden als
+eine benannte Karte.
+
+| WP | Inhalt | 🔒 | Voraussetzung |
+|---|---|---|---|
+| **WP1** ✅ | Gebündelte Live-Verifikation gegen `demo-test5.odoo.com` (`analytic_distribution`-Format auf allen 5 Zielmodellen, Plan-1-Sättigung, Wizard-Propagation, gebuchte-Move-Line-Schreibbarkeit, `hr.department`-Bestand, `account.analytic.account`-Pflichtfelder, `write()` auf bestätigter `sale.order.line`) | nein | — |
+| **WP2** ✅ | Infrastruktur: `odoo_actions.get_or_create_analytic_accounts` (neuer Plan + Kostenstellen, lazy+memoized über `ctx.analytic_account_ids: Optional[List[int]] = None`, `is None`-Check), `data_factory.assign_analytic_distribution` (Vals-Mutations-Form, analog `assign_tracking` — für `expenses.py` direkt, für `purchase.py` über eine separate flache Line-Vals-Liste, siehe Runde-2-Fund 2), `config.py`/`run_config.py`-Wiring (`ModuleSelections.analytic`, Shape siehe Runde-2-Fund 3, `RunContext.analytic_account_ids`, `build_selections`, `estimate_record_counts`, `test_run_config_unit.py`s `_FULL`-Payload), `static/app.js`-UI (eigene Karte, siehe Ergonomie-Frage oben) | nein | WP1 |
+| **WP3** ✅ | Einbindung: `purchase.py`/`expenses.py` nutzen den WP2-`data_factory`-Helper (Details siehe Runde-2-Fund 2). `sale.py` bekommt einen eigenen Read-nach-Confirm-dann-write-Schritt (siehe Blocker-1-Fix oben, gruppiertes `write()` pro Kostenstelle, live abgesichert) — kein Vals-Mutations-Aufruf des WP2-Helpers | nein | WP2 |
+| **WP4** ✅ | Peer-Review vor Merge (S5-S14-Verfahren), grüner Live-`test_suite.py` | — | WP2-WP3 Code steht |
+
+**WP2/WP3-Ergebnisse (2026-09-03):** wie im zweifach cold-reviewten Plan
+umgesetzt. Live per Browser bis zum `/api/preflight`-Response
+durchgetestet (UI → Payload → `estimate_record_counts`): "Kostenrechnung"-
+Karte, alle drei Prozent-Regler, alle vier neuen Vorschau-Zeilen
+(`Kostenrechnungs-Zeilen Verkauf/Einkauf/Spesen (ca.)`, `Kostenstellen`)
+erscheinen korrekt. Unit-Suite 448/448 grün (23 neue Tests), Live-
+`test_suite.py` 95/95 grün (3 neue Live-Endpunkte, je einer pro Modul,
+gegen `demo-test5.odoo.com`).
+
+**WP4-Ergebnisse (2026-09-03):** unabhängiger Cold-Review-Agent (Diff
+statt Plan-Text, gleiches Verfahren wie S12-S14/WP5) fand **0 Blocker, 0
+Should-Fixes** — bestätigte explizit, dass beide vorherigen Cold-Review-
+Runden-Funde (Blocker-1-Redesign in `sale.py`, `is None`-Memoization,
+`purchase.py`s Referenz-Trick) korrekt im Code ankamen, sowie die
+Referenz-Semantik der `po_line_vals_list`-Mutation, die Gruppierungslogik
+von `sale.py`s `write()`-Aufrufen gegen Odoos "identische Vals pro Call"-
+Regel, und die Key-Namen-Konsistenz zwischen `static/app.js`,
+`run_config.py` und den drei konsumierenden Modulen. Ein Randfall notiert
+(kein Blocker): `get_or_create_analytic_accounts` gated nicht explizit auf
+`'account' in ctx.installed_modules` — in der Praxis eine harte Odoo-
+Abhängigkeit aller drei aufrufenden Module, und der eigene `try/except`
+degradiert ohnehin sauber auf `[]`. Branch
+`s15-analytic-accounting-planning` bereit zum Merge nach `main`
+(Freigabe ausstehend).
+
+**Pro Arbeitspaket verbindlich:** dieselben Testing Design Patterns wie
+jedes bisherige Sprintpaket (siehe CLAUDE.md) — Pattern 1 (leerer
+Kostenstellen-Kandidatenpool), Pattern 3 (Prozent=0/kein Modul gewählt →
+Skip), Pattern 4 (Read-back auf allen drei Zielmodellen, inkl. des
+Wizard-Übertragungspfads und `sale.py`s Read-nach-Confirm-Schritts),
+Pattern 5 (fehlende Prerequisites → Skip), Pattern 7
+(`assign_analytic_distribution`s Anteils-Verteilung UND `sale.py`s
+eigener Zieh-Anteil, isoliert testbar), Pattern 8 (Batch-Call-Count für
+die Kostenstellen-Erzeugung UND `sale.py`s gruppierte
+Kostenstellen-`write()`-Aufrufe — wenige, nicht einer pro Zeile).
 
 ## 5. Umsetzungsreihenfolge
 

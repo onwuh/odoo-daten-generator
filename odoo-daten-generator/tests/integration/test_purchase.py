@@ -92,5 +92,45 @@ def run(client, ctx):
     except Exception as e:
         results.append(("purchase: empty component_ids -> graceful skip (Pattern 5)", False, str(e)))
 
+    # Step 4 — S15/R20: analytic distribution live end-to-end on PO lines.
+    # purchase_pct=100 -> every created PO line carries analytic_distribution
+    # referencing one of the (newly created) cost-center accounts.
+    try:
+        rctx = _make_rctx()
+        rctx.company_ids = [partner_id]
+        rctx.component_ids = [product_id]
+        rctx.module_selections.purchase = 2
+        rctx.module_selections.purchase_confirm_pct = 0  # scoped to line creation, not confirm/bill
+        rctx.module_selections.analytic = {
+            "enabled": True, "sale_pct": 0, "purchase_pct": 100, "expense_pct": 0,
+        }
+
+        purchase.create_purchase_data(client, None, rctx)
+
+        assert rctx.analytic_account_ids, "get_or_create_analytic_accounts left ctx.analytic_account_ids empty"
+        pos = client.search_read(
+            'purchase.order', [["partner_id", "in", rctx.supplier_ids]], fields=["order_line"], limit=0,
+        )
+        line_ids = [lid for po in pos for lid in po.get("order_line", [])]
+        assert line_ids, "no PO lines found"
+        lines = client.search_read(
+            'purchase.order.line', [["id", "in", line_ids], ["analytic_distribution", "!=", False]],
+            fields=["analytic_distribution"], limit=0,
+        )
+        assert len(lines) >= 2, f"expected at least 2 PO lines with a distribution, got {len(lines)}"
+        for line in lines:
+            keys = list(line["analytic_distribution"].keys())
+            assert len(keys) == 1 and int(keys[0]) in rctx.analytic_account_ids, line
+
+        results.append((
+            "purchase: R20 analytic distribution live end-to-end — purchase_pct=100, read-back (Pattern 4)",
+            True, f"{len(lines)} lines, accounts={rctx.analytic_account_ids}",
+        ))
+    except Exception as e:
+        results.append((
+            "purchase: R20 analytic distribution live end-to-end — purchase_pct=100, read-back (Pattern 4)",
+            False, str(e),
+        ))
+
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

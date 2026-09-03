@@ -13,6 +13,7 @@ import datetime
 import logging
 import random
 
+import data_factory
 import odoo_actions
 from config import RunContext
 
@@ -76,6 +77,16 @@ def create_expense_data(client, gemini, ctx: RunContext) -> None:
 
     if not vals_list:
         return
+
+    # S15/R20: analytic distribution, gated on both the shared "analytic"
+    # feature and this module's own share of it — meaningless if either is
+    # off. Cost-center ids are lazy+memoized (odoo_actions), so calling this
+    # here doesn't duplicate creation if sale.py/purchase.py already did it.
+    analytic_sel = ctx.module_selections.analytic
+    expense_pct = int(analytic_sel.get("expense_pct", 0)) if analytic_sel.get("enabled") else 0
+    if expense_pct > 0:
+        account_ids = odoo_actions.get_or_create_analytic_accounts(client, ctx)
+        data_factory.assign_analytic_distribution(vals_list, expense_pct, account_ids)
 
     expense_ids = client.create_batch('hr.expense', vals_list)
     if not expense_ids:

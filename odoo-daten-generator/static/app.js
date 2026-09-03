@@ -236,6 +236,7 @@
     stock: '<rect x="2.4" y="6.6" width="4.6" height="4.6"/><rect x="9" y="6.6" width="4.6" height="4.6"/><rect x="5.7" y="2.2" width="4.6" height="4.4"/>',
     expense: '<rect x="3" y="4" width="10" height="9" rx="1"/><line x1="3" y1="7" x2="13" y2="7"/><circle cx="8" cy="10.3" r="1.3"/>',
     docs: '<path d="M4.5 2h4l3 3v9h-7V2z"/><path d="M8.5 2v3h3"/><line x1="6" y1="8.3" x2="10.5" y2="8.3"/><line x1="6" y1="10.6" x2="10.5" y2="10.6"/>',
+    analytic: '<circle cx="8" cy="8" r="6"/><line x1="8" y1="8" x2="8" y2="2"/><line x1="8" y1="8" x2="12.2" y2="10.8"/>',
   };
 
   function iconSvg(key) {
@@ -246,10 +247,14 @@
   }
 
   function buildCard(def, installed, blocked) {
-    // "documents" is not an Odoo module: it writes ir.attachment records, which
-    // are core, so it is never gated on the installed set (but it CAN still be
-    // in `blocked` — S10/R10 — if this API key can't write ir.attachment).
-    var isPseudo = def.key === "documents";
+    // "documents"/"analytic" are not real Odoo modules: "documents" writes
+    // ir.attachment records (core Odoo), "analytic" (S15/R20) writes
+    // account.analytic.* records that ship with the already-probed
+    // account/sale/purchase apps, not a separately installable app of their
+    // own — neither is ever gated on the installed set (but "documents" CAN
+    // still be in `blocked`, S10/R10, if this API key can't write
+    // ir.attachment; "analytic" has no such probe of its own).
+    var isPseudo = def.key === "documents" || def.key === "analytic";
     var notInstalled = !isPseudo && installed.indexOf(def.key) === -1;
     // S10/R10: a module can be installed and still unusable — the server
     // already decided this (run_config.effective_installed_modules, the same
@@ -554,6 +559,24 @@
       },
       collect: function () {
         return { enabled: true, count_per_employee: intVal("exp-count", 3), approved_pct: intVal("exp-approved", 70) };
+      },
+    },
+    {
+      key: "analytic", icon: "analytic", title: "Kostenrechnung", badge: "kein Odoo-Modul",
+      defaultOn: false,
+      note: "Legt Kostenstellen an und verteilt sie auf einen Anteil der Verkaufs-/Einkaufs-/Spesenzeilen — wirkungslos ohne die jeweils zugehörige Karte.",
+      build: function (body) {
+        body.appendChild(slider("an-sale", "Verkauf %", 0, 0, 100));
+        body.appendChild(slider("an-purchase", "Einkauf %", 0, 0, 100));
+        body.appendChild(slider("an-expense", "Spesen %", 0, 0, 100));
+      },
+      collect: function () {
+        return {
+          enabled: true,
+          sale_pct: intVal("an-sale", 0),
+          purchase_pct: intVal("an-purchase", 0),
+          expense_pct: intVal("an-expense", 0),
+        };
       },
     },
     {

@@ -14,6 +14,7 @@ import datetime
 import logging
 import random
 
+import data_factory
 import odoo_actions
 from config import RunContext
 from fallback_data import FALLBACK_SUPPLIERS
@@ -189,6 +190,13 @@ def create_purchase_data(client, gemini, ctx: RunContext) -> None:
         product_price_map[p["id"]] = cost
 
     po_vals_list = []
+    # S15/R20: flat, separate from the (0,0,dict) tuples nested in each
+    # order's own "lines" below — purchase.py builds line vals per-order,
+    # never as one standalone list the way expenses.py does. Collecting the
+    # same dict objects here (by reference, not copy) lets
+    # assign_analytic_distribution mutate them once, after the loop, and
+    # have that mutation show up inside the nested tuples too.
+    po_line_vals_list = []
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     for i in range(num_orders):
         supplier_id = supplier_ids[i % len(supplier_ids)]
@@ -198,12 +206,14 @@ def create_purchase_data(client, gemini, ctx: RunContext) -> None:
         for pid in chosen:
             price = product_price_map.get(pid, random.uniform(10, 100))
             qty = random.randint(1, 5)
-            lines.append((0, 0, {
+            line_vals = {
                 "name": f"PO line {pid}",
                 "product_id": pid,
                 "product_qty": qty,
                 "price_unit": round(price, 2),
-            }))
+            }
+            lines.append((0, 0, line_vals))
+            po_line_vals_list.append(line_vals)
         po_vals_list.append({
             "partner_id": supplier_id,
             "company_id": company_id,
@@ -213,6 +223,12 @@ def create_purchase_data(client, gemini, ctx: RunContext) -> None:
             "picking_type_id": warehouse["incoming_picking_type_id"],
             "order_line": lines,
         })
+
+    analytic_sel = ctx.module_selections.analytic
+    purchase_pct = int(analytic_sel.get("purchase_pct", 0)) if analytic_sel.get("enabled") else 0
+    if purchase_pct > 0:
+        account_ids = odoo_actions.get_or_create_analytic_accounts(client, ctx)
+        data_factory.assign_analytic_distribution(po_line_vals_list, purchase_pct, account_ids)
 
     order_ids = client.create_batch('purchase.order', po_vals_list)
     if not order_ids:
