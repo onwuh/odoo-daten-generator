@@ -505,7 +505,12 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
         # Quality Checks (per confirmed MO, linked to its BOM's point).
         # Gated on its own model_access probe — a blocked quality.check
         # access degrades only check creation, not quality.point or the
-        # rest of this module.
+        # rest of this module. No duplicate risk from Section C confirming
+        # MOs before this section creates the points: live-confirmed
+        # action_confirm alone never auto-generates a quality.check even
+        # when a matching point already exists (S14/WP4) — Odoo only does
+        # that at stock.picking validation, which this codebase never
+        # reaches (see module docstring).
         if (bom_to_qp and confirmed_mo_ids and qp_team_id and qp_test_type_id
                 and ctx.model_access.get('quality.check', True)):
             try:
@@ -524,8 +529,21 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
                         "test_type_id": qp_test_type_id,
                         "company_id": company_id,
                     })
-                data_factory.assign_quality_state(qc_vals_list, quality_fail_pct)
                 qc_ids = client.create_batch('quality.check', qc_vals_list) if qc_vals_list else []
-                logger.info(f"Qualitaetspruefungen erstellt: {len(qc_ids)}")
+                # Native do_pass/do_fail (live-confirmed to exist, S14/WP1)
+                # instead of writing quality_state directly — sets
+                # control_date/user_id the way a real inspection would, same
+                # native-over-manual precedent as action_apply_inventory/
+                # action_confirm/action_create_invoice/action_reset. Two
+                # batched call_method calls (Pattern 8), never per-check.
+                pass_ids, fail_ids = data_factory.assign_quality_state(qc_ids, quality_fail_pct)
+                if pass_ids:
+                    client.call_method('quality.check', 'do_pass', ids=pass_ids)
+                if fail_ids:
+                    client.call_method('quality.check', 'do_fail', ids=fail_ids)
+                logger.info(
+                    f"Qualitaetspruefungen erstellt: {len(qc_ids)} "
+                    f"({len(pass_ids)} bestanden, {len(fail_ids)} fehlgeschlagen)."
+                )
             except Exception as qc_e:
                 logger.info(f"Qualitaetspruefungen konnten nicht erstellt werden: {qc_e}")

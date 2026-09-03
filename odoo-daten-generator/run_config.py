@@ -528,6 +528,19 @@ def estimate_record_counts(ctx: RunContext, selected: Set[str]) -> Dict[str, int
         counts["Fertigungsprodukte"] = int(sel.mrp.get("num_products", 0))
         counts["Arbeitszentren"] = int(sel.mrp.get("num_workcenters", 0))
         counts["Fertigungsaufträge"] = int(sel.mrp.get("num_manufacturing_orders", 0))
+        if sel.mrp.get("create_quality_points"):
+            # S14/R18: one quality.point per BOM (main + sub-BOMs, same
+            # count mrp.py's own bom_vals_list produces) — exact, not "(ca.)",
+            # since it doesn't depend on a random roll like the MO count
+            # below does. quality.check needs a CONFIRMED MO to link to
+            # (mrp.py's ~70% action_confirm roll), so that estimate stays
+            # approximate like Nachbestellregeln above.
+            num_products_mrp = int(sel.mrp.get("num_products", 0))
+            sub_boms = int(sel.mrp.get("sub_boms_per_product", 0))
+            counts["Qualitätsprüfpunkte"] = num_products_mrp * (1 + sub_boms)
+            num_mo = int(sel.mrp.get("num_manufacturing_orders", 0))
+            if num_mo:
+                counts["Qualitätsprüfungen (ca.)"] = round(num_mo * 0.7)
     if "hr_recruitment" in selected and sel.hr_recruitment:
         counts["Stellen"] = int(sel.hr_recruitment.get("num_jobs", 0))
         counts["Bewerbungen"] = int(sel.hr_recruitment.get("num_candidates", 0))

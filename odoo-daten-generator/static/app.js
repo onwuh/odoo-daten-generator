@@ -446,6 +446,9 @@
           stepper("mrp-orders", "Fertigungsaufträge", "", 5, 0, 20),
         ]));
         body.appendChild(checkLine("mrp-quality", "Qualitätsprüfpunkte", "nur wenn Quality-Feature aktiv", false));
+        var qualitySub = grid([slider("mrp-quality-fail-pct", "Ausfallquote Qualitätsprüfungen", 0, 0, 100)]);
+        qualitySub.classList.add("sub-block");
+        body.appendChild(qualitySub);
       },
       collect: function () {
         return {
@@ -456,6 +459,7 @@
           num_workcenters: intVal("mrp-work", 3),
           num_manufacturing_orders: intVal("mrp-orders", 5),
           create_quality_points: checked("mrp-quality"),
+          quality_fail_pct: intVal("mrp-quality-fail-pct", 0),
         };
       },
     },
@@ -516,6 +520,14 @@
           "Seriennummern erzeugen deutlich mehr Einzeldatensätze als Chargen. Chargen-/" +
           "Seriennummern-Datensätze können über die Bereinigungs-Funktion nicht entfernt werden " +
           "(weder gelöscht noch archiviert)."));
+        body.appendChild(slider("stock-orderpoints-pct", "Nachbestellregeln", 0, 0, 100));
+        body.appendChild(grid([
+          stepper("stock-orderpoint-min", "Mindestbestand", "", 5, 1, 100000),
+          stepper("stock-orderpoint-max", "Maximalbestand", "", 20, 1, 100000),
+        ]));
+        body.appendChild(el("div", "field-hint",
+          "Nachbestellregeln braucht die Stammdaten-/Fertigungs-Erzeugung dieses Laufs — " +
+          "wirkungslos bei \"Vorhandene Daten verwenden\" oder übersprungenen Stammdaten."));
       },
       collect: function () {
         return {
@@ -526,6 +538,9 @@
           tracking_lot_pct: intVal("stock-lot-pct", 0),
           tracking_serial_pct: intVal("stock-serial-pct", 0),
           tracking_serial_max: intVal("stock-serial-max", 10),
+          orderpoints_pct: intVal("stock-orderpoints-pct", 0),
+          orderpoint_min_qty: intVal("stock-orderpoint-min", 5),
+          orderpoint_max_qty: intVal("stock-orderpoint-max", 20),
         };
       },
     },

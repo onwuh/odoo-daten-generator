@@ -416,8 +416,10 @@ def run():
 
     # Happy path + field shape: test_report_type='pdf' (not the invalid
     # 'none'), apply_to='products'+product_ids (not the compute-facade
-    # bom_id), one batch call each for quality.point/quality.check
-    # (Pattern 8), quality.check carries point_id/production_id/quality_state.
+    # bom_id), one batch call each for quality.point/quality.check creation
+    # (Pattern 8), quality.check carries point_id/production_id but NOT
+    # quality_state (set via a batched do_pass/do_fail call instead, native-
+    # over-manual — see data_factory.assign_quality_state).
     try:
         client = _mock_client_quality()
         with patch("modules.mrp.random.random", return_value=0.0):  # always confirm
@@ -443,13 +445,22 @@ def run():
         assert qc_vals_list, "expected at least one quality.check"
         for v in qc_vals_list:
             assert v.get("point_id") and v.get("production_id"), v
-            assert v.get("quality_state") == "fail", v  # quality_fail_pct=100
+            assert "quality_state" not in v, v  # native do_pass/do_fail sets this, not create()
+
+        do_fail_calls = [c for c in client.call_method.call_args_list
+                         if c.args[0] == 'quality.check' and c.args[1] == 'do_fail']
+        do_pass_calls = [c for c in client.call_method.call_args_list
+                         if c.args[0] == 'quality.check' and c.args[1] == 'do_pass']
+        assert len(do_fail_calls) == 1, do_fail_calls  # Pattern 8: one batched call
+        assert do_pass_calls == [], do_pass_calls  # quality_fail_pct=100 -> nothing passes
+        fail_ids_sent = do_fail_calls[0].kwargs.get("ids")
+        assert fail_ids_sent and len(fail_ids_sent) == len(qc_vals_list), (fail_ids_sent, qc_vals_list)
         results.append((
-            "create_mrp_data: quality.point/quality.check field shape + one batch call each (Pattern 8)",
+            "create_mrp_data: quality.point/quality.check field shape + native do_pass/do_fail (Pattern 8)",
             True, f"{len(qp_batches[0].args[1])} points, {len(qc_vals_list)} checks",
         ))
     except AssertionError as e:
-        results.append(("create_mrp_data: quality.point/quality.check field shape + one batch call each (Pattern 8)",
+        results.append(("create_mrp_data: quality.point/quality.check field shape + native do_pass/do_fail (Pattern 8)",
                         False, str(e)))
 
     # model_access: blocked quality.check must not prevent quality.point
