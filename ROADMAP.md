@@ -50,7 +50,7 @@ Parameter heißt in allen Modulsignaturen `gemini`, Provider ist primär Groq; `
 - ⚪ **Offen:** Provider-Erkennung ist weiterhin Prefix-Sniffing — `connect_service.py:126`: `"groq" if llm_key.startswith("gsk_") else "gemini"`. Kein explizites Dropdown/Feld für die Provider-Wahl im Web-Frontend.
 - ⚪ **Offen:** `orchestrator.py:54` — `gemini.fetch_name_suggestions(...)` läuft weiterhin unconditional bei jedem Lauf, außerhalb des `skip_master_data`-Gates (Zeile 46). Lädt Namensbänke auch dann, wenn kein Modul sie braucht.
 
-### D10 🟡 Neu (2026-09-02) — Proaktives Rate-Limiting in `odoo_client.py` 🔒
+### D10 ✅ Erledigt (2026-09-03) — Proaktives Rate-Limiting in `odoo_client.py` 🔒
 
 **Herkunft:** während S12/WP1 (Barcode) beobachtet — 3 aufeinanderfolgende volle
 `test_suite.py`-Läufe gegen `demo-test5.odoo.com`, jedes Mal genau 1 Fehlschlag im
@@ -84,7 +84,32 @@ trotzdem kurz beim Architekten bestätigen, reiner Formsache-Fall (kein Verhalte
 aber die Datei ist gelistet.
 
 **Komplexität:** Niedrig · **Benefit:** Mittel (Test-Stabilität) + Niedrig-Mittel
-(Produktions-Robustheit) — noch nicht in einen Sprint eingeplant, siehe §5.
+(Produktions-Robustheit).
+
+**Umsetzung (2026-09-03, Branch `d10-rate-limiting`):** `OdooJson2Client.
+_send` ruft vor jedem Attempt (auch bei Retries) eine neue `_throttle()`
+auf, die genau so lange schläft, dass zwei aufeinanderfolgende Requests
+dieses Clients mindestens `min_request_interval` Sekunden auseinander
+liegen (`time.monotonic`, nie Wall-Clock). **Per Instanz konfigurierbar**,
+nicht als eingefrorene Modul-Konstante beim Import gelesen — ein Aufrufer
+kann `min_request_interval=0` an den Konstruktor übergeben, um für genau
+diesen Client abzuschalten (production-Aufrufstellen lassen den Parameter
+auf `None`, was bei Konstruktion die Env-Var `ODOO_GENERATOR_
+MIN_REQUEST_INTERVAL` liest, Default `1.0`). Diese Instanz-statt-Modul-
+Entscheidung war nötig, nicht kosmetisch: ein erster Versuch mit
+eingefrorener Modul-Konstante brach `test_web_security_unit.py`s Backoff-
+Test (`slept.call_count == 2`) — mit gemocktem `time.sleep` vergeht
+zwischen Attempts real keine Zeit, also löste der Drosselpunkt bei jedem
+Retry zusätzlich aus. Die drei betroffenen Testdateien (`test_odoo_client_
+unit.py`, `test_web_security_unit.py`) übergeben jetzt explizit
+`min_request_interval=0` an ihre eigenen Test-Clients; production bleibt
+unberührt (`connect_service.py`, `web/app.py`, `tests/integration/
+test_suite.py` konstruieren weiterhin ohne den Parameter). 6 neue Unit-
+Tests (`_throttle` selbst, Clamp auf negativen Wert, Env-Var-Read bei
+Konstruktion, `_send` ruft `_throttle` vor jedem Attempt). Unit 425/425,
+Live-`test_suite.py` 92/92 grün (inkl. des vorher flakigen `ODOO_ACTIONS`-
+Blocks, der diesmal sauber durchlief — ein einzelner grüner Lauf beweist
+die Flake-Elimination nicht abschließend, ist aber ein gutes Zeichen).
 
 ---
 

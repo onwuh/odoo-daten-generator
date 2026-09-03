@@ -42,6 +42,29 @@ _RETRY_STATUSES = (429, 503)
 _MAX_ATTEMPTS = 5
 _BACKOFF_BASE_SECONDS = 2.0
 
+# D10 — proactive throttle. The retry/backoff above is reactive: it only
+# kicks in after a request has already come back 429. Nothing before this
+# stopped requests from bunching up faster than the documented ~1 req/s
+# sustained ceiling in the first place, which is why three consecutive live
+# suite runs each produced exactly one 429-retry-induced flake, in a
+# different exact-POST-count assertion each time (2026-09-02, see D10 in
+# ROADMAP.md). _send now sleeps just enough before each attempt to keep this
+# client's own requests at least this far apart. Configurable via env var —
+# not every target instance shares demo-test5's ceiling — read once per
+# client at construction time (OdooJson2Client.__init__), not a frozen
+# module constant: a test constructing its own client with
+# min_request_interval=0 must not depend on when odoo_client itself first
+# got imported relative to any env-var override.
+_MIN_REQUEST_INTERVAL_ENV = "ODOO_GENERATOR_MIN_REQUEST_INTERVAL"
+
+
+def _min_request_interval() -> float:
+    try:
+        return max(0.0, float(os.environ.get(_MIN_REQUEST_INTERVAL_ENV, "") or 1.0))
+    except ValueError:
+        return 1.0
+
+
 # R5/WP1 — dynamic field manifest. FIELD_COMPAT_WHITELIST (odoo_actions.py) is
 # hand-curated and already known-incomplete (e.g. res.partner's country_id/
 # parent_id/type gap, found 2026-09-02). Rather than keep hand-editing it,
@@ -199,7 +222,8 @@ def _select_attempt(attempts: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 
 
 class OdooJson2Client:
-    def __init__(self, base_url: str, database: str, api_key: str, user_agent: str = "odoo-daten-generator") -> None:
+    def __init__(self, base_url: str, database: str, api_key: str, user_agent: str = "odoo-daten-generator",
+                 min_request_interval: Optional[float] = None) -> None:
         self.base_url = base_url.rstrip('/') + "/json/2"
         self.database = database
         self.api_key = api_key
@@ -221,6 +245,37 @@ class OdooJson2Client:
         # attempts made inside it. A stack, not a single list, because
         # create_batch's fallback calls create() inside its own frame.
         self._attempt_frames: List[List[Dict[str, Any]]] = []
+        # D10: last time this client actually sent a request (time.monotonic,
+        # immune to wall-clock adjustments) — per-instance, not global/shared,
+        # matching the single-client-per-run shape the rest of this class
+        # already assumes.
+        self._last_request_at: float = 0.0
+        # Per-instance, not a frozen module constant read once at import —
+        # lets a caller (chiefly tests exercising _send's retry loop with
+        # time.sleep mocked to a no-op, where real time never advances
+        # between attempts) pass 0 to disable throttling for just that
+        # client, without a process-wide env var whose effect would depend
+        # on import order. None (the default) reads the env var at
+        # CONSTRUCTION time, not per-call — a real run's target ceiling
+        # doesn't change mid-run.
+        self._min_request_interval = (
+            _min_request_interval() if min_request_interval is None else max(0.0, min_request_interval)
+        )
+
+    def _throttle(self) -> None:
+        """D10: sleep just enough to keep this client's requests at least
+        self._min_request_interval apart, proactively — unlike the
+        retry/backoff below, this runs BEFORE a request ever goes out, so it
+        can prevent a 429 instead of only reacting to one. Records the send
+        time itself (not the time a response came back), since it's the
+        request rate the target instance measures, not the round-trip.
+        """
+        if self._min_request_interval <= 0:
+            return
+        wait = self._min_request_interval - (time.monotonic() - self._last_request_at)
+        if wait > 0:
+            time.sleep(wait)
+        self._last_request_at = time.monotonic()
 
     def _send(self, url: str, payload: Dict[str, Any], timeout: int = 60) -> "requests.Response":
         """One POST, retried on a rate-limit/unavailable answer.
@@ -231,6 +286,7 @@ class OdooJson2Client:
         """
         response = None
         for attempt in range(1, _MAX_ATTEMPTS + 1):
+            self._throttle()
             response = self.session.post(url, json=payload, timeout=timeout,
                                          allow_redirects=_ALLOW_REDIRECTS)
             if response.status_code not in _RETRY_STATUSES or attempt == _MAX_ATTEMPTS:
