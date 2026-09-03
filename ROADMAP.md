@@ -821,11 +821,29 @@ exakter Gleichheit — jeder neue Key braucht eine Testanpassung).
 
 | WP | Inhalt | 🔒 | Voraussetzung |
 |---|---|---|---|
-| **WP1** | Gebündelte Live-Verifikation gegen `demo-test5.odoo.com` (`stock.warehouse`-Minimalfall, `tracking='lot'`-Schreib-/Read-back inkl. `product.template`, `stock.lot`-Namenskollision, `stock.location.barcode`-Namensraum, Unlink-/Archive-Verhalten für alle drei neuen Modelle, `action_apply_inventory` mit Lot-/Serial-Quants, Settings-Lesemechanismus) | nein | — |
-| **WP2** | R15 Lagerplätze + R16 Location-Ebene Barcode: Sub-Locations, Location-Pool-Refactor der Quant-Schleife (Round-Robin statt Zufalls-Draw), `ARCHIVE_FALLBACK_MODELS`+`stock.location`, `MODEL_ACCESS_PROBES`/`FIELD_COMPAT_WHITELIST` additiv | nein | WP1 |
-| **WP3** | R14 Multi-Warehouse (Quant-Anteil): 2. Warehouse vor dem `get_default_warehouse`-Lookup erzeugt (braucht kein 1. Warehouse), in WP2s Location-Pool eingehängt, `ARCHIVE_FALLBACK_MODELS`+`stock.warehouse` | nein | WP1, WP2 (Pool) |
-| **WP4** | R13 Lot-/Serial-Tracking: `data_factory.assign_tracking`, `RunContext.new_product_ids`, tracking-bewusste Quant-/Lot-Erzeugung mit Lauf-weitem Serial-Deckel (`_MAX_SERIAL_RECORDS_PER_RUN`, entkoppelt von `avg_qty`) | nein | WP1, WP2 (Pool) |
+| **WP1** ✅ | Gebündelte Live-Verifikation gegen `demo-test5.odoo.com` (`stock.warehouse`-Minimalfall, `tracking='lot'`-Schreib-/Read-back inkl. `product.template`, `stock.lot`-Namenskollision, `stock.location.barcode`-Namensraum, Unlink-/Archive-Verhalten für alle drei neuen Modelle, `action_apply_inventory` mit Lot-/Serial-Quants, Settings-Lesemechanismus) | nein | — |
+| **WP2** ✅ | R15 Lagerplätze + R16 Location-Ebene Barcode: Sub-Locations, Location-Pool-Refactor der Quant-Schleife (Round-Robin statt Zufalls-Draw), `ARCHIVE_FALLBACK_MODELS`+`stock.location`, `MODEL_ACCESS_PROBES`/`FIELD_COMPAT_WHITELIST` additiv | nein | WP1 |
+| **WP3** ✅ | R14 Multi-Warehouse (Quant-Anteil): 2. Warehouse vor dem `get_default_warehouse`-Lookup erzeugt (braucht kein 1. Warehouse), in WP2s Location-Pool eingehängt, `ARCHIVE_FALLBACK_MODELS`+`stock.warehouse` | nein | WP1, WP2 (Pool) |
+| **WP4** ✅ | R13 Lot-/Serial-Tracking: `data_factory.assign_tracking`, `RunContext.new_product_ids`, tracking-bewusste Quant-/Lot-Erzeugung mit Lauf-weitem Serial-Deckel (`_MAX_SERIAL_RECORDS_PER_RUN`, entkoppelt von `avg_qty`) | nein | WP1, WP2 (Pool) |
 | **WP5** | Peer-Review vor Merge (S5-S12-Verfahren), grüner Live-`test_suite.py` | — | WP1-WP4 Code steht |
+
+**WP1-Ergebnisse (live gegen `demo-test5.odoo.com`, 2026-09-02):** 7 von 8
+Checks bestätigten die Planannahme direkt. Eine Korrektur: Archive-Fallback
+(`active=False`) funktioniert für `stock.warehouse` auch mit vorhandenem
+Bestand, schlägt aber für `stock.location` fehl, solange sie noch einen Quant
+enthält (derselbe Fehler wie beim Unlink) — Design-Entscheidung 2 oben
+dokumentiert diese Asymmetrie bereits korrekt, keine Nacharbeit nötig.
+
+**WP2-WP4-Umsetzung (2026-09-02):** in `modules/inventory.py` einem
+gemeinsamen, überarbeiteten `create_inventory_data` umgesetzt statt drei
+getrennten Anknüpfungspunkten — WP2 selbst sah diesen gemeinsamen
+Location-Pool-Refactor als Grundlage für WP3/WP4 vor. Vollständige
+Testabdeckung (Unit + 3 neue Live-Integrationsschritte) ergänzt, alle
+Testing Design Patterns unten erfüllt. Unit-Suite 399/399 grün, Live-
+`test_suite.py` 90/90 grün (Erstlauf); ein Zweitlauf zeigte den
+vorbestehenden, dokumentierten Rate-Limit-Flake in `ODOO_ACTIONS`
+(`has_create_access`-POST-Zähler) — alle S13-eigenen Schritte blieben in
+beiden Läufen grün. WP5 (Diff-Review vor Merge) noch offen.
 
 **Pro Arbeitspaket verbindlich:** dieselben Testing Design Patterns wie jedes
 bisherige Sprintpaket (siehe CLAUDE.md) — Pattern 1 (Location-Pool nie leer,
