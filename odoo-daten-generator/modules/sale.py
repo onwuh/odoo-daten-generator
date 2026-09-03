@@ -3,6 +3,7 @@
 import logging
 import random
 
+import odoo_actions
 from config import RunContext
 
 logger = logging.getLogger(__name__)
@@ -128,7 +129,62 @@ def create_sale_data(client, gemini, ctx: RunContext) -> None:
     if 'crm' in ctx.installed_modules and ctx.confirmed_order_ids and ctx.opportunity_ids:
         _move_won_opportunities(client, ctx)
 
+    _assign_analytic_distribution(client, ctx)
+
     logger.info(f"✅ {len(ctx.order_ids)} Verkaufsaufträge erstellt.")
+
+
+def _assign_analytic_distribution(client, ctx: RunContext) -> None:
+    """S15/R20: analytic distribution on a share of confirmed orders' lines.
+
+    Deliberately AFTER confirm, not baked into the (0,0,{...}) command
+    tuples create_sale_data builds order_line from — nothing is a real,
+    queryable record with a real analytic_distribution value until Odoo has
+    actually processed confirm, including its own service_tracking-driven
+    analytic derivation for task_in_project lines. Reading the real
+    post-confirm state and only touching lines still empty is what makes
+    "never overwrite an existing value" enforceable at all — trying to
+    predict which lines are protected before they even exist would not work
+    (see ROADMAP.md's S15 Blocker 1). Live-confirmed: write() succeeds on an
+    already-confirmed (state='sale') sale.order.line.
+
+    Still runs before accounting.py (pipeline position 3 vs. 8), so the
+    sale.advance.payment.inv wizard picks up the value when it creates
+    invoice lines (live-confirmed to propagate automatically).
+    """
+    analytic_sel = ctx.module_selections.analytic
+    sale_pct = int(analytic_sel.get("sale_pct", 0)) if analytic_sel.get("enabled") else 0
+    if sale_pct <= 0 or not ctx.confirmed_order_ids:
+        return
+    account_ids = odoo_actions.get_or_create_analytic_accounts(client, ctx)
+    if not account_ids:
+        return
+    eligible = client.search_read(
+        'sale.order.line',
+        [["order_id", "in", ctx.confirmed_order_ids], ["analytic_distribution", "=", False]],
+        fields=["id"], limit=0,
+    )
+    eligible_ids = [line["id"] for line in eligible]
+    if not eligible_ids:
+        return
+    num_pick = round(len(eligible_ids) * sale_pct / 100)
+    picked_ids = random.sample(eligible_ids, k=min(num_pick, len(eligible_ids)))
+    if not picked_ids:
+        return
+    # Grouped by randomly-assigned cost center — one write() per group
+    # (Pattern 8: a few batched calls, not one per line). write() applies
+    # the same vals to every id in one call, so lines going to different
+    # cost centers can't share a call.
+    groups: dict = {}
+    for line_id in picked_ids:
+        account_id = random.choice(account_ids)
+        groups.setdefault(account_id, []).append(line_id)
+    for account_id, line_ids in groups.items():
+        try:
+            client.write('sale.order.line', line_ids, {"analytic_distribution": {str(account_id): 100.0}})
+        except Exception as e:
+            logger.warning(f"⚠️  Kostenrechnung auf Auftragszeilen konnte nicht gesetzt werden: {e}")
+    logger.info(f"-> Kostenrechnung auf {len(picked_ids)} von {len(eligible_ids)} freien Auftragszeilen gesetzt.")
 
 
 def _move_won_opportunities(client, ctx: RunContext) -> None:

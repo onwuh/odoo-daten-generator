@@ -287,3 +287,30 @@ def assign_quality_state(ids: List[int], fail_pct: int) -> Tuple[List[int], List
         else:
             pass_ids.append(i)
     return pass_ids, fail_ids
+
+
+def assign_analytic_distribution(vals_list: List[dict], pct: int, account_ids: List[int]) -> None:
+    """Mutates a pct of the dicts in vals_list in place, adding an
+    'analytic_distribution' key ({"<account_id>": 100.0}, the live-confirmed
+    real format — a single cost center at 100%, not a split) to
+    purchase.order.line/hr.expense vals BEFORE create() (S15/R20). Never
+    touches an entry that already carries the key — sale.order.line's own
+    lines can arrive here already carrying Odoo's native
+    service_tracking-derived distribution in some call shapes, and this must
+    never clobber that (though sale.py's own R20 wiring uses a different,
+    post-confirm read-then-write approach specifically to avoid needing this
+    guard — see modules/sale.py).
+
+    Clamps pct into [0, 100] and no-ops on an empty account_ids, same
+    defensive posture as assign_tracking/assign_quality_state. Pattern 1: an
+    empty vals_list is a no-op.
+    """
+    if not account_ids:
+        return
+    pct = max(0, min(100, pct))
+    for vals in vals_list:
+        if 'analytic_distribution' in vals:
+            continue
+        if random.uniform(0, 100) < pct:
+            account_id = random.choice(account_ids)
+            vals['analytic_distribution'] = {str(account_id): 100.0}

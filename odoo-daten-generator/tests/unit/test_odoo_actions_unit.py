@@ -9,7 +9,9 @@ if _ROOT not in sys.path:
 
 from odoo_actions import (get_enabled_features, get_server_version, check_field_compatibility,
                           probe_model_access, MODEL_ACCESS_PROBES, classify_version_status,
-                          LAST_VERIFIED_VERSION, KNOWN_BROKEN_VERSIONS, create_second_warehouse)
+                          LAST_VERIFIED_VERSION, KNOWN_BROKEN_VERSIONS, create_second_warehouse,
+                          get_or_create_analytic_accounts, _ANALYTIC_COST_CENTER_NAMES)
+from config import DemoCriteria, ModuleSelections, RunContext
 
 
 class _AlwaysHasField(dict):
@@ -440,6 +442,106 @@ def run():
         results.append(("S13/Befund 3: failed settings read leaves keys unset, not False", True, ""))
     except AssertionError as e:
         results.append(("S13/Befund 3: failed settings read leaves keys unset, not False", False, str(e)))
+
+    # ==================================================================
+    # S15/R20 — get_or_create_analytic_accounts
+    # ==================================================================
+
+    def _make_ctx():
+        criteria = DemoCriteria(
+            mode="both", industry="IT", num_companies=0,
+            num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
+            num_services=0, num_consumables=0, num_storables=0,
+        )
+        return RunContext(
+            criteria=criteria, module_selections=ModuleSelections(), industry="IT",
+            language_name="German", language_code="de", gemini_model_name="test",
+        )
+
+    try:
+        # Happy path: one plan create, one batch create for the cost centers
+        # (Pattern 8), ids returned and cached.
+        mock_client = MagicMock()
+        mock_client.create.return_value = 501
+        mock_client.create_batch.return_value = [601, 602, 603]
+        ctx = _make_ctx()
+        result = get_or_create_analytic_accounts(mock_client, ctx)
+        assert result == [601, 602, 603], result
+        assert ctx.analytic_account_ids == [601, 602, 603], ctx.analytic_account_ids
+        plan_calls = [c for c in mock_client.create.call_args_list if c.args[0] == 'account.analytic.plan']
+        assert len(plan_calls) == 1, plan_calls
+        assert "company_id" not in plan_calls[0].args[1], plan_calls[0].args[1]
+        acc_batches = [c for c in mock_client.create_batch.call_args_list if c.args[0] == 'account.analytic.account']
+        assert len(acc_batches) == 1, acc_batches
+        acc_vals = acc_batches[0].args[1]
+        assert len(acc_vals) == len(_ANALYTIC_COST_CENTER_NAMES), acc_vals
+        for v in acc_vals:
+            assert set(v.keys()) == {"name", "plan_id"}, v  # no company_id — live-confirmed unneeded
+            assert v["plan_id"] == 501, v
+        results.append(("get_or_create_analytic_accounts: happy path, one plan + one batch create (Pattern 8)", True, ""))
+    except AssertionError as e:
+        results.append(("get_or_create_analytic_accounts: happy path, one plan + one batch create (Pattern 8)", False, str(e)))
+
+    try:
+        # Memoization: a second call on the same ctx must not create anything again.
+        mock_client = MagicMock()
+        mock_client.create.return_value = 501
+        mock_client.create_batch.return_value = [601, 602, 603]
+        ctx = _make_ctx()
+        first = get_or_create_analytic_accounts(mock_client, ctx)
+        mock_client.create.reset_mock()
+        mock_client.create_batch.reset_mock()
+        second = get_or_create_analytic_accounts(mock_client, ctx)
+        assert second == first, (first, second)
+        mock_client.create.assert_not_called()
+        mock_client.create_batch.assert_not_called()
+        results.append(("get_or_create_analytic_accounts: memoized, second call makes no API calls", True, ""))
+    except AssertionError as e:
+        results.append(("get_or_create_analytic_accounts: memoized, second call makes no API calls", False, str(e)))
+
+    try:
+        # is None vs [] distinction: a genuinely empty result (plan create
+        # failed) must NOT be retried on a later call within the same run.
+        mock_client = MagicMock()
+        mock_client.create.side_effect = Exception("no create rights on account.analytic.plan")
+        ctx = _make_ctx()
+        first = get_or_create_analytic_accounts(mock_client, ctx)
+        assert first == [], first
+        assert ctx.analytic_account_ids == [], ctx.analytic_account_ids  # not None -> "already tried"
+        mock_client.create.reset_mock()
+        second = get_or_create_analytic_accounts(mock_client, ctx)
+        assert second == [], second
+        mock_client.create.assert_not_called()  # must not retry
+        results.append(("get_or_create_analytic_accounts: empty result on failure is cached, not retried", True, ""))
+    except AssertionError as e:
+        results.append(("get_or_create_analytic_accounts: empty result on failure is cached, not retried", False, str(e)))
+
+    try:
+        # model_access explicitly blocking account.analytic.plan -> no
+        # create attempted at all, empty result cached.
+        mock_client = MagicMock()
+        ctx = _make_ctx()
+        ctx.model_access = {"account.analytic.plan": False}
+        result = get_or_create_analytic_accounts(mock_client, ctx)
+        assert result == [], result
+        mock_client.create.assert_not_called()
+        mock_client.create_batch.assert_not_called()
+        results.append(("get_or_create_analytic_accounts: model_access=False -> no calls, empty result (Pattern 3)", True, ""))
+    except AssertionError as e:
+        results.append(("get_or_create_analytic_accounts: model_access=False -> no calls, empty result (Pattern 3)", False, str(e)))
+
+    try:
+        # empty model_access defaults open (B1 guard) — must not itself block.
+        mock_client = MagicMock()
+        mock_client.create.return_value = 501
+        mock_client.create_batch.return_value = [601]
+        ctx = _make_ctx()
+        ctx.model_access = {}
+        result = get_or_create_analytic_accounts(mock_client, ctx)
+        assert result == [601], result
+        results.append(("get_or_create_analytic_accounts: empty model_access defaults open (B1 guard)", True, ""))
+    except AssertionError as e:
+        results.append(("get_or_create_analytic_accounts: empty model_access defaults open (B1 guard)", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

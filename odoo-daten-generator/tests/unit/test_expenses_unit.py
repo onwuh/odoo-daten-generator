@@ -9,7 +9,7 @@ text worth a round-trip).
 import os
 import random
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
@@ -19,13 +19,17 @@ from config import DemoCriteria, ModuleSelections, RunContext
 from modules import expenses
 
 
-def _make_ctx(employee_ids=None, hr_expense=None):
+def _make_ctx(employee_ids=None, hr_expense=None, analytic=None):
     criteria = DemoCriteria(
         mode="both", industry="IT", num_companies=0,
         num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
         num_services=0, num_consumables=0, num_storables=0,
     )
-    sel_kwargs = {"hr_expense": hr_expense} if hr_expense is not None else {}
+    sel_kwargs = {}
+    if hr_expense is not None:
+        sel_kwargs["hr_expense"] = hr_expense
+    if analytic is not None:
+        sel_kwargs["analytic"] = analytic
     ctx = RunContext(
         criteria=criteria,
         module_selections=ModuleSelections(**sel_kwargs),
@@ -160,6 +164,60 @@ def run():
         results.append(("Pattern 7: approved_pct=40 over n=100 lands near 40%", True, f"{approved_count}/100"))
     except AssertionError as e:
         results.append(("Pattern 7: approved_pct=40 over n=100 lands near 40%", False, str(e)))
+
+    # ==================================================================
+    # S15/R20 — analytic distribution wiring
+    # ==================================================================
+
+    try:
+        # Pattern 3: analytic disabled (default) -> helper never called, no
+        # analytic_distribution in the created vals.
+        client = _mock_client()
+        ctx = _make_ctx(employee_ids=[1, 2], hr_expense={"count_per_employee": 2, "approved_pct": 0})
+        with patch("modules.expenses.odoo_actions.get_or_create_analytic_accounts") as mock_helper:
+            expenses.create_expense_data(client, gemini=None, ctx=ctx)
+            mock_helper.assert_not_called()
+        batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'hr.expense']
+        vals_list = batches[0].args[1]
+        assert all("analytic_distribution" not in v for v in vals_list), vals_list
+        results.append(("create_expense_data: analytic disabled -> no helper call, no distribution (Pattern 3)", True, ""))
+    except AssertionError as e:
+        results.append(("create_expense_data: analytic disabled -> no helper call, no distribution (Pattern 3)", False, str(e)))
+
+    try:
+        # expense_pct=0 with analytic enabled -> same as disabled (its own
+        # sub-off-switch, not just the shared enabled flag).
+        client = _mock_client()
+        ctx = _make_ctx(employee_ids=[1, 2], hr_expense={"count_per_employee": 2, "approved_pct": 0},
+                        analytic={"enabled": True, "sale_pct": 50, "purchase_pct": 50, "expense_pct": 0})
+        with patch("modules.expenses.odoo_actions.get_or_create_analytic_accounts") as mock_helper:
+            expenses.create_expense_data(client, gemini=None, ctx=ctx)
+            mock_helper.assert_not_called()
+        results.append(("create_expense_data: expense_pct=0 -> no helper call (Pattern 3)", True, ""))
+    except AssertionError as e:
+        results.append(("create_expense_data: expense_pct=0 -> no helper call (Pattern 3)", False, str(e)))
+
+    try:
+        # Happy path: analytic enabled + expense_pct>0 -> helper called once,
+        # assign_analytic_distribution's effect visible in the create_batch vals.
+        client = _mock_client()
+        ctx = _make_ctx(employee_ids=list(range(20)), hr_expense={"count_per_employee": 1, "approved_pct": 0},
+                        analytic={"enabled": True, "sale_pct": 0, "purchase_pct": 0, "expense_pct": 100})
+        with patch("modules.expenses.odoo_actions.get_or_create_analytic_accounts",
+                  return_value=[701, 702]) as mock_helper:
+            expenses.create_expense_data(client, gemini=None, ctx=ctx)
+            mock_helper.assert_called_once()
+        batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'hr.expense']
+        vals_list = batches[0].args[1]
+        assert len(vals_list) == 20, vals_list
+        assert all("analytic_distribution" in v for v in vals_list), \
+            "expense_pct=100 must reach every created expense"
+        for v in vals_list:
+            keys = list(v["analytic_distribution"].keys())
+            assert len(keys) == 1 and int(keys[0]) in (701, 702), v
+        results.append(("create_expense_data: analytic enabled -> helper called once, distribution reaches vals", True, ""))
+    except AssertionError as e:
+        results.append(("create_expense_data: analytic enabled -> helper called once, distribution reaches vals", False, str(e)))
 
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results

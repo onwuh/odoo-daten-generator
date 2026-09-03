@@ -378,6 +378,24 @@ def build_selections(payload: Dict[str, Any]) -> Tuple[ModuleSelections, Set[str
             "cv_pdfs_enabled": _as_bool(documents.get("cv_pdfs"), default=True),
         }
 
+    # S15/R20: not its own orchestrated module (no WANTED_MODULES/
+    # MODULE_RUN_ORDER/orchestrator.py entry, no progress row — see
+    # ROADMAP.md's S15 section) — added to `selected` anyway, same as
+    # "documents", purely so estimate_record_counts below can gate its
+    # preview line the same way every other selected feature does. Each
+    # individual pct is still meaningless unless its OWN parent module
+    # (sale/purchase/hr_expense) is also selected — checked separately at
+    # each read site, not here.
+    analytic = _as_dict(modules.get("analytic"), "modules.analytic")
+    if _enabled(analytic):
+        selected.add("analytic")
+        sel.analytic = {
+            "enabled": True,
+            "sale_pct": _as_pct(analytic.get("sale_pct"), "analytic.sale_pct", 0),
+            "purchase_pct": _as_pct(analytic.get("purchase_pct"), "analytic.purchase_pct", 0),
+            "expense_pct": _as_pct(analytic.get("expense_pct"), "analytic.expense_pct", 0),
+        }
+
     return sel, selected
 
 
@@ -510,6 +528,15 @@ def estimate_record_counts(ctx: RunContext, selected: Set[str]) -> Dict[str, int
             counts["Verlorene Opportunities (max.)"] = round(sel.crm * sel.crm_lost.get("pct", 0) / 100)
     if "sale" in selected and sel.sale:
         counts["Aufträge"] = sel.sale
+        if "analytic" in selected and sel.analytic.get("sale_pct"):
+            # (ca.): only confirmed orders' lines are eligible (sale.py's
+            # own post-confirm step, see modules/sale.py), and only those
+            # still lacking a distribution — a service_tracking line
+            # already carrying Odoo's own native one is skipped. 3 is
+            # sale.py's own average of its 1-5 random draw, not a real count.
+            num_confirmed = max(1, round(sel.sale * sel.sale_confirm_pct / 100))
+            counts["Kostenrechnungs-Zeilen Verkauf (ca.)"] = round(
+                num_confirmed * 3 * sel.analytic["sale_pct"] / 100)
     if "account" in selected:
         if sel.account:
             counts["Kundenrechnungen"] = sel.account
@@ -546,6 +573,10 @@ def estimate_record_counts(ctx: RunContext, selected: Set[str]) -> Dict[str, int
         counts["Bewerbungen"] = int(sel.hr_recruitment.get("num_candidates", 0))
     if "purchase" in selected and sel.purchase:
         counts["Bestellungen"] = sel.purchase
+        if "analytic" in selected and sel.analytic.get("purchase_pct"):
+            # 2 is purchase.py's own average of its 1-3 random draw, not a real count.
+            counts["Kostenrechnungs-Zeilen Einkauf (ca.)"] = round(
+                sel.purchase * 2 * sel.analytic["purchase_pct"] / 100)
     if "stock" in selected and sel.stock:
         # S14: gated on avg_qty>0 — an orderpoints-only run (avg_qty=0,
         # orderpoints_pct>0) never seeds any stock quantities, and S14 turns
@@ -586,5 +617,13 @@ def estimate_record_counts(ctx: RunContext, selected: Set[str]) -> Dict[str, int
             counts["Nachbestellregeln (ca.)"] = round((c.num_storables or 0) * orderpoints_pct / 100)
     if "hr_expense" in selected and sel.hr_expense:
         counts["Spesen"] = sel.hr * int(sel.hr_expense.get("count_per_employee", 0))
+        if "analytic" in selected and sel.analytic.get("expense_pct"):
+            counts["Kostenrechnungs-Zeilen Spesen (ca.)"] = round(
+                counts["Spesen"] * sel.analytic["expense_pct"] / 100)
+    if "analytic" in selected and sel.analytic.get("enabled"):
+        # Fixed set (odoo_actions._ANALYTIC_COST_CENTER_NAMES), created once
+        # per run regardless of how many of sale/purchase/hr_expense end up
+        # using them.
+        counts["Kostenstellen"] = 3
 
     return {label: value for label, value in counts.items() if value}

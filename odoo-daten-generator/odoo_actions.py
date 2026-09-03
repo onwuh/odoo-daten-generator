@@ -250,7 +250,13 @@ MODEL_ACCESS_PROBES: Dict[str, List[str]] = {
     "stammdaten": ["res.partner", "product.product"],  # always probed
     "crm": ["crm.lead", "mail.activity"],
     "sale": ["sale.order", "sale.advance.payment.inv"],
-    "account": ["account.move", "account.journal", "account.bank.statement"],
+    # account.analytic.plan/account.analytic.account (S15/R20): secondary —
+    # ship with the core account app, read by sale.py/purchase.py/
+    # expenses.py via odoo_actions.get_or_create_analytic_accounts, not
+    # exclusive to any one of those. A blocked access degrades only that
+    # shared helper, never account.move itself.
+    "account": ["account.move", "account.journal", "account.bank.statement",
+                "account.analytic.plan", "account.analytic.account"],
     "hr": ["hr.employee"],
     "hr_holidays": ["hr.leave", "hr.leave.allocation"],
     "hr_work_entry": ["hr.work.entry.type"],
@@ -333,6 +339,50 @@ def get_main_company_id(client) -> Optional[int]:
     except Exception as e:
         logger.warning(f"-> Warning: Could not determine main company id: {e}")
     return None
+
+
+# S15/R20: cost-center names for the analytic accounts created below. Not
+# LLM-generated — these are generic accounting categories, not creative
+# content (LLM-minimalism, see ROADMAP.md §1), and a small fixed set is
+# exactly what a demo instance needs.
+_ANALYTIC_COST_CENTER_NAMES = ["Vertrieb", "Produktion", "Verwaltung"]
+
+
+def get_or_create_analytic_accounts(client, ctx) -> List[int]:
+    """Lazy+memoized: creates a new account.analytic.plan plus a handful of
+    account.analytic.account cost centers, caching their ids on
+    ctx.analytic_account_ids. Three independent modules (sale.py,
+    purchase.py, expenses.py) may each call this — whichever runs first
+    creates them, the others reuse the cache — so this must never assume
+    it's the first or only caller.
+
+    A NEW plan, not the existing default (id=1, "Project Plan") —
+    live-confirmed that plan already holds 200+ accounts auto-created by
+    S7/R8's service_tracking='task_in_project' project linkage; mixing
+    R20's cost centers into that plan would blur two unrelated bookkeeping
+    concerns. account.analytic.account's only required fields are name and
+    plan_id — company_id is NOT required and auto-defaults to the current
+    company (live-confirmed), so it's deliberately omitted here.
+
+    None (never attempted) vs [] (attempted, genuinely empty — e.g. plan
+    creation failed, or blocked by model_access) are distinct: only None
+    triggers (re)creation, so a real failure doesn't retry (and duplicate
+    the plan) on every subsequent call from a different module this same
+    run.
+    """
+    if ctx.analytic_account_ids is not None:
+        return ctx.analytic_account_ids
+    if not ctx.model_access.get('account.analytic.plan', True):
+        ctx.analytic_account_ids = []
+        return ctx.analytic_account_ids
+    try:
+        plan_id = client.create('account.analytic.plan', {"name": "Kostenstellen"})
+        vals_list = [{"name": name, "plan_id": plan_id} for name in _ANALYTIC_COST_CENTER_NAMES]
+        ctx.analytic_account_ids = client.create_batch('account.analytic.account', vals_list)
+    except Exception as e:
+        logger.warning(f"-> Warning: Kostenstellen konnten nicht erstellt werden: {e}")
+        ctx.analytic_account_ids = []
+    return ctx.analytic_account_ids
 
 
 def get_main_company_name(client) -> Optional[str]:
@@ -541,7 +591,8 @@ FIELD_COMPAT_WHITELIST: Dict[str, Tuple[Optional[str], List[str]]] = {
     'mrp.bom': ('mrp', ['product_tmpl_id', 'type', 'product_qty', 'bom_line_ids', 'code', 'product_id']),
     'ir.attachment': (None, ['res_model', 'res_id', 'raw', 'mimetype', 'type', 'name']),
     'hr.expense': ('hr_expense', ['employee_id', 'product_id', 'name', 'payment_mode',
-                   'total_amount', 'date', 'currency_id', 'approval_state']),
+                   'total_amount', 'date', 'currency_id', 'approval_state',
+                   'analytic_distribution']),
     'stock.location': ('stock', ['name', 'usage', 'location_id', 'barcode']),
     # S14/R18: model-gap-safe, not field-gap-safe like applicant_skill_ids
     # above — a quality-less mrp install is missing the whole model, which
@@ -558,6 +609,14 @@ FIELD_COMPAT_WHITELIST: Dict[str, Tuple[Optional[str], List[str]]] = {
     # sub-app split like mrp/quality.
     'stock.warehouse.orderpoint': ('stock', ['product_id', 'location_id', 'product_min_qty',
                                     'product_max_qty', 'trigger', 'company_id']),
+    # S15/R20: unconditionally safe — account.analytic.plan/account
+    # (core account app) are only probed when a shared analytic module
+    # already touches sale/purchase/hr_expense; no sub-app split.
+    'account.analytic.plan': ('account', ['name']),
+    'account.analytic.account': ('account', ['name', 'plan_id']),
+    'sale.order.line': ('sale', ['product_id', 'product_uom_qty', 'analytic_distribution']),
+    'purchase.order.line': ('purchase', ['name', 'product_id', 'product_qty', 'price_unit',
+                            'analytic_distribution']),
 }
 
 

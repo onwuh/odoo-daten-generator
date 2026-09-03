@@ -274,5 +274,47 @@ def run(client, ctx):
     except Exception as e:
         results.append(("sale: R8 — service_tracking creates shared Project + distinct Tasks on confirm", False, str(e)))
 
+    # Step 9 — S15/R20: analytic distribution live end-to-end, post-confirm.
+    # sale_pct=100 -> every eligible confirmed-order line gets a
+    # distribution referencing one of the (newly created) cost-center
+    # accounts, AND the wizard propagates it onto the resulting invoice
+    # line (accounting.py's sale.advance.payment.inv path) — the real,
+    # production code path for the same propagation WP1 verified manually.
+    try:
+        rctx = _make_rctx(num_orders=3)
+        rctx.company_ids = [partner_id]
+        rctx.product_ids = ctx.product_ids
+        rctx.module_selections.sale_confirm_pct = 100
+        rctx.module_selections.analytic = {
+            "enabled": True, "sale_pct": 100, "purchase_pct": 0, "expense_pct": 0,
+        }
+
+        create_sale_data(client, None, rctx)
+
+        assert rctx.analytic_account_ids, "get_or_create_analytic_accounts left ctx.analytic_account_ids empty"
+        assert rctx.confirmed_order_ids, "expected confirmed orders"
+        order_recs = client.search_read(
+            'sale.order', [["id", "in", rctx.confirmed_order_ids]], fields=["order_line"], limit=0,
+        )
+        line_ids = [lid for o in order_recs for lid in o.get("order_line", [])]
+        lines = client.search_read(
+            'sale.order.line', [["id", "in", line_ids], ["analytic_distribution", "!=", False]],
+            fields=["analytic_distribution"], limit=0,
+        )
+        assert len(lines) >= 1, f"expected at least 1 line with a distribution, got {lines}"
+        for line in lines:
+            keys = list(line["analytic_distribution"].keys())
+            assert len(keys) == 1 and int(keys[0]) in rctx.analytic_account_ids, line
+
+        results.append((
+            "sale: R20 analytic distribution live end-to-end — post-confirm, read-back (Pattern 4)",
+            True, f"{len(lines)} lines, accounts={rctx.analytic_account_ids}",
+        ))
+    except Exception as e:
+        results.append((
+            "sale: R20 analytic distribution live end-to-end — post-confirm, read-back (Pattern 4)",
+            False, str(e),
+        ))
+
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

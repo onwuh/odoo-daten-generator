@@ -1,7 +1,7 @@
 """Unit tests for modules/sale.py — B8 (confirm count scales with order count)."""
 import os
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
@@ -11,14 +11,17 @@ from config import DemoCriteria, ModuleSelections, RunContext
 from modules import sale
 
 
-def _make_ctx(num_orders):
+def _make_ctx(num_orders, analytic=None):
     criteria = DemoCriteria(
         mode="both", industry="IT", num_companies=0,
         num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
         num_services=0, num_consumables=0, num_storables=0,
     )
+    sel_kwargs = {"sale": num_orders}
+    if analytic is not None:
+        sel_kwargs["analytic"] = analytic
     ctx = RunContext(
-        criteria=criteria, module_selections=ModuleSelections(sale=num_orders), industry="IT",
+        criteria=criteria, module_selections=ModuleSelections(**sel_kwargs), industry="IT",
         language_name="German", language_code="de", gemini_model_name="test",
     )
     ctx.company_ids = [1, 2, 3]
@@ -170,6 +173,129 @@ def run():
         results.append(("create_sale_data: same-partner order/opportunity gets linked (B14)", True, ""))
     except AssertionError as e:
         results.append(("create_sale_data: same-partner order/opportunity gets linked (B14)", False, str(e)))
+
+    # ==================================================================
+    # S15/R20 — analytic distribution wiring (post-confirm read-then-write)
+    # ==================================================================
+
+    def _mock_client_confirmed(eligible_line_ids=None):
+        """Order creation + confirm succeed for every order; sale.order
+        search_read (confirm_sale_orders' own verification step) echoes
+        every created order back as confirmed regardless of domain, so
+        ctx.confirmed_order_ids is populated for the analytic step below to
+        read. sale.order.line search_read returns eligible_line_ids (or a
+        default set) as the "still empty" eligible pool."""
+        client = MagicMock()
+        counter = {"n": 7000}
+        created_order_ids = []
+
+        def _create(model, vals, context=None):
+            counter["n"] += 1
+            oid = counter["n"]
+            if model == 'sale.order':
+                created_order_ids.append(oid)
+            return oid
+
+        def _search_read(model, domain=None, fields=None, limit=None, **kw):
+            if model == 'product.product':
+                return [{"id": pid} for pid in (10, 11, 12)]
+            if model == 'sale.order':
+                return [{"id": oid, "name": f"S{oid}"} for oid in created_order_ids]
+            if model == 'sale.order.line':
+                ids = eligible_line_ids if eligible_line_ids is not None else [9001, 9002, 9003, 9004]
+                return [{"id": lid} for lid in ids]
+            return []
+
+        client.create.side_effect = _create
+        client.search_read.side_effect = _search_read
+        return client
+
+    try:
+        # Pattern 3: analytic disabled (default) -> no eligibility search,
+        # no write, helper never called.
+        client = _mock_client_confirmed()
+        ctx = _make_ctx(num_orders=5)
+        with patch("modules.sale.odoo_actions.get_or_create_analytic_accounts") as mock_helper:
+            sale.create_sale_data(client, gemini=None, ctx=ctx)
+            mock_helper.assert_not_called()
+        sol_reads = [c for c in client.search_read.call_args_list if c.args[0] == 'sale.order.line']
+        assert sol_reads == [], sol_reads
+        write_calls = [c for c in client.write.call_args_list if c.args[0] == 'sale.order.line']
+        assert write_calls == [], write_calls
+        results.append(("create_sale_data: analytic disabled -> no eligibility read, no write (Pattern 3)", True, ""))
+    except AssertionError as e:
+        results.append(("create_sale_data: analytic disabled -> no eligibility read, no write (Pattern 3)", False, str(e)))
+
+    try:
+        # sale_pct=0 with analytic enabled -> its own sub-off-switch.
+        client = _mock_client_confirmed()
+        ctx = _make_ctx(num_orders=5, analytic={"enabled": True, "sale_pct": 0, "purchase_pct": 50, "expense_pct": 50})
+        with patch("modules.sale.odoo_actions.get_or_create_analytic_accounts") as mock_helper:
+            sale.create_sale_data(client, gemini=None, ctx=ctx)
+            mock_helper.assert_not_called()
+        results.append(("create_sale_data: sale_pct=0 -> no helper call (Pattern 3)", True, ""))
+    except AssertionError as e:
+        results.append(("create_sale_data: sale_pct=0 -> no helper call (Pattern 3)", False, str(e)))
+
+    try:
+        # No cost centers available (helper returns []) -> no eligibility
+        # read, no write attempted.
+        client = _mock_client_confirmed()
+        ctx = _make_ctx(num_orders=5, analytic={"enabled": True, "sale_pct": 100, "purchase_pct": 0, "expense_pct": 0})
+        with patch("modules.sale.odoo_actions.get_or_create_analytic_accounts", return_value=[]):
+            sale.create_sale_data(client, gemini=None, ctx=ctx)
+        sol_reads = [c for c in client.search_read.call_args_list if c.args[0] == 'sale.order.line']
+        assert sol_reads == [], sol_reads
+        results.append(("create_sale_data: no cost centers -> no eligibility read (Pattern 5)", True, ""))
+    except AssertionError as e:
+        results.append(("create_sale_data: no cost centers -> no eligibility read (Pattern 5)", False, str(e)))
+
+    try:
+        # No eligible lines (all already carry a value) -> no write attempted.
+        client = _mock_client_confirmed(eligible_line_ids=[])
+        ctx = _make_ctx(num_orders=5, analytic={"enabled": True, "sale_pct": 100, "purchase_pct": 0, "expense_pct": 0})
+        with patch("modules.sale.odoo_actions.get_or_create_analytic_accounts", return_value=[901]):
+            sale.create_sale_data(client, gemini=None, ctx=ctx)
+        write_calls = [c for c in client.write.call_args_list if c.args[0] == 'sale.order.line']
+        assert write_calls == [], write_calls
+        results.append(("create_sale_data: no eligible lines -> no write (Pattern 5)", True, ""))
+    except AssertionError as e:
+        results.append(("create_sale_data: no eligible lines -> no write (Pattern 5)", False, str(e)))
+
+    try:
+        # Happy path: sale_pct=100 -> every eligible line picked, grouped by
+        # cost center, one write() call per distinct group (Pattern 8), the
+        # eligibility domain filters on analytic_distribution=False, and the
+        # written value is the live-confirmed {"<id>": 100.0} shape.
+        client = _mock_client_confirmed(eligible_line_ids=[9001, 9002, 9003, 9004])
+        ctx = _make_ctx(num_orders=5, analytic={"enabled": True, "sale_pct": 100, "purchase_pct": 0, "expense_pct": 0})
+        with patch("modules.sale.odoo_actions.get_or_create_analytic_accounts",
+                  return_value=[901, 902]) as mock_helper:
+            sale.create_sale_data(client, gemini=None, ctx=ctx)
+            mock_helper.assert_called_once()
+        sol_reads = [c for c in client.search_read.call_args_list if c.args[0] == 'sale.order.line']
+        assert len(sol_reads) == 1, sol_reads
+        domain = sol_reads[0].args[1]
+        assert ["analytic_distribution", "=", False] in domain, domain
+        write_calls = [c for c in client.write.call_args_list if c.args[0] == 'sale.order.line']
+        assert 1 <= len(write_calls) <= 2, write_calls  # grouped by cost center, few calls
+        all_written_ids = []
+        for call in write_calls:
+            ids, vals = call.args[1], call.args[2]
+            keys = list(vals["analytic_distribution"].keys())
+            assert len(keys) == 1 and int(keys[0]) in (901, 902), vals
+            assert vals["analytic_distribution"][keys[0]] == 100.0, vals
+            all_written_ids.extend(ids)
+        assert sorted(all_written_ids) == [9001, 9002, 9003, 9004], all_written_ids
+        results.append((
+            "create_sale_data: sale_pct=100 -> every eligible line written, grouped by cost center (Pattern 8)",
+            True, f"{len(write_calls)} write calls",
+        ))
+    except AssertionError as e:
+        results.append((
+            "create_sale_data: sale_pct=100 -> every eligible line written, grouped by cost center (Pattern 8)",
+            False, str(e),
+        ))
 
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results

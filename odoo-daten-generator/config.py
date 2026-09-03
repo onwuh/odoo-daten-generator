@@ -73,6 +73,21 @@ class ModuleSelections:
     # Odoo technical module name and orchestrator.py's module_order key, same
     # convention as hr_recruitment/hr_timesheet (see run_config.py's own note
     # on this).
+    analytic: dict = field(default_factory=dict)
+    # analytic shape: {"enabled": bool, "sale_pct": int, "purchase_pct": int,
+    # "expense_pct": int} (S15/R20). NOT its own orchestrated module — no
+    # WANTED_MODULES/MODULE_RUN_ORDER/orchestrator.py entry, no progress row.
+    # Read independently by sale.py/purchase.py/expenses.py, each gated on
+    # its OWN parent module being selected too (sale_pct is meaningless if
+    # "sale" itself is off) — closer to documents' top-level shape than
+    # crm_lost's (nested under one single parent's `if _enabled(crm)`), since
+    # this has three unrelated parents, not one. sale_pct/purchase_pct/
+    # expense_pct each default to 0 (that module's own off-switch, same
+    # precedent as S14's orderpoints_pct/quality_fail_pct) once "enabled" is
+    # true; "enabled" itself is the feature's own on/off (matching
+    # documents/crm_chatter's top-level dict convention), not implied by the
+    # three percentages being zero — an explicit gate is clearer than "are
+    # all three sub-values coincidentally zero".
 
     def get(self, key: str, default=None):
         return getattr(self, key, default)
@@ -144,3 +159,14 @@ class RunContext:
     # lot/serial-tracking branch reads this to never write tracking-derived
     # stock.lot records against a real customer's pre-existing product.
     new_product_ids: List[int] = field(default_factory=list)
+    # S15/R20: cost-center account.analytic.account ids, lazy+memoized via
+    # odoo_actions.get_or_create_analytic_accounts — three independent
+    # modules (sale/purchase/hr_expense) may each need these, and no single
+    # one is guaranteed to run first, so whichever calls the helper first
+    # populates this, the others reuse it. Optional, not a bare [] default:
+    # None means "never attempted yet", [] means "attempted, genuinely
+    # nothing came back" (e.g. account.analytic.plan create failed) — a
+    # plain truthiness check on a bare list default can't tell those apart
+    # and would retry (and duplicate the plan) on every subsequent call,
+    # same reasoning as mrp.py's _get_company_id() wrapper-list memoization.
+    analytic_account_ids: Optional[List[int]] = None

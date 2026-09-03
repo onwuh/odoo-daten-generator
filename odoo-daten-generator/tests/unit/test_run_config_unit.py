@@ -48,6 +48,7 @@ _FULL = {
                   "orderpoints_pct": 15, "orderpoint_min_qty": 8, "orderpoint_max_qty": 30},
         "hr_expense": {"enabled": True, "count_per_employee": 4, "approved_pct": 60},
         "documents": {"enabled": True, "bill_pdfs": True, "cv_pdfs": False},
+        "analytic": {"enabled": True, "sale_pct": 30, "purchase_pct": 20, "expense_pct": 10},
     },
 }
 
@@ -129,7 +130,10 @@ def run():
         }, sel.stock
         assert sel.hr_expense == {"count_per_employee": 4, "approved_pct": 60}, sel.hr_expense
         assert sel.documents == {"bill_pdfs_enabled": True, "cv_pdfs_enabled": False}
-        assert selected == _ALL_INSTALLED | {"documents"}, selected
+        assert sel.analytic == {
+            "enabled": True, "sale_pct": 30, "purchase_pct": 20, "expense_pct": 10,
+        }, sel.analytic
+        assert selected == _ALL_INSTALLED | {"documents", "analytic"}, selected
         results.append(("Vollständiges Payload füllt alle ModuleSelections-Felder", True, ""))
     except Exception as e:
         results.append(("Vollständiges Payload füllt alle ModuleSelections-Felder", False, str(e)))
@@ -182,6 +186,50 @@ def run():
         results.append(("R11: crm_lost cannot be set while crm itself is disabled", True, ""))
     except Exception as e:
         results.append(("R11: crm_lost cannot be set while crm itself is disabled", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # S15/R20: "analytic" absent from the payload entirely -> empty dict,
+    # not in selected, no progress row (it never has one — not its own
+    # orchestrated module, see config.py's ModuleSelections.analytic).
+    # ------------------------------------------------------------------
+    try:
+        payload = dict(_FULL)
+        payload["modules"] = {k: v for k, v in _FULL["modules"].items() if k != "analytic"}
+        ctx, selected = _build(payload)
+        assert "analytic" not in selected, selected
+        assert ctx.module_selections.analytic == {}, ctx.module_selections.analytic
+        keys = run_config.active_progress_keys(ctx, selected)
+        assert "analytic" not in keys, keys
+        results.append(("S15/Pattern 3: analytic absent from payload -> empty dict, no selection", True, ""))
+    except Exception as e:
+        results.append(("S15/Pattern 3: analytic absent from payload -> empty dict, no selection", False, str(e)))
+
+    try:
+        # explicitly disabled (enabled=False) -> same as absent.
+        payload = dict(_FULL)
+        payload["modules"] = dict(_FULL["modules"])
+        payload["modules"]["analytic"] = {"enabled": False, "sale_pct": 99}
+        ctx, selected = _build(payload)
+        assert "analytic" not in selected, selected
+        assert ctx.module_selections.analytic == {}, ctx.module_selections.analytic
+        results.append(("S15/Pattern 3: analytic enabled=False -> empty dict, no selection", True, ""))
+    except Exception as e:
+        results.append(("S15/Pattern 3: analytic enabled=False -> empty dict, no selection", False, str(e)))
+
+    try:
+        # enabled=True with all three pcts omitted -> defaults to 0 each,
+        # not a ConfigError (missing keys are optional, unlike enabled itself).
+        payload = dict(_FULL)
+        payload["modules"] = dict(_FULL["modules"])
+        payload["modules"]["analytic"] = {"enabled": True}
+        ctx, selected = _build(payload)
+        assert "analytic" in selected, selected
+        assert ctx.module_selections.analytic == {
+            "enabled": True, "sale_pct": 0, "purchase_pct": 0, "expense_pct": 0,
+        }, ctx.module_selections.analytic
+        results.append(("S15: analytic enabled=True, pcts omitted -> default to 0", True, ""))
+    except Exception as e:
+        results.append(("S15: analytic enabled=True, pcts omitted -> default to 0", False, str(e)))
 
     # ------------------------------------------------------------------
     # B10: installed AND selected gates the progress rows
@@ -387,6 +435,13 @@ def run():
         assert counts["Aufgaben"] == 4 * 6, counts
         assert counts["Chatter-Nachrichten"] == 6 * 5, counts
         assert counts["Bestellungen"] == 6, counts
+        # S15/R20: 3 lines/order (sale.py's own 1-5 average), 2 lines/order
+        # (purchase.py's own 1-3 average) — see estimate_record_counts' own comments.
+        num_confirmed_orders = max(1, round(7 * 80 / 100))
+        assert counts["Kostenrechnungs-Zeilen Verkauf (ca.)"] == round(num_confirmed_orders * 3 * 30 / 100), counts
+        assert counts["Kostenrechnungs-Zeilen Einkauf (ca.)"] == round(6 * 2 * 20 / 100), counts
+        assert counts["Kostenrechnungs-Zeilen Spesen (ca.)"] == round(counts["Spesen"] * 10 / 100), counts
+        assert counts["Kostenstellen"] == 3, counts
         assert all(v > 0 for v in counts.values()), counts
         results.append(("Pre-Flight-Zahlen sind rechnerisch korrekt", True, f"{sum(counts.values())} gesamt"))
     except Exception as e:
