@@ -262,3 +262,17 @@ def assign_tracking(vals_list: List[dict], lot_pct: int, serial_pct: int) -> Non
             vals['tracking'] = 'lot'
         elif roll < lot_pct + serial_pct:
             vals['tracking'] = 'serial'
+
+
+def assign_quality_state(vals_list: List[dict], fail_pct: int) -> None:
+    """Mutates each dict in vals_list in place, adding a 'quality_state' key
+    ('fail'/'pass') to quality.check vals (S14/R18). Every entry is touched
+    unconditionally, unlike assign_tracking's is_storable filter — there is
+    no analogous "not applicable" subset among quality.check vals.
+
+    Clamps fail_pct rather than trusting the caller, same defensive posture
+    as assign_tracking. Pattern 1: an empty vals_list is a no-op.
+    """
+    fail_pct = max(0, min(100, fail_pct))
+    for vals in vals_list:
+        vals['quality_state'] = 'fail' if random.uniform(0, 100) < fail_pct else 'pass'

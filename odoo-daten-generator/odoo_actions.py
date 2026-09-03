@@ -552,8 +552,8 @@ FIELD_COMPAT_WHITELIST: Dict[str, Tuple[Optional[str], List[str]]] = {
     # see ODOO_GOTCHAS.md).
     'quality.point': ('mrp', ['name', 'team_id', 'picking_type_ids', 'company_id',
                       'test_type_id', 'test_report_type', 'apply_to', 'product_ids']),
-    'quality.check': ('mrp', ['point_id', 'team_id', 'test_type_id', 'company_id',
-                      'product_id', 'quality_state']),
+    'quality.check': ('mrp', ['point_id', 'production_id', 'team_id', 'test_type_id',
+                      'company_id', 'product_id', 'quality_state']),
     # S14/R12: unconditionally safe — stock is only probed when selected, no
     # sub-app split like mrp/quality.
     'stock.warehouse.orderpoint': ('stock', ['product_id', 'location_id', 'product_min_qty',

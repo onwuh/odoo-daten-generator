@@ -204,5 +204,41 @@ def run():
     except Exception as e:
         results.append(("Pattern 1: assign_tracking empty vals_list, no crash", False, str(e)))
 
+    # ------------------------------------------------------------------
+    # S14/R18 — assign_quality_state: distribution, clamp, empty guard
+    # ------------------------------------------------------------------
+    try:
+        # Pattern 7: both pass and fail appear over enough samples.
+        random.seed(6)
+        vals_list = [{"point_id": i} for i in range(200)]
+        data_factory.assign_quality_state(vals_list, fail_pct=30)
+        states = [v["quality_state"] for v in vals_list]
+        assert any(s == "pass" for s in states), "no 'pass' sample"
+        assert any(s == "fail" for s in states), "no 'fail' sample"
+        results.append(("Pattern 7: assign_quality_state pass/fail distribution (n=200)", True, ""))
+    except Exception as e:
+        results.append(("Pattern 7: assign_quality_state pass/fail distribution (n=200)", False, str(e)))
+
+    try:
+        # Clamps fail_pct into [0, 100] rather than trusting the caller.
+        vals_list = [{"point_id": i} for i in range(50)]
+        data_factory.assign_quality_state(vals_list, fail_pct=150)
+        assert all(v["quality_state"] == "fail" for v in vals_list), \
+            "fail_pct>100 must clamp to 100, i.e. always fail"
+        vals_list2 = [{"point_id": i} for i in range(50)]
+        data_factory.assign_quality_state(vals_list2, fail_pct=-20)
+        assert all(v["quality_state"] == "pass" for v in vals_list2), \
+            "fail_pct<0 must clamp to 0, i.e. always pass"
+        results.append(("assign_quality_state clamps fail_pct to [0, 100]", True, ""))
+    except Exception as e:
+        results.append(("assign_quality_state clamps fail_pct to [0, 100]", False, str(e)))
+
+    try:
+        # Pattern 1: empty vals_list is a no-op, no crash.
+        data_factory.assign_quality_state([], fail_pct=50)
+        results.append(("Pattern 1: assign_quality_state empty vals_list, no crash", True, ""))
+    except Exception as e:
+        results.append(("Pattern 1: assign_quality_state empty vals_list, no crash", False, str(e)))
+
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results
