@@ -1532,27 +1532,41 @@ getaktet, LLM-Cache profitiert firmenübergreifend, Journal sammelt alle
 Firmen unter einer löschbaren Einheit (ein "Lauf löschen" räumt alles).
 
 **D2 — Namensraum: neues Konzept braucht einen von "company" getrennten
-Namen.** Drei bestehende, verschiedene "Firma"-Begriffe kollidieren bereits
-im Repo: `DemoCriteria.num_companies` (Anzahl `res.partner`-Kundenkontakte
-PRO Firmenlauf, `config.py:8`), `RunContext.company_ids` (dieselbe Bedeutung,
-historisch falsch benannt), `RunContext.res_company_ids` (echte
-`res.company`-Ids, aktuell ≤1). Ein viertes, jetzt plurales "N Ziel-Firmen"-
-Konzept braucht einen eigenen, klar unterscheidbaren Namen (z. B.
-`target_companies`/`company_profiles`) — bloßes "company" möglichst meiden.
-Konkrete Benennung: Teil des nächsten Config-Schema-Entwurfs, hier nur als
-harte Nebenbedingung festgehalten, damit sie nicht verloren geht.
+Namen. Korrigiert (Cold-Review): nur ZWEI bestehende Begriffe, nicht drei —
+`res_company_ids` existiert noch gar nicht.** `DemoCriteria.num_companies`
+(Anzahl `res.partner`-Kundenkontakte PRO Firmenlauf, `config.py:9` — Zeile
+korrigiert, `:8` ist `industry`), `RunContext.company_ids` (dieselbe
+Bedeutung, historisch falsch benannt, `config.py:110`). `RunContext.
+res_company_ids` war ein **Vorschlag** aus dem alten, nie umgesetzten
+R17-Minimal-Scope-Plan (repo-weiter Grep: kommt nur in `ROADMAP.md` vor,
+nirgends in `config.py` oder sonstigem Code) — der Erstentwurf dieses
+Spikes beschrieb es fälschlich als bereits existierendes Feld ("aktuell
+≤1"). Muss als neues 🔒-Feld angelegt werden, ist keine Anpassung eines
+bestehenden. Ein drittes, jetzt plurales "N Ziel-Firmen"-Konzept braucht
+trotzdem einen eigenen, klar unterscheidbaren Namen (z. B.
+`target_companies`/`company_profiles`) — siehe D11 unten für die konkrete
+Form.
 
-**D3 — `get_main_company_id()` & Geschwister werden `ctx`-bewusst.** Heute
-ignorieren sie `ctx` komplett, fragen Odoo direkt nach "Firma id=1, sonst die
-erste gefundene" (`odoo_actions.py:322-341` u. a., 4 direkte Call-Sites plus
-3 weitere gleich gebaute Helper). Im Pro-Firma-Loop muss die "aktuelle
-Ziel-Firma" aus der gerade verarbeiteten `ctx` kommen, nicht immer id=1.
-**Entscheidung:** diese Helper nehmen `company_id` explizit entgegen (oder
-lesen `ctx.res_company_ids[0]`) statt blind zu fragen — 🔒-Signaturänderung
-über `odoo_actions.py` + 7 Call-Sites (`expenses.py`, `mrp.py`,
-`inventory.py`, `purchase.py`, plus die 3 bisher ungenutzten weiteren
-Helper). Architekten-Freigabe nötig, gleiche Kategorie wie jede andere
-grundlegende, modulübergreifende Helper-Änderung.
+**D3 — `get_main_company_id()` & Geschwister werden `ctx`-bewusst — mit
+einem echten Split, nicht pauschal. Korrigiert (Cold-Review):** der
+Erstentwurf behauptete 3 "bisher ungenutzte" Helper — **alle drei werden
+bereits aufgerufen** (`get_main_company_name` → `connect_service.py:164`,
+`get_main_company_info` → `modules/documents.py:97`,
+`get_main_company_language` → `connect_service.py:171`), macht die
+Gesamtzahl von 7 Call-Sites zwar richtig, aber aus falschem Grund. Wichtiger
+Fund dabei: **`connect_service.py:164`/`:171` laufen beim Verbinden, bevor
+irgendeine `RunContext` existiert** (`build_context` läuft erst später, in
+`jobs.submit()`) — diese zwei können grundsätzlich **nicht** `ctx`-bewusst
+werden, egal welche Signatur gewählt wird. **Entscheidung (überarbeitet):**
+nur die 4 Helper, die innerhalb von Modul-Funktionen laufen (`get_main_
+company_id` — 4 Call-Sites `expenses.py`/`mrp.py`/`inventory.py`/
+`purchase.py`; `get_main_company_info` — `documents.py:97`) nehmen
+`company_id` explizit entgegen (aus `ctx.res_company_ids[0]` der aktuellen
+Schleifen-Iteration, siehe D10/D11). `get_main_company_name`/
+`get_main_company_language` bleiben unverändert (Verbindungs-Zeitpunkt ist
+inhärent Firma-1-only, das ist korrekt so, kein Firma-N-Bezug möglich).
+🔒-Signaturänderung über `odoo_actions.py` + 5 Call-Sites (nicht 7) +
+`documents.py:97`. Architekten-Freigabe nötig.
 
 **D4 — Live bestätigt (2026-09-04): Transaktions-Records unter einer
 Nicht-Primär-Firma funktionieren mit firmenneutralen Partnern/Produkten.**
@@ -1571,17 +1585,41 @@ gebündelt vorab.** Passt zur sequentiellen Ausführung, liefert schneller
 sichtbaren Fortschritt für Firma 1 (kein langes stilles Warten auf N
 Branchen-Abrufe, bevor überhaupt ein Modul startet), bleibt trotzdem ein
 gebatchter Aufruf pro Firma (LLM-Minimalismus intakt — N Aufrufe für N
-Branchen, nicht pro Record). Cache-Key ist bereits branchen-geschlüsselt
-(`seeds/cache/<branchen-slug>_<version>.json`) — wiederholte Branchen über
-mehrere Firmen oder erneute Läufe treffen den Cache natürlich.
+Branchen, nicht pro Record). **Cache-Key-Präzisierung (Cold-Review):**
+`fetch_name_suggestions`s Cache-Key ist branchen+sprachen-geschlüsselt,
+trifft bei wiederholter Branche zuverlässig. `fetch_creative_atoms`s
+Cache-Key (`llm_service.py:276-279`) hängt **zusätzlich** von
+`num_services`/`num_consumables`/`num_storables` ab — zwei Firmen mit
+gleicher Branche, aber unterschiedlichen Produkt-Stückzahlen, treffen
+diesen Cache **nicht**. "Wiederholte Branchen treffen den Cache natürlich"
+gilt uneingeschränkt nur für `name_suggestions`.
 
-**D6 — Fortschrittsanzeige braucht echte Umstrukturierung, kein kleiner
-Patch.** `RunRecord.modules`/`module_order` (`web/jobs.py:99-100`) sind
-flache, nach Modul-Code geschlüsselte Dicts — eindeutig für eine Firma,
-mehrdeutig für N ("wessen CRM-Zeile ist das?"). Braucht entweder
-verschachtelte Struktur (Firma→Modul→Status) oder firmen-qualifizierte
-Keys. Betrifft `web/sse.py`s Event-Payloads und `static/app.js`s Rendering
-— eigener Entwurf nötig, in diesem Spike nicht versucht.
+**D6 — Fortschrittsanzeige braucht echte Umstrukturierung — Umfang größer
+als ursprünglich benannt, jetzt mit konkretem Lösungsweg.** `RunRecord.
+modules`/`module_order` (`web/jobs.py:99-100`) sind flache, nach Modul-Code
+geschlüsselte Dicts — eindeutig für eine Firma, mehrdeutig für N ("wessen
+CRM-Zeile ist das?"). **Cold-Review fand einen zusätzlichen, härteren
+Fork:** `orchestrator.py`s `on_start(name)`/`on_done(name, ok)`-Signatur
+ist im Code selbst als **gesperrt** dokumentiert (`jobs.py:344-346`) — sie
+lässt sich nicht um einen Firmen-Parameter erweitern, ohne diese Sperre zu
+brechen. **Entscheidung:** `orchestrator.py` bleibt unangetastet;
+stattdessen definiert `_execute()`s Pro-Firma-Schleife **pro Iteration
+neue** `on_start`/`on_done`-Closures (das tut sie heute bereits einmalig,
+`jobs.py:319`), die den Modul-Code firmen-qualifizieren, BEVOR er
+`record.modules`/`self._publish(...)` erreicht (z. B. Key `f"{firmen_idx}:
+{module_code}"` statt `module_code`) — kein 🔒-Touch an `orchestrator.py`
+nötig. Gleiches Muster für die weiteren, bisher übersehenen flachen
+Strukturen: `module_errors` (`:101`), `submit()`s einmaliger
+`active_progress_keys(ctx, selected)`-Aufruf (`:198`) wird zur Schleife
+über alle Firmen (verkettete, firmen-qualifizierte Liste), `estimate_
+record_counts` (`:205`, `run_config.py:498`) ebenso — dessen Labels sind
+Text-geschlüsselt ("Kontakte", "Produkte"), brauchen also firmen-
+qualifizierte Labels ("Kontakte (Firma 1)") statt qualifizierter Keys.
+Betrifft `web/sse.py`s Event-Payloads (Shape bleibt `(type, data)`,
+unverändert) und `static/app.js`s Rendering (muss firmen-qualifizierte Keys
+gruppiert darstellen). **Abhängig von D11** (Config-Schema-Form) — die
+firmen-qualifizierende Struktur spiegelt direkt, wie die Firmen im Payload
+adressiert werden.
 
 **D7 — Laufzeit-Ehrlichkeit: N Firmen multiplizieren die Gesamtlaufzeit
 ungefähr linear.** `web/jobs.py`s eigener Docstring: "ein voller Lauf
@@ -1592,13 +1630,22 @@ und wahrscheinlich eine weiche Obergrenze für N in der UI — genaue Zahl
 nicht Teil dieses Spikes.
 
 **D8 — Bestehende-Firma-Wiederverwendung braucht zwei neue, getrennte
-Fetches.** (a) Eine echte `res.company`-Liste — `connect_service.py`s
+Fetches — und die Konsumenten-Seite, nicht nur den Fetch selbst (Cold-Review-
+Ergänzung).** (a) Eine echte `res.company`-Liste — `connect_service.py`s
 `existing_companies` ist ein Namens-Fallstrick, meint `res.partner`-
 Kundenkontakte, nicht echte `res.company` (`:111-116`) — braucht einen
 neuen, sauber benannten Fetch. (b) Eine `company_id`-gescopte Variante von
 `fetch_existing_data` für den Opt-in "auch die Partner/Produkte dieser
 bestehenden Firma wiederverwenden" — die heutige Funktion ist ungefiltert
-und Firma-1-geformt.
+und Firma-1-geformt. **Zusätzlich betroffen:** `build_context`s
+`use_existing`-Zweig (`run_config.py:474-476`) hängt heute unbedingt an
+**einen** geteilten `ctx.company_ids`/`ctx.product_ids`-Pool — für den
+Pro-Firma-Wiederverwendungs-Toggle muss das zur Pro-Firma-Zuweisung werden
+(passt zu D10/D11: jede Firma bekommt ihre eigene `ctx`, also ihren eigenen
+Merge-Punkt, kein gemeinsamer Pool mehr über Firmen hinweg). Auch
+`ConnectResult.existing_company_ids`/`existing_product_ids`
+(`connect_service.py:71-72`) und `as_public_dict`s Skalar-Zählungen
+(`:102-103`) sind heute Ein-Firma-geformt.
 
 **D9 — UI-Fluss: neuer Bildschirm nach Verbindung, vor/statt Konfiguration.**
 Bestätigt 3 echte Ansichten heute (`static/index.html:20-22`: Verbindung →
@@ -1610,14 +1657,70 @@ Wiederverwendungs-Toggle (falls bestehend), volles bestehendes
 Konfiguration-Modul-Set] → Generierung. Größere Frontend-Umstrukturierung
 als jede bisherige UI-Änderung in diesem Repo.
 
-**Offen, bewusst nicht in diesem Spike entschieden:** exakte Config-Schema-
-Form für den Payload (Liste von Firmen-Spezifikationen vs. Alternative);
-weiche Obergrenze für N; Teilausfall-Verhalten (Firma 3 von 5 schlägt fehl —
-abbrechen, überspringen, wiederholen?); ob Cleanup pro Firma teilbar sein
-muss oder wie heute komplett-oder-nichts pro `run_id` bleibt (Tendenz:
-bleibt komplett-oder-nichts); ob Firmenauswahl (bestehend) einen eigenen
-Zugriffsrechte-Check über die bereits vorhandene `model_access`-Prüfung
-hinaus braucht.
+**D10 — `RunContext`-Lebenszyklus: eine frische, unabhängige `ctx` pro
+Firma, keine geteilte (Cold-Review: als Lücke identifiziert, hier
+entschieden).** Eine geteilte `ctx` über alle Firmen hinweg hätte reale
+Nebenwirkungen: `ctx.analytic_account_ids` ist memoized
+(`config.py:172`/`odoo_actions.get_or_create_analytic_accounts:373`) — Firma
+2..N würden Firma 1s Kostenstellen-Plan stillschweigend erben;
+`company_ids`/`product_ids`/`invoice_ids` würden sich über Firmen hinweg
+aufsummieren, sodass Firma 2s Belege versehentlich Firma 1s Partner ziehen
+(laut D4 technisch unproblematisch, aber falsch für Realismus UND für
+Pro-Firma-Statistiken). **Entscheidung:** jede Firma bekommt ihre eigene,
+vollständig unabhängige `RunContext` — spiegelt exakt, wie ein
+Einzelfirmen-Lauf heute funktioniert, nur N-mal wiederholt. Einziger neuer
+Code: (a) die Ziel-Firma-Auflösung pro Iteration (neu anlegen mit Land, oder
+bestehende Id wiederverwenden) füllt `ctx.res_company_ids` (neues Feld, D2);
+(b) `_execute()`s äußere Schleife baut+verwendet pro Iteration eine neue
+`ctx`, teilt aber `client`/`llm`/`journal` über alle Iterationen hinweg
+(D1). `installed_modules`/`model_access`/`feature_flags` sind
+Verbindungs-Ergebnisse (nicht Firma-spezifisch) — pro Iteration identisch
+hineinkopiert, keine Aggregation nötig.
+
+**D11 — Config-Schema-Form: Liste von Payload-Blöcken, jeder Block hat
+exakt die Form des heutigen Gesamt-Payloads plus zwei neue Firma-Felder
+(Cold-Review: als Lücke identifiziert, hier entschieden).** Der heutige
+`POST /api/runs`-Payload beschreibt bereits genau EINE Firma (Modus,
+Branche, Stammdaten-Zahlen, Modul-Toggles) — `build_criteria`/
+`build_selections` bleiben dadurch **komplett unverändert wiederverwendbar**,
+einmal pro Listen-Element aufgerufen. Neue Top-Level-Form:
+```json
+{"companies": [
+  {"target": {"mode": "new", "country": "DE"}, "industry": "...",
+   "master_data": {...}, "modules": {...}},
+  {"target": {"mode": "existing", "company_id": 7, "reuse_master_data": true},
+   "industry": "...", "master_data": {...}, "modules": {...}},
+  ...
+]}
+```
+`target.mode` ∈ {`new`, `existing`}; bei `new` zusätzlich `country` (DACH,
+siehe Anforderungs-Punkt 4); bei `existing` zusätzlich `company_id` (aus
+D8s neuem `res.company`-Fetch) und `reuse_master_data` (Bool, steuert D8s
+Pro-Firma-`fetch_existing_data`-Variante). `run_config` bekommt eine neue
+Funktion `build_context_list(payload) -> List[Tuple[RunContext, Set[str]]]`,
+die pro Listen-Element `build_context` aufruft (D10) und zusätzlich die
+Ziel-Firma auflöst (`odoo_actions.create_company`/`resolve_existing_company`
+— neue Helper, nicht Teil dieses Spikes im Detail). Löst D2s
+Namensraum-Frage: das Firmen-Array selbst braucht keinen neuen Bezeichner
+im Python-Code (es ist Payload-JSON), aber `RunContext.res_company_ids`
+(D2/D3) ist der einzige neue Python-seitige "Firma"-Name.
+
+**Eingestuft nach Ladungsfähigkeit (Cold-Review-Kategorisierung):**
+- **Bereits entschieden, nicht mehr offen:** Cleanup-Granularität bleibt
+  komplett-oder-nichts pro `run_id` — `RunJournal.record()`
+  (`run_journal.py:76`) gruppiert nur nach Modell, hat keine
+  Firmen-Dimension zum Aufteilen; eine Firmen-Dimension einzuführen wäre
+  eine eigene, hier nicht gerechtfertigte Änderung.
+- **Ohne erneute Review bei Implementierung entscheidbar:** weiche
+  Obergrenze für N (reine UI-Validierungskonstante); Teilausfall-Verhalten
+  (der bestehende Code hat bereits einen impliziten Default —
+  `orchestrator._run_module` schluckt Modul-Fehler pro Firma
+  (`orchestrator.py:124-127`), ein Fehler beim Aufbau EINER Firma selbst
+  (z. B. Ziel-Firma-Erzeugung schlägt fehl) würde dagegen aus `_execute()`
+  herausfallen — "restliche Firmen trotzdem versuchen" ist ein kleiner,
+  expliziter Zusatz im Schleifenkörper, kein Architektur-Entscheid); ob die
+  Firmenauswahl (bestehend) einen eigenen Zugriffsrechte-Check über
+  `model_access` hinaus braucht.
 
 ## 5. Umsetzungsreihenfolge
 
