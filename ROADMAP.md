@@ -2455,6 +2455,32 @@ präzisiert):**
   Schutz beim Ernten, `failed_company_indices`) siehe die vollständige
   Schleifen-Reihenfolge weiter oben (D11-Ergänzung, Runde 6).
 
+### S16-NEU — WP-Sequenz (2026-09-04, nach sechs Cold-Review-Runden)
+
+Größer als jeder bisherige Sprint dieses Repos — S15/R20 war "cross-cutting
+(4+ Dateien), bewusst isoliert"; dieser Umfang berührt `config.py`,
+`odoo_client.py`, `run_journal.py`, `modules/master_data.py`,
+`odoo_actions.py`, `run_config.py`, `web/jobs.py`, `web/app.py`,
+`static/index.html`, `static/app.js`, plus neue Tests für jede dieser
+Dateien. Sechs statt der üblichen 1-3 Cold-Review-Runden waren nötig,
+bevor überhaupt eine WP-Sequenz sinnvoll geschrieben werden konnte — WP2
+enthält daher **D14 als eigenen, ersten Commit** (siehe N=1-
+Regressionskriterium oben), nicht gebündelt mit dem Rest.
+
+| WP | Inhalt | 🔒 | Voraussetzung |
+|---|---|---|---|
+| **WP1** ✅ | Architektur-Spike: D1-D15, sechs Cold-Review-Runden, alle live-verifizierten Fakten (Kontext-Injektion, Kontenplan-Mechanismus, Umhäng-Verweigerung, Analytic-Cross-Company, Archiv-Fallback) — siehe oben | nein | — |
+| **WP2a** | `odoo_client.py`: D14 (`_default_context`, Merge in `create`/`create_batch`/`write`/`call_method`, `None`-Schutz) als **eigener erster Commit** — N=1-Regressionskriterium hier prüfen (bestehende Suite bleibt grün), bevor WP2b/WP3 folgen | ja | WP1 |
+| **WP2b** | Restliche Infrastruktur: `config.py` (`RunContext.res_company_ids`, D2) 🔒; `master_data.py` (D8-Ergänzung, expliziter `company_id`-Write in `_create_partners`/`_create_products`); `odoo_actions.py` (D3: `get_main_company_id`/`get_main_company_info` werden `company_id`-Parameter-bewusst, 5 Call-Sites in `expenses.py`/`mrp.py`/`inventory.py`/`purchase.py`/`documents.py` angepasst; `create_second_warehouse` unverändert, nur neu aufgerufen); `run_journal.py` (D13: `"res.company"` zu `ARCHIVE_FALLBACK_MODELS`) | ja | WP2a |
+| **WP3** | `run_config.py`: `build_context_list` (D11, 6 Verbindungs-Parameter, kein `existing_company_ids`/`existing_product_ids`), `_as_list`-Helper + `target`-Block-Validierung (Name/Land/Firma-Id/Server-Obergrenze, als `ConfigError`), `validate_consent` (Konsens-Entscheidung: `reuse_requested`-Kwarg + `or`-Prädikat), Consent-Injektion pro Block, D8bs `company_id`-gescopte Fetch-Variante, `estimate_record_counts`/`active_progress_keys` pro Firma mit `company_label`-Parameter (D6, "Kostenstellen" ausgenommen, D12) | ja | WP2b |
+| **WP4** | `web/jobs.py`: die vollständige 8-Schritt-Pro-Firma-Schleife in `_execute()` (D10-Korrektur/D14/D15/D8b/D12, `job["ctx"]` → `job["contexts"]`), `STATUS_PARTIAL` + `failed_company_indices` + alle 7 betroffenen Zwei-Zustand-Stellen (`jobs.py:366`/`:244`, Tests), Pro-Iteration-`on_start`/`on_done`-Closures (D6) | ja | WP3 |
+| **WP5** | `web/app.py`: `/api/preflight` pro Firma (D6), `MODULE_LABELS`-Fallback-Fix (`:403`, D6); `static/index.html`/`app.js`: neuer Firmenauswahl-Bildschirm + Pro-Firma-Konfigurationsbildschirm (D9), firmen-qualifizierte Fortschrittsanzeige inkl. Anzeige-Label aus `target.name` (D6/D11), die 7 STATUS_PARTIAL-Frontend-Stellen (`app.js:1333`/`:1305`/`:1209-1216`/`:926`/`:1293`) | nein | WP4 |
+| **WP6** | Peer-Review vor Merge (S5-S15-Verfahren, Diff statt Plan-Text), grüner Live-`test_suite.py` — inkl. der drei live zu verifizierenden Fragen aus D13 (Cleanup-Reihenfolge bei N≥2, identische Modul-Auswahl reicht bereits) und D15 (Warehouse-Erzeugung unter korrekter Firma) | — | WP2-WP5 Code steht |
+
+**Pro Arbeitspaket verbindlich:** dieselben Testing Design Patterns wie
+jedes bisherige Sprintpaket (siehe CLAUDE.md und die Pattern-Zuordnung
+oben, "Weitere Zuordnungen aus Cold-Review Runde 4+5").
+
 ## 5. Umsetzungsreihenfolge
 
 Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-Pflicht). Empfohlene Sprints:
@@ -2476,7 +2502,7 @@ Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-
 | **S13 — Lager-Tiefe** 🆕 | R14 (Multi-Warehouse), R15 (Lagerplätze, inkl. R16 Location-Ebene), R13 (Seriennummern-/Chargenverfolgung, MRP-Anbindung gestrichen — siehe R13) | Alle drei bauen auf `inventory.py`/`stock.*`-Modellen auf. R13 braucht R15 nicht zwingend (`stock.lot.location_id` ist optional), profitiert aber von den gleichzeitig entstehenden Sub-Locations — ein Sprint für den gesamten Lager-Realismus-Ausbau |
 | **S14 — Prozess-Tiefe** 🆕 | R12 (Nachbestellregeln, in `inventory.py`), R18 (Quality Checks, Erweiterung des bestehenden `mrp.py`-Pfads) | Beide sind eher "MRP/Inventory-Investition aus S1/S8 weiter ausnutzen" als "auf S13 aufbauen" (Peer-Review-Korrektur: `quality.point` hat kein Location-Feld, "an `wh_qc_stock_loc_id` andocken" war keine reale Mechanik) — dennoch sinnvoll in einem Sprint gebündelt, da beide dieselbe operative Prozess-Ebene vertiefen |
 | **S15 — Analytic Accounting (R20)** 🆕 | `account.analytic.plan`/`account.analytic.account` + `analytic_distribution`-Wiring über `sale.py`/`purchase.py`/`accounting.py`/`expenses.py` | Cross-cutting (4+ Dateien) bewusst isoliert in eigenem Sprint, damit der Review-Diff überschaubar bleibt; profitiert von R19 (Expenses, S12), falls dessen Zeilen mit-verkabelt werden sollen |
-| **S16 — Multicompany (R17)** ⚠️ Scope überholt (2026-09-04) | Minimal-Scope (eine Firma) dreifach cold-reviewed + freigegeben, dann durch neue Anforderungen ersetzt: N Firmen, neu-oder-bestehend pro Firma, pro Firma Branche+Land, voller Pipeline-Durchlauf pro Firma. Siehe "S16-NEU — Anforderungen" in `ROADMAP.md` | Ursprünglicher Minimal-Scope bewusst klein (eine Firma, kein Pipeline-Wiederholen) — dreifaches Cold-Review (6+4+3 Blocker über 3 Runden, alle gefixt) bestätigte die Instanz-Fakten (Umhäng-Verweigerung, keine Record-Rule-Maskierung, `get_main_company_id`-Blast-Radius, u. a. — bleiben gültig). Scope-Änderung kam danach, nicht durch Review-Fund: Nutzer will N Firmen mit vollem Pipeline-Durchlauf pro Firma. Architektur-Spike für neuen Umfang noch nicht begonnen — nächste Sitzung |
+| **S16-NEU — Multicompany, N Firmen (R17, ersetzt Minimal-Scope)** ✅ Architektur freigegeben (2026-09-04) | N Firmen (neu-oder-bestehend), pro Firma Branche+Land+voller Pipeline-Durchlauf. D1-D15, sechs Cold-Review-Runden (Architektur konvergiert, Runde 6 bestätigt), WP-Sequenz WP1-WP6 geschrieben — siehe "S16-NEU — Architektur-Spike"/"S16-NEU — WP-Sequenz" in `ROADMAP.md` | Größter Einzel-Umfang aller S-Sprints bisher — berührt 10+ Dateien. Ursprünglicher Minimal-Scope (eine Firma, dreifach cold-reviewed) durch neue Nutzeranforderungen ersetzt, nicht durch Review-Fund — dessen Instanz-Fakten (Umhäng-Verweigerung, keine Record-Rule-Maskierung, u. a.) bleiben gültig und sind in D1-D15 eingeflossen. Zentraler Live-Fund: Odoo-Kontext-Injektion scoped Transaktions-Records ohne Modul-Code-Touch (D14), aber NICHT für `res.partner`/`product.product` (D8-Ergänzung, `master_data.py` braucht doch einen kleinen Touch). WP2a landet D14 bewusst als eigenen ersten Commit (N=1-Regressionskriterium). Bereit zur Implementierung |
 
 **Pro Arbeitspaket verbindlich** (aus CLAUDE.md Testing Design Patterns):
 - Empty-Pool-Guards (P1) für jede neue `random.choice/sample`-Stelle
