@@ -485,37 +485,62 @@ Warehouse vor `purchase.py`s Lauf verfügbar zu machen.
 `company_ids` (Default- + erlaubte Firmen) — Standard-Odoo-Multi-Company-Modell ist auf
 dieser Instanz vorhanden und nutzbar. Vier zuvor offene Fragen live geklärt:
 
-1. **Kontenplan einer neuen `res.company` ist NICHT automatisch da.** `res.company.create()`
-   liefert eine Firma ohne jeden `account.account` (bestätigt: `search_read` auf
-   `account.account` mit `company_ids in [<neue id>]` → `[]`). Wird per JSON2 ausgelöst über
-   `client.call_method('account.chart.template', 'try_loading', ids=[], kwargs={'template_code':
-   ..., 'company': <id>})` — ein `@api.model`-Classmethod, `ids=[]` funktioniert. Zwei
-   Vorbedingungen live gefunden: (a) `res.company.country_id` muss **vor** dem Aufruf gesetzt
-   sein (`fields_get` zeigt `chart_template` als eigenes Company-Feld, aber das Laden selbst
-   scheitert ohne Country mit `"Missing required field 'Country' ... for model 'Tax'"`); (b)
-   Template und Country müssen zusammenpassen — `template_code='generic_coa'` mit
-   `country_id=Germany` scheitert mit `"The tax group must have the same country_id as the tax
-   using it"`, `template_code='de_skr03'` mit `country_id=Germany` funktioniert (5+ Accounts
-   nach dem Aufruf lesbar). Für dieses Repo (deutsche Demo-Konventionen durchgängig) also:
-   `country_id` = Deutschland setzen, `template_code='de_skr03'`.
+1. **Kontenplan einer neuen `res.company` ist NICHT automatisch da — und wird für den
+   Minimal-Scope bewusst NICHT geladen (Cold-Review-Korrektur, siehe unten).**
+   `res.company.create()` liefert eine Firma ohne jeden `account.account` (bestätigt:
+   `search_read` auf `account.account` mit `company_ids in [<neue id>]` → `[]`). Das Laden
+   funktioniert zwar mechanisch per JSON2 (`client.call_method('account.chart.template',
+   'try_loading', ids=[], kwargs={'template_code': ..., 'company': <id>})`, ein
+   `@api.model`-Classmethod, `ids=[]` funktioniert), braucht vorher gesetztes
+   `res.company.country_id` (sonst `"Missing required field 'Country' ... for model
+   'Tax'"`) und ein zum Country passendes Template (`generic_coa` + Deutschland scheitert
+   mit `"The tax group must have the same country_id as the tax using it"`, `de_skr03` +
+   Deutschland funktioniert — 5+ Accounts danach lesbar). **Cold-Review Runde 1 fand hier
+   drei zusammenhängende Blocker gegen einen rein kosmetischen Nutzen:** (a) das
+   Hardcoding auf Deutschland/`de_skr03` widerspricht `data_factory.py`s eigenem
+   `_DEFAULT_COUNTRIES = ["DE", "AT", "CH"]` und der Tatsache, dass `web/security.py`s
+   Host-Allowlist jeden `demo-*.odoo.com`-Mandanten zulässt, nicht nur deutsche; (b) die vom
+   Chart-Load angelegten `account.account`/`account.journal`/`account.tax`-Records
+   entstehen serverseitig innerhalb eines einzigen Methodenaufrufs und laufen nie durch
+   `JournalingClient.create` — D7s `delete_run` kann sie also grundsätzlich nicht erfassen,
+   unabhängig von `ARCHIVE_FALLBACK_MODELS`; (c) kein Fallback bei Fehlschlag (Firma bereits
+   angelegt, Chart-Load schlägt fehl → halb-fertige Firma, "Fehler"-Zeile). Der Minimal-Scope
+   enthält ohnehin keine Belege gegen die neue Firma (siehe unten) — ein Kontenplan hat also
+   keinen funktionalen Zweck, nur einen kosmetischen. **Entscheidung:** Kontenplan-Laden
+   entfällt komplett aus dem Scope. Die neue Firma bleibt ohne Chart of Accounts; das
+   spiegelt akkurat, dass in diesem Umfang nichts Buchhaltungsrelevantes gegen sie läuft.
 2. **Referenzierte Records lassen sich nicht umhängen — jetzt live bestätigt, nicht mehr nur
    angenommen.** `write()` von `company_id` auf ein bereits in einer `sale.order.line`
    referenziertes `product.product` scheitert mit `"Das Unternehmen dieses Produkts kann nicht
    geändert werden, solange es Lagerbuchungen gibt, die einem anderen Unternehmen gehören."` —
    bestätigt exakt das erwartete Verhalten, der Minimal-Scope (nur frisch erzeugte Records der
    zweiten Firma zuweisen) bleibt die einzig gangbare Route.
-3. **API-Key-User braucht `company_ids`-Erweiterung NICHT zwingend, aber empfohlen.** Der
-   API-Key-User (`res.users` id 2) hat `company_ids=[1]`. Live getestet: `create()`/`write()`/
-   `search_read()` mit explizitem `company_id=2`/`['company_id','=',2]`-Domain funktionieren
-   trotzdem (Beispiel: `stock.warehouse` mit `company_id=2` angelegt und explizit
-   zurückgelesen — beides erfolgreich). Ein **ungefilterter** `search_read` ohne Domain zeigt
-   die Firma-2-Records dagegen nicht (Standard-Odoo-Record-Rule-Scoping auf
-   `allowed_company_ids`) — das heißt: jeder neue Firma-2-Code-Pfad MUSS explizit nach
-   `company_id` filtern/erzeugen, darf sich nie auf Default-Scoping verlassen. Empfehlung (kein
-   Blocker): `company_ids` des API-Users trotzdem um die neue Firma erweitern (`write` auf
-   `res.users`, ein Feld) als Absicherung für den Fall, dass ein später genutzter
-   Wizard/eine Action-Methode intern `self.env.company`/`self.env.companies` statt eines
-   expliziten Ids nutzt — billig, kein Nachteil.
+3. **API-Key-User braucht `company_ids`-Erweiterung NICHT — bewusst nicht empfohlen, nicht
+   nur "nicht automatisiert" (Cold-Review-Korrektur).** Der API-Key-User (`res.users` id 2)
+   hat `company_ids=[1]`. Live getestet: `create()`/`write()`/`search_read()` mit explizitem
+   `company_id=2`/`['company_id','=',2]`-Domain funktionieren trotzdem (Beispiel:
+   `stock.warehouse` mit `company_id=2` angelegt und explizit zurückgelesen — beides
+   erfolgreich). Ein **ungefilterter** `search_read` ohne Domain zeigt die Firma-2-Records
+   dagegen nicht (Standard-Odoo-Record-Rule-Scoping auf `allowed_company_ids`) — jeder neue
+   Firma-2-Code-Pfad MUSS also explizit nach `company_id` filtern/erzeugen, darf sich nie auf
+   Default-Scoping verlassen. Der ursprüngliche Plan empfahl trotzdem, `company_ids` des
+   API-Users manuell zu erweitern ("billig, kein Nachteil") — **Cold-Review Runde 1 widerlegt
+   beide Teile dieser Aussage:** (a) den aufrufenden Nutzer zu bestimmen ist entgegen der
+   ursprünglichen Begründung *nicht* aufwändig — `modules/crm.py:278-291` liest bereits den
+   internen Nutzerkreis (`search_read('res.users', [['share','=',False], ...])`); (b) eine
+   Erweiterung ist **nicht** ohne Nachteil: `connect_service.fetch_existing_data` filtert
+   seine `product.product`/`res.partner`-Abfragen (`:109-124`) **nicht** nach `company_id` —
+   genau die Record-Rule-Maskierung, die Firma-2-Records heute vor einem ungefilterten
+   `search_read` verbirgt, verhindert auch, dass ein späterer Lauf mit "Vorhandene Daten
+   einbeziehen" (`use_existing`) Firma-2-Produkte in den geteilten `ctx.product_ids`-Pool
+   zieht (`run_config.py:474-476`). Eine `company_ids`-Erweiterung entfernt genau diese
+   Maskierung und würde Punkt 2s Umhäng-Verweigerung beim nächsten Lauf real auslösen.
+   **Entscheidung:** keine `company_ids`-Erweiterung, weder automatisiert noch als
+   dokumentierter manueller Schritt — die neue Firma bleibt für den API-User "erlaubt, aber
+   nicht Standard", und ist entsprechend im Odoo-Firmenumschalter für reguläre Nutzer nicht
+   ohne Weiteres sichtbar. Akzeptierte Einschränkung des Minimal-Scopes (kosmetisch, keine
+   Funktionseinbuße für die per JSON2 erzeugten Records selbst); eine spätere Erweiterung
+   braucht zuerst einen `company_id`-Filter in `fetch_existing_data`.
 4. **`odoo_actions.get_main_company_id`s Blast Radius ist kleiner als befürchtet.** Vier
    Call-Sites (`modules/expenses.py:50`, `modules/mrp.py:152`, `modules/inventory.py:55`,
    `modules/purchase.py:151`) — alle vier geben laut Doku-String bewusst "Firma mit id=1,
@@ -523,7 +548,12 @@ dieser Instanz vorhanden und nutzbar. Vier zuvor offene Fragen live geklärt:
    die komplette bestehende Pipeline arbeitet weiterhin ausschließlich gegen Firma 1, keine der
    vier Stellen muss angefasst werden. Die neue Firma-2-Befüllung (R17-Minimal-Scope) läuft
    über einen eigenen, neuen Helper — additiv, nicht als Parameter an
-   `get_main_company_id` angehängt.
+   `get_main_company_id` angehängt. **Cold-Review-Ergänzung:** drei weitere `res.company`-
+   lesende Helper existieren (`get_main_company_name` — `odoo_actions.py:388`, genutzt von
+   `connect_service.py:164`; `get_main_company_info` — `:427`, genutzt von
+   `modules/documents.py:97`; `get_main_company_language` — `:675`), alle mit demselben
+   "id=1 zuerst"-Fallback wie `get_main_company_id` — ebenfalls unverändert korrekt, aber
+   bisher nicht namentlich genannt.
 
 **⚠️ Warum eigener Architektur-Spike vor Code nötig war (🔒-adjacent):** `RunContext.company_ids`
 heißt trotz seines Namens **niemals** `res.company`, sondern hält `res.partner`-IDs
@@ -553,11 +583,11 @@ Pipeline verdoppeln):**
   ~1 req/s Live-Rate-Limit (siehe CLAUDE.md, jetzt auch hart durch D10 durchgesetzt) und
   bereits heute mehrstufigen Läufen wäre das ein Laufzeit- und Fehlerbudget-Vielfaches ohne
   klar proportionalen Demo-Mehrwert.
-- Stattdessen: **eine** zusätzliche `res.company` anlegen (Country=Deutschland,
-  `chart_template='de_skr03'`, siehe Punkt 1 oben), ihr NUR frisch für sie selbst erzeugte
-  Records zuweisen (neue Partner/Produkte/ein neues Warehouse aus R14) — **nicht** bestehende,
-  von Company-1-Belegen referenzierte Records per `company_id`-Write umhängen (Punkt 2 oben,
-  jetzt live bestätigt statt nur angenommen).
+- Stattdessen: **eine** zusätzliche `res.company` anlegen (ohne Kontenplan, siehe Punkt 1
+  oben), ihr NUR frisch für sie selbst erzeugte Records zuweisen (neue Partner/Produkte/ein
+  neues Warehouse aus R14) — **nicht** bestehende, von Company-1-Belegen referenzierte
+  Records per `company_id`-Write umhängen (Punkt 2 oben, jetzt live bestätigt statt nur
+  angenommen).
 
 **Details, WP-Aufteilung und Cold-Review-Ergebnisse:** siehe "S16 — WP-Sequenz" in
 `ROADMAP.md`.
@@ -1177,10 +1207,15 @@ Kostenstellen-`write()`-Aufrufe — wenige, nicht einer pro Zeile).
 **Stand 2026-09-04.** WP1 (Architektur-Spike, gebündelte Live-Verifikation gegen
 `demo-test5.odoo.com`) gelaufen — Ergebnisse und die daraus resultierende
 Design-Entscheidung (neues Feld statt Rename) stehen oben im R17-Abschnitt
-selbst (nicht hier verdoppelt). **Cold-Review noch ausstehend** — dieser Plan
-geht jetzt in Runde 1 (unabhängiger Opus-Agent, nur Plantext + Live-Repo, keine
-Konversationshistorie, S5-S15-Verfahren), bevor die erste Codezeile geschrieben
-wird.
+selbst (nicht hier verdoppelt). **Cold-Review Runde 1 gelaufen** (unabhängiger
+Opus-Agent, nur Plantext + Live-Repo, keine Konversationshistorie, S5-S15-Verfahren)
+— fand **6 Blocker + 12 Should-Fixes**, alle unten eingearbeitet (u. a. eine
+fehlende Registrierungskette, die die Karte unsichtbar/unklickbar gemacht hätte;
+ein D7-Cleanup-Loch, das pro Lauf eine unlöschbare Firma+Kontenplan auf der
+Live-Instanz hinterlassen hätte; das Kontenplan-Laden selbst dafür gestrichen
+statt gefixt, da sein einziger Nutzen kosmetisch war; eine falsche Prämisse +
+ein echtes Leck-Risiko bei der ursprünglich empfohlenen API-User-`company_ids`-
+Erweiterung, jetzt gestrichen). Plan geht als Nächstes in Runde 2.
 
 **Zentrale Design-Entscheidung (Grund für den eigenen `modules/multicompany.py`-
 Zuschnitt statt additiver Erweiterung wie R20):** anders als R20 (nur ein
@@ -1204,7 +1239,7 @@ versehentlich konsumiert werden können — Platzierung an letzter Stelle macht
 das strukturell unmöglich, statt es nur durch Disziplin an jeder Call-Site zu
 vermeiden.
 
-**Pool-Isolation (load-bearing, Grund für die drei neuen `RunContext`-Felder):**
+**Pool-Isolation (load-bearing, Grund für das eine neue `RunContext`-Feld):**
 `master_data.py` befüllt `ctx.company_ids` (Partner-Ids) und `ctx.product_ids` —
 beide von `sale.py`/`purchase.py`/`accounting.py`/etc. als Quelle für
 Firma-1-Belege gelesen. Würden die neuen Firma-2-Partner/-Produkte in diese
@@ -1213,63 +1248,75 @@ Pipeline-Reihenfolge, oder bei künftigem Code, der diese Prämisse nicht kennt)
 versehentlich ein Firma-2-Produkt in einen Firma-1-Beleg ziehen — Odoo würde
 das beim `write()`/`action_confirm()` zwar ablehnen (Punkt 2 im R17-Spike-
 Befund), aber ein Laufzeitfehler ist kein Ersatz für einen Pool, der die
-Verwechslung von vornherein unmöglich macht. Neue, bewusst getrennte Felder:
-`ctx.res_company_ids: List[int]` (echte `res.company`-Ids, disambiguiert von
-`company_ids`), `ctx.multicompany_partner_ids`/`multicompany_product_ids:
-List[int]` (Firma-2-Partner/-Produkte, nie in die geteilten Pools gemischt).
+Verwechslung von vornherein unmöglich macht. **Cold-Review-Korrektur (S12):**
+der ursprüngliche Plan sah dafür zwei zusätzliche `RunContext`-Felder vor
+(`multicompany_partner_ids`/`multicompany_product_ids`) — Review-Einwand: in
+diesem Minimal-Scope liest nichts diese Felder nach der Erzeugung wieder
+(`multicompany.py` läuft zuletzt, nichts Nachgelagertes existiert), sie wären
+also reiner Schreib-ohne-Leser-Zuwachs an einer 🔒-Datei. Gestrichen — die
+erzeugten Partner-/Produkt-Ids bleiben lokale Variablen innerhalb
+`modules/multicompany.py`, kein `ctx`-Feld nötig. Nur `ctx.res_company_ids`
+bleibt (hat einen klaren zukünftigen Leser: jeder spätere Code, der wissen
+muss, ob/welche zweite Firma existiert).
 
 ```python
-# config.py — RunContext, neue Felder (S16/R17):
+# config.py — RunContext, ein neues Feld (S16/R17):
 res_company_ids: List[int] = field(default_factory=list)
 # Echte res.company-Ids, die dieser Lauf angelegt hat — disambiguiert von
 # company_ids oben, das trotz seines Namens res.partner-Ids hält. Minimal-
-# Scope: höchstens ein Eintrag. Flache Liste statt second_company_id, damit
-# ein künftiger N-Firmen-Scope keine weitere Schema-Änderung braucht.
-multicompany_partner_ids: List[int] = field(default_factory=list)
-multicompany_product_ids: List[int] = field(default_factory=list)
-# Firma-2-Partner/-Produkte — bewusst getrennt von den geteilten
-# company_ids/product_ids-Pools, damit kein früher laufendes Modul
-# versehentlich einen Firma-2-Record in einen Firma-1-Beleg zieht.
+# Scope: höchstens ein Eintrag, befüllt von genau einer Stelle
+# (modules/multicompany.py, ein Aufruf pro Lauf über orchestrator.py). Flache
+# Liste statt second_company_id, damit ein künftiger N-Firmen-Scope keine
+# weitere Schema-Änderung braucht. WICHTIG: bewusst kein
+# Optional[List[int]]-Memoization-Sentinel wie ctx.analytic_account_ids (das
+# Muster existiert dort, weil DREI unabhängige Module denselben Helfer lazy
+# aufrufen könnten — hier gibt es nur einen Aufrufer). Sollte je ein zweiter
+# Aufrufer hinzukommen, MUSS zuerst auf den Optional[...]-Sentinel
+# umgestellt werden, sonst entsteht bei jedem weiteren Aufruf eine dritte
+# Firma.
 
 # ModuleSelections, neues Feld:
 multicompany: dict = field(default_factory=dict)
 # multicompany shape: {"enabled": bool, "partner_count": int, "product_count": int}
 # (S16/R17). Eigenes orchestriertes Modul (modules/multicompany.py, eigener
 # WANTED_MODULES/MODULE_RUN_ORDER/orchestrator.py-Eintrag) — läuft ZULETZT
-# (nach "documents"). Minimal-Scope enthält bewusst keine Orders/Rechnungen
-# gegen die neue Firma, daher kein Kontenplan-Bedarf für ihre eigenen
-# Records — WP2 lädt trotzdem einen (via account.chart.template.try_loading,
-# einmaliges Firmen-Setup), damit die neue Firma in der Odoo-UI nicht als
-# sichtbar unfertige leere Hülle erscheint.
+# (nach "documents"). Kein Kontenplan-Bedarf (siehe R17 Punkt 1) — die neue
+# Firma bleibt ohne Chart of Accounts, kein Kontenplan-Laden im Scope.
 ```
 
-**API-User-`company_ids`-Erweiterung bewusst NICHT automatisiert:** WP1s
-Live-Test hat gezeigt, dass explizite `company_id`-Domains/Werte auch ohne
-diese Erweiterung funktionieren (siehe R17-Abschnitt, Punkt 3). Den
-JSON2-authentifizierten "aktuellen Nutzer" programmatisch zu bestimmen, um
-seine `company_ids` zu erweitern, bräuchte entweder einen zusätzlichen
-Config-Wert (den Login-Namen, der dem Client aktuell nicht übergeben wird)
-oder eine neue Annahme über die API — beides unverhältnismäßiger Aufwand für
-einen bereits als nicht-blockierend bestätigten Schritt. Bleibt eine
-dokumentierte manuelle Absicherungs-Option (`ODOO_GOTCHAS.md`), kein
-Codepfad.
+**API-User-`company_ids`-Erweiterung: bewusst NICHT im Scope, weder
+automatisiert noch als manueller Schritt (Cold-Review-Korrektur — der
+ursprüngliche Plan hatte hier sowohl eine falsche Prämisse als auch ein
+übersehenes echtes Risiko, siehe R17-Abschnitt Punkt 3 für Details).**
+Konsequenz: die neue Firma ist für reguläre Odoo-Nutzer nicht automatisch im
+Firmenumschalter sichtbar — akzeptierte, rein kosmetische Einschränkung des
+Minimal-Scopes, keine Funktionseinbuße für die per JSON2 erzeugten Records
+selbst (die entstehen unabhängig davon korrekt mit `company_id`=neue Firma).
 
 | WP | Inhalt | 🔒 | Voraussetzung |
 |---|---|---|---|
-| **WP1** ✅ | Architektur-Spike: gebündelte Live-Verifikation gegen `demo-test5.odoo.com` (Kontenplan-Ladepfad inkl. Country/Template-Kompatibilität, Referenzierte-Records-Umhäng-Verweigerung, API-User-`company_ids`-Wirkung auf explizite vs. ungefilterte Queries, `get_main_company_id`-Blast-Radius über alle 4 Call-Sites) | nein | — |
-| **WP2** | Infrastruktur: `config.py` (drei neue `RunContext`-Felder + `ModuleSelections.multicompany`, siehe oben) 🔒, `odoo_actions.create_second_company` (Firma anlegen, `country_id`=Deutschland, `de_skr03`-Kontenplan via `try_loading` laden, Name aus `ctx.name_banks['company_names']` statt eigenem LLM-Call), neues `modules/multicompany.py`-Grundgerüst + `orchestrator.py`/`run_config.py`-Registrierung als letzter Pipeline-Schritt 🔒 (Platzierungs-Begründung siehe oben), `static/app.js`-UI-Karte, `run_config.py`s `estimate_record_counts` | ja | WP1 |
-| **WP3** | Befüllung: `modules/multicompany.py` erzeugt `partner_count` Partner + `product_count` Produkte (`company_id=ctx.res_company_ids[0]`, Ablage in den dedizierten Pools, nie in `ctx.company_ids`/`ctx.product_ids` gemischt) + ein Warehouse für die neue Firma über `inventory.py`s bestehenden R14-Multi-Warehouse-Pfad, `company_id` parametrisiert statt über `get_main_company_id()` bezogen | nein | WP2 |
-| **WP4** | Peer-Review vor Merge (S5-S15-Verfahren, Diff statt Plan-Text), grüner Live-`test_suite.py` | — | WP2-WP3 Code steht |
+| **WP1** ✅ | Architektur-Spike: gebündelte Live-Verifikation gegen `demo-test5.odoo.com` (Kontenplan-Ladepfad inkl. Country/Template-Kompatibilität — Ergebnis: nicht im Scope, siehe R17 Punkt 1 —, Referenzierte-Records-Umhäng-Verweigerung, API-User-`company_ids`-Wirkung auf explizite vs. ungefilterte Queries, `get_main_company_id`-Blast-Radius über alle 4 Call-Sites + 3 weitere `res.company`-Helper) | nein | — |
+| **WP2** | Infrastruktur — **vollständige Registrierungskette** (Cold-Review-Blocker B1/B2, analog §3s "Referenz — Registrierungskette", hier mit pseudo-Modul-Abweichung): `config.py` (`RunContext.res_company_ids` + `ModuleSelections.multicompany`, siehe oben) 🔒; `run_config.py`s `PSEUDO_MODULES` (`"multicompany"` ergänzen, **nicht** `WANTED_MODULES` — keine echte Odoo-App) + `MODULE_LABELS` + `MODULE_RUN_ORDER` (nach `"documents"`) + `build_selections` + `estimate_record_counts` + `test_run_config_unit.py`s `_FULL`/`_ALL_INSTALLED`-Literale (Zeile mit `selected == _ALL_INSTALLED \| {"documents", "analytic"}`, analog S15s eigenem Fund an derselben Stelle); `static/app.js:257`s hardcodierte `isPseudo`-Prüfung um `"multicompany"` erweitern (zweite hardcodierte Pseudo-Modul-Stelle, sonst bleibt die Karte dauerhaft deaktiviert — B2); `odoo_actions.MODEL_ACCESS_PROBES["multicompany"] = ["res.company"]` + `probe_model_access`s hardcodiertes Pseudo-Modul-Tupel (`odoo_actions.py:317`) um `"multicompany"` erweitern (`res.company`-Anlegen ist ein echtes, oft eingeschränktes Recht, Should-Fix S5 — verwandelt einen harten Fehlschlag in einen sauberen Pattern-3-Skip); `odoo_actions.create_second_company` (Firma anlegen — nur `name` aus `ctx.name_banks.get('company_names')` per deterministischem Index `len(ctx.criteria...)`-artig gewählt, s. u., plus `currency_id` von Firma 1 übernommen; **kein** `country_id`/Kontenplan, siehe R17 Punkt 1); `run_journal.py`s `ARCHIVE_FALLBACK_MODELS` um `"res.company"` ergänzen (D7-Cleanup-Netz, Blocker B3(a) — `res.company` lässt sich oft nicht `unlink`en sobald sie referenziert wird, Archivieren als Fallback); neues `modules/multicompany.py`-Grundgerüst + `orchestrator.py`-Registrierung als letzter Pipeline-Schritt 🔒 (Platzierungs-Begründung oben); `static/app.js`-UI-Karte | ja | WP1 |
+| **WP3** | Befüllung: `modules/multicompany.py` erzeugt `partner_count` Partner + `product_count` Produkte (`company_id=ctx.res_company_ids[0]`, batched, lokale Variablen — siehe Pool-Isolation oben) + ein Warehouse für die neue Firma. **Cold-Review-Korrektur (S1):** `odoo_actions.create_second_warehouse` (R14, `odoo_actions.py:113`) nimmt `company_id` bereits als Parameter — `inventory.py:55` übergibt heute nur zufällig `get_main_company_id(client)`, kein Refactor an R14-Code nötig, nur `create_second_warehouse(client, ctx.res_company_ids[0])` aufrufen. Namens-Kollision beachten: der Helper benennt neue Warehouses `"Lager 2 (<suffix>)"`/Code `WH2<suffix>` — für Firma 2 einen passenden Namen übergeben statt des Default-"Lager 2"-Musters. **Vor Umsetzung live prüfen (S2):** legt Odoo beim Anlegen einer `res.company` bereits automatisch ein Standard-Warehouse an? Ein `search_read('stock.warehouse', [['company_id','=', <neue id>]])` direkt nach der Firmen-Erzeugung klärt das — falls ja, entfällt dieser Schritt oder wird zu "zweitem Warehouse für Firma 2". **Produktnamen-Quelle korrigiert (S3):** `data_factory.build_products`s kategorisierte Form (`{"services": [...], ...}`) kommt aus `creative_atoms`, das nur lokal in `orchestrator.run()` existiert und nie auf `ctx` landet — `multicompany.py` erreicht es nicht. Stattdessen `ctx.name_banks.get('product_names')` (flache Liste) + `fallback_data.FALLBACK_PRODUCTS`, Vals selbst gebaut (einfache Produkte, keine Service/Consumable/Storable-Kategorisierung nötig für diesen Scope). **Namens-Kollision (S4):** Firmenname deterministisch aus dem Pool wählen (z. B. Index = Anzahl bereits erzeugter Firmen), nicht `random.choice` — vermeidet Duplikate mit `master_data.py`s Partnernamen aus demselben Pool. `'stock' in ctx.installed_modules`-Gate für den Warehouse-Schritt ergänzen (fehlte im Erstentwurf) | nein | WP2 |
+| **WP4** | Peer-Review vor Merge (S5-S15-Verfahren, Diff statt Plan-Text), grüner Live-`test_suite.py`. **Cold-Review-Korrektur (B4):** `create_second_company`/Firmenerzeugung bekommt **nur** Unit-Test-Abdeckung (gemockter Client) — gleiches Präzedens wie `create_second_warehouse` (R14/S13), das ebenfalls nie einen Live-Integrationstest hat (`tests/integration/` enthält keinen `second_warehouse`-Treffer, per grep bestätigt). Grund: ohne Kontenplan-Laden ist eine `res.company` zwar über `ARCHIVE_FALLBACK_MODELS` archivierbar (WP2), aber ein Pattern-4-Live-Test, der bei **jedem** `test_suite.py`-Lauf (CLAUDE.md-Pflicht nach jeder Code-Änderung) eine neue Firma auf der geteilten `demo-test5.odoo.com`-Instanz anlegt, würde unnötig akkumulieren — WP1s einmalige manuelle Live-Verifikation reicht als Nachweis, dass der Erzeugungspfad live funktioniert. Test-Runner-Registrierung (S10, oft vergessenes Detail, R19-Präzedens `ad26baa`): neues Testmodul in **beiden** Runnern eintragen — `tests/unit/unit_suite.py` (Import + `_MODULES`) UND `tests/integration/test_suite.py` (Import + Suite-Liste) | — | WP2-WP3 Code steht |
+
+**Bekannte, akzeptierte Einschränkung (S11):** `build_selections` gibt bei
+`mode != "both"` früh zurück (`run_config.py:206-207`), `static/app.js`
+blendet den Modul-Bereich außerhalb "both" aus — ein "Nur Stammdaten"-Lauf
+erzeugt daher nie eine zweite Firma. Bewusste, nicht versehentliche
+Entscheidung: Multicompany ist inhaltlich Stammdaten-nah, aber ohne einen
+"both"-artigen Lauf ergibt eine zweite, leere Firma ohnehin wenig Demo-Wert.
 
 **Pro Arbeitspaket verbindlich:** dieselben Testing Design Patterns wie jedes
 bisherige Sprintpaket (siehe CLAUDE.md) — Pattern 1 (leerer
 Partner-/Produkt-Namenspool), Pattern 2 (LLM liefert `None`/leer für
-`company_names` → Fallback), Pattern 3 (`multicompany.enabled=False` → keine
-API-Calls), Pattern 4 (Read-back auf `res.company`/`account.account`-Anzahl
-nach `try_loading`/Partnern/Produkten/Warehouse), Pattern 5 (fehlende
-Prerequisites, z. B. leere `ctx.name_banks['company_names']`, → Skip mit
-Fallback-Namen statt Crash), Pattern 8 (Partner-/Produkt-Erzeugung batched,
-nicht in einer Schleife pro Record).
+`company_names`/`product_names` → Fallback), Pattern 3
+(`multicompany.enabled=False` → keine API-Calls), Pattern 4 (Read-back auf
+Partnern/Produkten/Warehouse nach Erzeugung — **nicht** auf einem Kontenplan,
+der nicht mehr im Scope ist), Pattern 5 (fehlende Prerequisites, z. B. leere
+`ctx.name_banks['company_names']`, → Skip mit Fallback-Namen statt Crash),
+Pattern 8 (Partner-/Produkt-Erzeugung batched, nicht in einer Schleife pro
+Record).
 
 ## 5. Umsetzungsreihenfolge
 
