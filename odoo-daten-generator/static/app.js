@@ -20,6 +20,9 @@
     runId: null,
     source: null,
     moduleRows: {},
+    runStartedAt: null,   // seconds (server clock, from RunRecord.started_at)
+    runModules: [],       // last known [{key,status},...], read by the timer tick
+    timerHandle: null,
     feedbackRunId: null,
     feedbackPromptedRunId: null,
     // S10/R10 (F3): a LATCH, not a live mirror of state.connect.ok — set once
@@ -1147,6 +1150,61 @@
     });
   }
 
+  // ---- runtime timer ("Laufzeit" / "Verbleibend (ca.)") -------------------
+  // Elapsed is exact (server started_at vs. wall clock). Remaining is a
+  // self-correcting estimate from the fraction of modules finished so far
+  // (elapsed / done * pending) — no per-module weighting data exists, and a
+  // finished-module-count ratio is the same approach the rest of this app
+  // uses for "(ca.)" estimates (see run_config.estimate_record_counts).
+  // Absent before the first module completes; shown as "wird berechnet…".
+  function formatDuration(totalSeconds) {
+    var s = Math.max(0, Math.round(totalSeconds));
+    var m = Math.floor(s / 60);
+    var rem = s % 60;
+    return m + ":" + (rem < 10 ? "0" : "") + rem;
+  }
+
+  function stopRunTimer() {
+    if (state.timerHandle) {
+      window.clearInterval(state.timerHandle);
+      state.timerHandle = null;
+    }
+  }
+
+  function tickRunTimer() {
+    if (!state.runStartedAt) return;
+    var elapsed = (Date.now() / 1000) - state.runStartedAt;
+    setText("stat-elapsed", formatDuration(elapsed));
+
+    var total = state.runModules.length;
+    var done = state.runModules.filter(function (m) {
+      return m.status === "done" || m.status === "failed" || m.status === "skipped";
+    }).length;
+    if (!total || !done) {
+      setText("stat-remaining", "wird berechnet…");
+    } else if (done >= total) {
+      setText("stat-remaining", "0:00");
+    } else {
+      var remaining = (elapsed / done) * (total - done);
+      setText("stat-remaining", "~" + formatDuration(remaining));
+    }
+  }
+
+  function startRunTimer(startedAt) {
+    stopRunTimer();
+    state.runStartedAt = startedAt;
+    tickRunTimer();
+    state.timerHandle = window.setInterval(tickRunTimer, 1000);
+  }
+
+  function resetRunTimer() {
+    stopRunTimer();
+    state.runStartedAt = null;
+    state.runModules = [];
+    setText("stat-elapsed", "–");
+    setText("stat-remaining", "–");
+  }
+
   function statusLabel(status) {
     if (status === "running") return "Läuft…";
     if (status === "done") return "Fertig";
@@ -1178,6 +1236,7 @@
         state.runId = data.run_id;
         clear($("console"));
         renderProgressList(data.modules || []);
+        resetRunTimer();
         setText("stat-status", "in Warteschlange");
         setHidden("panel-run-errors", true);
         setHidden("btn-cleanup", true);
@@ -1207,6 +1266,8 @@
         node.className = "p-status " + payload.status;
         node.textContent = statusLabel(payload.status);
       }
+      var row = state.runModules.filter(function (m) { return m.key === payload.key; })[0];
+      if (row) row.status = payload.status;
     });
     source.addEventListener("status", function (e) {
       applyRunStatus(JSON.parse(e.data));
@@ -1234,6 +1295,18 @@
     setText("stat-tokens", data.llm_tokens);
     setText("stat-errors", (data.api_errors || []).length);
     setText("stat-records", data.journal_records);
+
+    state.runModules = (data.modules || []).map(function (m) {
+      return { key: m.key, status: m.status };
+    });
+    if (data.started_at && state.runStartedAt !== data.started_at) {
+      startRunTimer(data.started_at);
+    }
+    if (data.status === "done" || data.status === "failed") {
+      stopRunTimer();
+      tickRunTimer();  // one final render at the frozen elapsed time
+      setText("stat-remaining", "0:00");
+    }
 
     (data.modules || []).forEach(function (m) {
       var node = state.moduleRows[m.key];
