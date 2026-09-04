@@ -478,9 +478,49 @@ Warehouse vor `purchase.py`s Lauf verfügbar zu machen.
 
 **Komplexität:** Mittel · **Benefit:** Mittel
 
-### R17 🆕 Geplant (S16) — Multicompany
+### R17 ⚠️ SCOPE ÜBERHOLT (2026-09-04) — Multicompany
 
-**Live bestätigt (Architektur-Spike, 2026-09-04, `demo-test5.odoo.com`):**
+**Der komplette Minimal-Scope unten (dreifach cold-reviewed, freigegeben) ist
+durch neue Nutzeranforderungen überholt — nicht implementieren wie unten
+beschrieben.** Nach Abschluss von Cold-Review Runde 3 stellte der Nutzer klar,
+dass der eigentlich gewollte Umfang deutlich größer ist: **N** zusätzliche
+Firmen (nicht eine), pro Firma **frei wählbare Branche** und (bei neu
+angelegten Firmen) **frei wählbares Land**, **Wiederverwendung einer
+bereits existierenden `res.company`** als Alternative zum Neuanlegen
+(inkl. optionaler Wiederverwendung von deren eigenen Partnern/Produkten),
+ein neuer Auswahl-/Konfigurationsbildschirm **pro Firma** nach "Verbindung",
+und — der größte Einzelfund — **die komplette bestehende Pipeline (CRM/Sale/
+HR/MRP/Accounting/etc., heute die "Konfiguration"-Ansicht) läuft pro Firma
+erneut**, nicht nur einmal mit über Firmen verteilten Zusatz-Records. Das ist
+genau der Umfang, den der ursprüngliche Minimal-Scope unten bewusst
+ausgeschlossen hatte ("Nicht den kompletten 8-Module-Durchlauf pro Firma
+wiederholen"). Vollständige Anforderungserfassung siehe **"S16-NEU —
+Anforderungen (2026-09-04, ersetzt Minimal-Scope)"** direkt nach der
+"S16 — WP-Sequenz"-Sektion unten. Architektur-Spike für den neuen Umfang
+noch nicht begonnen — nächster Schritt einer künftigen Sitzung.
+
+**Was aus dem alten Spike weiterhin gültig bleibt (Instanz-Fakten, unabhängig
+vom Umfang):** die Umhäng-Verweigerung referenzierter Records (Punkt 2
+unten), die fehlende Record-Rule-Maskierung für den API-Key-User (Punkt 3),
+`get_main_company_id`s vier Call-Sites (Punkt 4), kein automatisches
+Warehouse pro Firma, `res.company.active` als Archiv-Fallback, und —
+**neu, 2026-09-04, direkt aus der Nutzer-Rückfrage zu Land/Kontenplan
+entstanden:** `country_id` **im `create()`-Aufruf selbst** gesetzt (nicht
+nachträglich per `write()`) lässt Odoo automatisch einen vollständigen
+Kontenplan laden — live bestätigt, 1312 `account.account`/8 `account.journal`/
+12 `account.tax`/6 `account.fiscal.position` sofort nach `create()` lesbar,
+`chart_template` automatisch auf `de_skr03` gesetzt. Kein manueller
+`account.chart.template.try_loading`-Aufruf nötig — der Mechanismus aus
+Punkt 1 unten ist damit überholt (einfacher, aber die Uncleanable-Residue-
+Eigenschaft bleibt: diese Records laufen weiterhin nie durch
+`JournalingClient`). `country_id` **nach** `create()` per `write()` gesetzt
+lädt dagegen **nichts** (live bestätigt, 0 Accounts). Details in
+`ODOO_GOTCHAS.md`.
+
+---
+
+**Live bestätigt (Architektur-Spike, 2026-09-04, `demo-test5.odoo.com`,
+ursprünglicher Minimal-Scope, siehe Überholt-Hinweis oben):**
 `res.company.parent_id`/`child_ids` (Firmenhierarchie), `res.users.company_id`/
 `company_ids` (Default- + erlaubte Firmen) — Standard-Odoo-Multi-Company-Modell ist auf
 dieser Instanz vorhanden und nutzbar. Vier zuvor offene Fragen live geklärt:
@@ -1206,7 +1246,15 @@ eigener Zieh-Anteil, isoliert testbar), Pattern 8 (Batch-Call-Count für
 die Kostenstellen-Erzeugung UND `sale.py`s gruppierte
 Kostenstellen-`write()`-Aufrufe — wenige, nicht einer pro Zeile).
 
-### S16 — WP-Sequenz (Multicompany: R17)
+### S16 — WP-Sequenz (Multicompany: R17) ⚠️ SCOPE ÜBERHOLT, siehe R17-Abschnitt
+
+**Diese komplette WP-Sequenz beschreibt den ursprünglichen Minimal-Scope
+(eine zusätzliche Firma, kein voller Pipeline-Durchlauf) — dreifach
+cold-reviewed und freigegeben, aber inzwischen durch neue Anforderungen
+überholt (siehe R17-Abschnitt oben und "S16-NEU — Anforderungen" direkt nach
+dieser Sektion). Bleibt unten stehen als Referenz für die weiterhin gültigen
+Low-Level-Fakten und das dreifache Cold-Review-Verfahren selbst — nicht als
+Umsetzungsvorlage für den neuen, größeren Scope.**
 
 **Stand 2026-09-04.** WP1 (Architektur-Spike, gebündelte Live-Verifikation gegen
 `demo-test5.odoo.com`) gelaufen — Ergebnisse und die daraus resultierende
@@ -1382,6 +1430,87 @@ müssen das vor einem `ctx.res_company_ids[0]`-Zugriff prüfen statt einen
 `IndexError` zu riskieren, Should-Fix S8 Runde 3), Pattern 8
 (Partner-/Produkt-Erzeugung batched, nicht in einer Schleife pro Record).
 
+### S16-NEU — Anforderungen (2026-09-04, ersetzt Minimal-Scope)
+
+Erfasst aus einer Rückfrage-Runde mit dem Nutzer nach Abschluss von
+Cold-Review Runde 3 (siehe R17-Abschnitt oben für den Überholt-Hinweis).
+**Kein Architektur-Spike für diesen Umfang begonnen** — dieser Abschnitt ist
+reine Anforderungserfassung, Startpunkt für die nächste Sitzung, kein Plan.
+
+**Kernentscheidungen (vom Nutzer bestätigt):**
+
+1. **N zusätzliche Firmen, nicht eine.** Der "höchstens ein Eintrag"-Minimal-
+   Scope entfällt. `RunContext.res_company_ids: List[int]` (bereits als
+   flache Liste entworfen, genau für diesen Fall — Design hält) muss jetzt
+   wirklich mehrere Einträge tragen können.
+2. **Pro Firma: neu anlegen ODER bestehende `res.company` wiederverwenden.**
+   Für "wiederverwenden" existiert **keine** Infrastruktur — `connect_service`s
+   `existing_companies` meint `res.partner` mit `is_company=True`
+   (Kunden-Kontakte), nicht echte `res.company`-Records. Braucht einen neuen,
+   eigenständigen Fetch (`res.company`-Liste) — sauber benannt, nicht in die
+   bestehende `company_ids`-Verwechslungsfalle laufen.
+3. **Pro Firma, bei "wiederverwenden": opt-in, ob auch deren bereits
+   existierende Partner/Produkte wiederverwendet werden** (statt neue für sie
+   zu erzeugen). Braucht einen `company_id`-gescopten Fetch — `connect_service.
+   fetch_existing_data` ist heute ungefiltert und liefert Firma-1-Daten;
+   dieselbe Funktion bekommt (aus dem alten Minimal-Scope) bereits einen
+   Firma-1-Filter zum Schutz gegen Firma-2-Leck — beide Anforderungen an
+   derselben Stelle zusammen durchdenken, nicht zwei getrennte Patches.
+4. **Pro Firma: frei wählbare Branche**, bei neu angelegten Firmen zusätzlich
+   **frei wählbares Land** (Scope vorerst DE/AT/CH, "können wir später
+   erweitern" — passt zu `data_factory.py`s bereits vorhandenem
+   `target_countries`-Parameter, siehe dessen eigenen Kommentar "so a future
+   multi-country feature can pass an explicit GUI-selected country list").
+   **Branche ist heute ein Singular-Feld** (`DemoCriteria.industry: str`,
+   `RunContext.industry: str`, `config.py:8,101`) — pro Firma eine eigene
+   Branche bedeutet pro Firma ein eigener `fetch_creative_atoms`/
+   `fetch_name_suggestions`-Aufruf (heute: je einmal, ganz am Anfang von
+   `orchestrator.run()`, `creative_atoms` ist eine lokale Variable, erreicht
+   `ctx` nie). N Firmen mit N Branchen heißt N Aufruf-Paare — wo diese
+   passieren (vorab gebündelt vs. lazy pro Firma) ist eine offene
+   Architekturfrage für den nächsten Spike.
+5. **Land bei neu angelegten Firmen löst automatisch einen Kontenplan aus —
+   bestätigt, Mechanismus ist einfacher als angenommen.** `country_id`
+   **im `create()`-Aufruf selbst** gesetzt lässt Odoo automatisch einen
+   vollständigen Kontenplan laden (live bestätigt, siehe R17-Abschnitt oben
+   und `ODOO_GOTCHAS.md`) — kein manueller `try_loading`-Aufruf nötig, der
+   alte Minimal-Scope-Mechanismus (Punkt 1 im ursprünglichen R17-Text) ist
+   überholt. Die Uncleanable-Residue-Eigenschaft (D7 kann diese Records nie
+   erfassen) bleibt unverändert bestehen — jetzt als bewusst akzeptierte
+   Konsequenz zu dokumentieren, nicht als Grund, das Feature zu meiden.
+6. **Neuer Bildschirm nach "Verbindung":** Firmenauswahl (wie viele, neu vs.
+   bestehend), dann **pro Firma ein eigener Konfigurationsbildschirm**
+   (Branche, Land, Wiederverwendungs-Toggle) — **inklusive Firma 1**
+   (Nutzer-Entscheidung: "unify", kein Sonderfall für die Primärfirma mehr).
+7. **Größter Einzelfund: die komplette bestehende Pipeline läuft pro Firma
+   erneut.** Heutige "Konfiguration"-Ansicht (CRM %, Sale %, HR, MRP,
+   Accounting, etc.) wird nicht länger ein einziger geteilter Schritt,
+   sondern **pro Firma wiederholt** — explizit bestätigt ("Full pipeline
+   repeats per company"), nicht der ursprünglich vom Minimal-Scope bewusst
+   ausgeschlossene Umfang ("Nicht den kompletten 8-Module-Durchlauf pro
+   Firma wiederholen — bei ~1 req/s Live-Rate-Limit... Laufzeit- und
+   Fehlerbudget-Vielfaches"). Diese Sorge ist mit N Firmen jetzt real und
+   muss im nächsten Architektur-Spike explizit adressiert werden (Laufzeit-
+   Hochrechnung gegen D10s Rate-Limit, UI-Fortschrittsanzeige über N
+   Firmen-Durchläufe hinweg, Fehlerbehandlung wenn Firma 3 von 5 fehlschlägt).
+
+**Was unverändert gültig bleibt** (Instanz-Fakten, nicht vom neuen Umfang
+berührt — siehe R17-Abschnitt "Was aus dem alten Spike weiterhin gültig
+bleibt" für die vollständige Liste): Umhäng-Verweigerung referenzierter
+Records, keine Record-Rule-Maskierung für den API-Key-User,
+`get_main_company_id`s vier Call-Sites, kein automatisches Warehouse pro
+Firma, `res.company.active` als Archiv-Fallback, der neue
+Land-bei-create-lädt-Kontenplan-Mechanismus.
+
+**Nächster Schritt (künftige Sitzung):** eigener Architektur-Spike für den
+neuen Umfang, mit den offenen Fragen aus Punkt 4 (wo laufen N
+LLM-Atom-Aufrufe) und Punkt 7 (Laufzeit-/Fehlerbudget bei N vollen
+Pipeline-Durchläufen) als zentrale Klärungspunkte — danach mindestens eine
+Cold-Review-Runde (Runde 2/3 dieser Sitzung zeigten: die verifizierte Logik
+hielt jedes Mal, die Fehler saßen im nachträglich angehängten Prosa-Text —
+für den neuen Plan also kürzere, entscheidungsfokussierte WP-Zellen
+bevorzugen statt lange Should-Fix-Ketten anzuhäufen).
+
 ## 5. Umsetzungsreihenfolge
 
 Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-Pflicht). Empfohlene Sprints:
@@ -1403,7 +1532,7 @@ Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-
 | **S13 — Lager-Tiefe** 🆕 | R14 (Multi-Warehouse), R15 (Lagerplätze, inkl. R16 Location-Ebene), R13 (Seriennummern-/Chargenverfolgung, MRP-Anbindung gestrichen — siehe R13) | Alle drei bauen auf `inventory.py`/`stock.*`-Modellen auf. R13 braucht R15 nicht zwingend (`stock.lot.location_id` ist optional), profitiert aber von den gleichzeitig entstehenden Sub-Locations — ein Sprint für den gesamten Lager-Realismus-Ausbau |
 | **S14 — Prozess-Tiefe** 🆕 | R12 (Nachbestellregeln, in `inventory.py`), R18 (Quality Checks, Erweiterung des bestehenden `mrp.py`-Pfads) | Beide sind eher "MRP/Inventory-Investition aus S1/S8 weiter ausnutzen" als "auf S13 aufbauen" (Peer-Review-Korrektur: `quality.point` hat kein Location-Feld, "an `wh_qc_stock_loc_id` andocken" war keine reale Mechanik) — dennoch sinnvoll in einem Sprint gebündelt, da beide dieselbe operative Prozess-Ebene vertiefen |
 | **S15 — Analytic Accounting (R20)** 🆕 | `account.analytic.plan`/`account.analytic.account` + `analytic_distribution`-Wiring über `sale.py`/`purchase.py`/`accounting.py`/`expenses.py` | Cross-cutting (4+ Dateien) bewusst isoliert in eigenem Sprint, damit der Review-Diff überschaubar bleibt; profitiert von R19 (Expenses, S12), falls dessen Zeilen mit-verkabelt werden sollen |
-| **S16 — Multicompany (R17)** ✅ Plan freigegeben (2026-09-04) | Architektur-Spike abgeschlossen + Minimal-Scope: zweite `res.company` (ohne Kontenplan), neues `RunContext.res_company_ids` 🔒, neues `modules/multicompany.py`, `connect_service.fetch_existing_data`-Company-Filter | Höchste Komplexität/Blast-Radius aller neuen Items — bewusst zuletzt, damit alle anderen Module (Warehouses, Quality, Analytic) schon stehen, wenn die zweite Firma befüllt wird. **Drei** Cold-Review-Runden gelaufen (S5-S15-Verfahren, dritte auf Nutzer-Wunsch nach Runde 2s eigenem "braucht noch einen Durchgang") — Runde 1: 6 Blocker + 12 Should-Fixes, Runde 2: 4 Blocker + 7 Should-Fixes, Runde 3: 3 Blocker + 8 Should-Fixes (keine verbleibende offene Live-Frage mehr), alle eingearbeitet (siehe "S16 — WP-Sequenz" in `ROADMAP.md` und R17-Abschnitt). Plan freigegeben zur Implementierung |
+| **S16 — Multicompany (R17)** ⚠️ Scope überholt (2026-09-04) | Minimal-Scope (eine Firma) dreifach cold-reviewed + freigegeben, dann durch neue Anforderungen ersetzt: N Firmen, neu-oder-bestehend pro Firma, pro Firma Branche+Land, voller Pipeline-Durchlauf pro Firma. Siehe "S16-NEU — Anforderungen" in `ROADMAP.md` | Ursprünglicher Minimal-Scope bewusst klein (eine Firma, kein Pipeline-Wiederholen) — dreifaches Cold-Review (6+4+3 Blocker über 3 Runden, alle gefixt) bestätigte die Instanz-Fakten (Umhäng-Verweigerung, keine Record-Rule-Maskierung, `get_main_company_id`-Blast-Radius, u. a. — bleiben gültig). Scope-Änderung kam danach, nicht durch Review-Fund: Nutzer will N Firmen mit vollem Pipeline-Durchlauf pro Firma. Architektur-Spike für neuen Umfang noch nicht begonnen — nächste Sitzung |
 
 **Pro Arbeitspaket verbindlich** (aus CLAUDE.md Testing Design Patterns):
 - Empty-Pool-Guards (P1) für jede neue `random.choice/sample`-Stelle
