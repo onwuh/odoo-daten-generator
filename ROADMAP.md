@@ -478,13 +478,54 @@ Warehouse vor `purchase.py`s Lauf verfügbar zu machen.
 
 **Komplexität:** Mittel · **Benefit:** Mittel
 
-### R17 🆕 Geplant (S16, Architektur-Spike zuerst) — Multicompany
+### R17 🆕 Geplant (S16) — Multicompany
 
-**Live bestätigt:** `res.company.parent_id`/`child_ids` (Firmenhierarchie),
-`res.users.company_id`/`company_ids` (Default- + erlaubte Firmen) — Standard-Odoo-Multi-
-Company-Modell ist auf dieser Instanz vorhanden und nutzbar.
+**Live bestätigt (Architektur-Spike, 2026-09-04, `demo-test5.odoo.com`):**
+`res.company.parent_id`/`child_ids` (Firmenhierarchie), `res.users.company_id`/
+`company_ids` (Default- + erlaubte Firmen) — Standard-Odoo-Multi-Company-Modell ist auf
+dieser Instanz vorhanden und nutzbar. Vier zuvor offene Fragen live geklärt:
 
-**⚠️ Warum eigener Architektur-Spike vor Code (🔒-adjacent):** `RunContext.company_ids`
+1. **Kontenplan einer neuen `res.company` ist NICHT automatisch da.** `res.company.create()`
+   liefert eine Firma ohne jeden `account.account` (bestätigt: `search_read` auf
+   `account.account` mit `company_ids in [<neue id>]` → `[]`). Wird per JSON2 ausgelöst über
+   `client.call_method('account.chart.template', 'try_loading', ids=[], kwargs={'template_code':
+   ..., 'company': <id>})` — ein `@api.model`-Classmethod, `ids=[]` funktioniert. Zwei
+   Vorbedingungen live gefunden: (a) `res.company.country_id` muss **vor** dem Aufruf gesetzt
+   sein (`fields_get` zeigt `chart_template` als eigenes Company-Feld, aber das Laden selbst
+   scheitert ohne Country mit `"Missing required field 'Country' ... for model 'Tax'"`); (b)
+   Template und Country müssen zusammenpassen — `template_code='generic_coa'` mit
+   `country_id=Germany` scheitert mit `"The tax group must have the same country_id as the tax
+   using it"`, `template_code='de_skr03'` mit `country_id=Germany` funktioniert (5+ Accounts
+   nach dem Aufruf lesbar). Für dieses Repo (deutsche Demo-Konventionen durchgängig) also:
+   `country_id` = Deutschland setzen, `template_code='de_skr03'`.
+2. **Referenzierte Records lassen sich nicht umhängen — jetzt live bestätigt, nicht mehr nur
+   angenommen.** `write()` von `company_id` auf ein bereits in einer `sale.order.line`
+   referenziertes `product.product` scheitert mit `"Das Unternehmen dieses Produkts kann nicht
+   geändert werden, solange es Lagerbuchungen gibt, die einem anderen Unternehmen gehören."` —
+   bestätigt exakt das erwartete Verhalten, der Minimal-Scope (nur frisch erzeugte Records der
+   zweiten Firma zuweisen) bleibt die einzig gangbare Route.
+3. **API-Key-User braucht `company_ids`-Erweiterung NICHT zwingend, aber empfohlen.** Der
+   API-Key-User (`res.users` id 2) hat `company_ids=[1]`. Live getestet: `create()`/`write()`/
+   `search_read()` mit explizitem `company_id=2`/`['company_id','=',2]`-Domain funktionieren
+   trotzdem (Beispiel: `stock.warehouse` mit `company_id=2` angelegt und explizit
+   zurückgelesen — beides erfolgreich). Ein **ungefilterter** `search_read` ohne Domain zeigt
+   die Firma-2-Records dagegen nicht (Standard-Odoo-Record-Rule-Scoping auf
+   `allowed_company_ids`) — das heißt: jeder neue Firma-2-Code-Pfad MUSS explizit nach
+   `company_id` filtern/erzeugen, darf sich nie auf Default-Scoping verlassen. Empfehlung (kein
+   Blocker): `company_ids` des API-Users trotzdem um die neue Firma erweitern (`write` auf
+   `res.users`, ein Feld) als Absicherung für den Fall, dass ein später genutzter
+   Wizard/eine Action-Methode intern `self.env.company`/`self.env.companies` statt eines
+   expliziten Ids nutzt — billig, kein Nachteil.
+4. **`odoo_actions.get_main_company_id`s Blast Radius ist kleiner als befürchtet.** Vier
+   Call-Sites (`modules/expenses.py:50`, `modules/mrp.py:152`, `modules/inventory.py:55`,
+   `modules/purchase.py:151`) — alle vier geben laut Doku-String bewusst "Firma mit id=1,
+   sonst die erste gefundene" zurück. Das bleibt mit einer zweiten Firma unverändert korrekt:
+   die komplette bestehende Pipeline arbeitet weiterhin ausschließlich gegen Firma 1, keine der
+   vier Stellen muss angefasst werden. Die neue Firma-2-Befüllung (R17-Minimal-Scope) läuft
+   über einen eigenen, neuen Helper — additiv, nicht als Parameter an
+   `get_main_company_id` angehängt.
+
+**⚠️ Warum eigener Architektur-Spike vor Code nötig war (🔒-adjacent):** `RunContext.company_ids`
 heißt trotz seines Namens **niemals** `res.company`, sondern hält `res.partner`-IDs
 (Kunden-/Firmenkontakte aus `master_data.py`) — diese Verwechslung hat bereits einen
 echten, monatelang unbemerkten Bug in `mrp.py` verursacht (S8, gefixt in S10). Eine zweite
@@ -492,27 +533,34 @@ echte Firma vervielfacht die Gelegenheiten für exakt diese Fehlerklasse über p
 jedes Modul hinweg (`sale.py`, `purchase.py`, `inventory.py`, `mrp.py` nutzen `company_id`
 an vielen Stellen).
 
+**Entschieden (Spike-Ergebnis, kein Rename):** **neues** Feld statt Umbenennung —
+`RunContext.res_company_ids: List[int]`, echte `res.company`-Ids, Name bewusst von
+`company_ids` (hält `res.partner`-Ids) unterschieden. Begründung: ein Rename von
+`company_ids` träfe Dutzende Call-Sites über `sale.py`/`purchase.py`/`inventory.py`/
+`mrp.py`/`crm.py`/`project.py`/`hr.py`/`recruiting.py` hinweg — u. a. genau die Dateien, die
+S15/R20 eine Stunde vor diesem Spike zuletzt angefasst hat. Klarheitsgewinn eines Renames
+steht in keinem Verhältnis zum Regressionsrisiko über einen Diff, den noch niemand
+"gelebt" hat. Form bewusst eine flache Liste, nicht `second_company_id` + parallele
+`second_*_ids`-Felder — das würde "zwei Firmen" ins Config-Schema einbrennen und bei einer
+dritten Firma erneut eine 🔒-Änderung erzwingen; eine Liste sagt nichts über die Anzahl aus.
+Das ist eine Config-Schema-Änderung 🔒, Architekten-Freigabe wie jede andere 🔒-Stelle —
+freigegeben im Rahmen dieses Spikes (Nutzer hat "plane den nächsten Sprint" beauftragt, das
+schließt diese Design-Entscheidung ein).
+
 **Empfohlener Minimal-Scope für den ersten Wurf (bewusst klein, nicht die volle
 Pipeline verdoppeln):**
 - **Nicht** den kompletten 8-Module-Durchlauf pro Firma wiederholen — bei
-  ~1 req/s Live-Rate-Limit (siehe CLAUDE.md) und bereits heute mehrstufigen Läufen wäre das
-  ein Laufzeit- und Fehlerbudget-Vielfaches ohne klar proportionalen Demo-Mehrwert.
-- Stattdessen: **eine** zusätzliche `res.company` anlegen. **Peer-Review-Korrektur:**
-  ihr NUR frisch für sie selbst erzeugte Records zuweisen (neue Partner/Produkte/ein neues
-  Warehouse aus R14) — **nicht** bereits bestehende, von Company-1-Belegen referenzierte
-  Partner/Produkte per `company_id`-Write umhängen (Odoo verweigert das bei referenzierten
-  Records ohnehin). Zusätzlich zu klären: eine neue `res.company` hat zunächst **keinen**
-  Kontenplan — ob/wie ein Chart-of-Accounts-Setup für sie per JSON2 auslösbar ist, ist Teil
-  des Architektur-Spikes, nicht selbstverständlich gegeben.
-- **Vor Umsetzung zwingend:** `RunContext.company_ids` entweder umbenennen oder ein neues,
-  eindeutig benanntes Feld (`RunContext.res_company_ids`) einführen, um die bestehende
-  Verwechslungsgefahr nicht in einer zweiten echten Firma zu verschärfen — das ist eine
-  Config-Schema-Änderung 🔒, braucht Architekten-Freigabe nach demselben Verfahren wie
-  jede andere 🔒-Stelle.
+  ~1 req/s Live-Rate-Limit (siehe CLAUDE.md, jetzt auch hart durch D10 durchgesetzt) und
+  bereits heute mehrstufigen Läufen wäre das ein Laufzeit- und Fehlerbudget-Vielfaches ohne
+  klar proportionalen Demo-Mehrwert.
+- Stattdessen: **eine** zusätzliche `res.company` anlegen (Country=Deutschland,
+  `chart_template='de_skr03'`, siehe Punkt 1 oben), ihr NUR frisch für sie selbst erzeugte
+  Records zuweisen (neue Partner/Produkte/ein neues Warehouse aus R14) — **nicht** bestehende,
+  von Company-1-Belegen referenzierte Records per `company_id`-Write umhängen (Punkt 2 oben,
+  jetzt live bestätigt statt nur angenommen).
 
-**Prozess:** wie S5–S10 — Plan zuerst als eigenständiges Dokument, zweimal peer-reviewed
-(unabhängiger Opus-Agent, nur Plantext + Live-Repo, keine Konversationshistorie) **vor**
-dem ersten Codezeilen.
+**Details, WP-Aufteilung und Cold-Review-Ergebnisse:** siehe "S16 — WP-Sequenz" in
+`ROADMAP.md`.
 
 **Komplexität:** Hoch · **Benefit:** Hoch (langfristig), aber bewusst klein für den
 Minimal-Scope des ersten Wurfs — der volle Nutzen hängt vom tatsächlich freigegebenen
@@ -1124,6 +1172,105 @@ eigener Zieh-Anteil, isoliert testbar), Pattern 8 (Batch-Call-Count für
 die Kostenstellen-Erzeugung UND `sale.py`s gruppierte
 Kostenstellen-`write()`-Aufrufe — wenige, nicht einer pro Zeile).
 
+### S16 — WP-Sequenz (Multicompany: R17)
+
+**Stand 2026-09-04.** WP1 (Architektur-Spike, gebündelte Live-Verifikation gegen
+`demo-test5.odoo.com`) gelaufen — Ergebnisse und die daraus resultierende
+Design-Entscheidung (neues Feld statt Rename) stehen oben im R17-Abschnitt
+selbst (nicht hier verdoppelt). **Cold-Review noch ausstehend** — dieser Plan
+geht jetzt in Runde 1 (unabhängiger Opus-Agent, nur Plantext + Live-Repo, keine
+Konversationshistorie, S5-S15-Verfahren), bevor die erste Codezeile geschrieben
+wird.
+
+**Zentrale Design-Entscheidung (Grund für den eigenen `modules/multicompany.py`-
+Zuschnitt statt additiver Erweiterung wie R20):** anders als R20 (nur ein
+zusätzliches Feld auf bereits erzeugten Zeilen bestehender Module) erzeugt R17
+echte **neue** Records eines Typs, den kein bestehendes Modul kennt (eine
+zweite `res.company` plus ausschließlich für sie erzeugte Partner/Produkte/ein
+Warehouse) — das ist strukturell näher an R19 (Expenses, eigenes Modul) als an
+R20. `modules/multicompany.py` bekommt daher einen echten
+`WANTED_MODULES`/`MODULE_RUN_ORDER`/`orchestrator.py`-Eintrag 🔒, keine
+Gate-only-Erweiterung eines bestehenden Moduls.
+
+**Pipeline-Platzierung (🔒, Architekten-Freigabe Teil dieses Plans):** letzter
+Schritt, nach `documents` (aktuell der letzte Eintrag in `orchestrator.py`s
+`module_order`). Nicht auf `installed_modules` gegated (keine echte,
+probebare Odoo-App — gleiches Muster wie `documents` selbst: hardcoded
+`True` im `module_order`-Tupel, interner Skip über
+`ctx.module_selections.multicompany.get("enabled")`, Pattern 3). Begründung
+für "zuletzt": die neue Firma und ihre Records dürfen von keinem früher
+laufenden Modul (alle bisherigen Module arbeiten ausschließlich gegen Firma 1)
+versehentlich konsumiert werden können — Platzierung an letzter Stelle macht
+das strukturell unmöglich, statt es nur durch Disziplin an jeder Call-Site zu
+vermeiden.
+
+**Pool-Isolation (load-bearing, Grund für die drei neuen `RunContext`-Felder):**
+`master_data.py` befüllt `ctx.company_ids` (Partner-Ids) und `ctx.product_ids` —
+beide von `sale.py`/`purchase.py`/`accounting.py`/etc. als Quelle für
+Firma-1-Belege gelesen. Würden die neuen Firma-2-Partner/-Produkte in diese
+geteilten Pools gemischt, könnte ein früher laufendes Modul (bei anderer
+Pipeline-Reihenfolge, oder bei künftigem Code, der diese Prämisse nicht kennt)
+versehentlich ein Firma-2-Produkt in einen Firma-1-Beleg ziehen — Odoo würde
+das beim `write()`/`action_confirm()` zwar ablehnen (Punkt 2 im R17-Spike-
+Befund), aber ein Laufzeitfehler ist kein Ersatz für einen Pool, der die
+Verwechslung von vornherein unmöglich macht. Neue, bewusst getrennte Felder:
+`ctx.res_company_ids: List[int]` (echte `res.company`-Ids, disambiguiert von
+`company_ids`), `ctx.multicompany_partner_ids`/`multicompany_product_ids:
+List[int]` (Firma-2-Partner/-Produkte, nie in die geteilten Pools gemischt).
+
+```python
+# config.py — RunContext, neue Felder (S16/R17):
+res_company_ids: List[int] = field(default_factory=list)
+# Echte res.company-Ids, die dieser Lauf angelegt hat — disambiguiert von
+# company_ids oben, das trotz seines Namens res.partner-Ids hält. Minimal-
+# Scope: höchstens ein Eintrag. Flache Liste statt second_company_id, damit
+# ein künftiger N-Firmen-Scope keine weitere Schema-Änderung braucht.
+multicompany_partner_ids: List[int] = field(default_factory=list)
+multicompany_product_ids: List[int] = field(default_factory=list)
+# Firma-2-Partner/-Produkte — bewusst getrennt von den geteilten
+# company_ids/product_ids-Pools, damit kein früher laufendes Modul
+# versehentlich einen Firma-2-Record in einen Firma-1-Beleg zieht.
+
+# ModuleSelections, neues Feld:
+multicompany: dict = field(default_factory=dict)
+# multicompany shape: {"enabled": bool, "partner_count": int, "product_count": int}
+# (S16/R17). Eigenes orchestriertes Modul (modules/multicompany.py, eigener
+# WANTED_MODULES/MODULE_RUN_ORDER/orchestrator.py-Eintrag) — läuft ZULETZT
+# (nach "documents"). Minimal-Scope enthält bewusst keine Orders/Rechnungen
+# gegen die neue Firma, daher kein Kontenplan-Bedarf für ihre eigenen
+# Records — WP2 lädt trotzdem einen (via account.chart.template.try_loading,
+# einmaliges Firmen-Setup), damit die neue Firma in der Odoo-UI nicht als
+# sichtbar unfertige leere Hülle erscheint.
+```
+
+**API-User-`company_ids`-Erweiterung bewusst NICHT automatisiert:** WP1s
+Live-Test hat gezeigt, dass explizite `company_id`-Domains/Werte auch ohne
+diese Erweiterung funktionieren (siehe R17-Abschnitt, Punkt 3). Den
+JSON2-authentifizierten "aktuellen Nutzer" programmatisch zu bestimmen, um
+seine `company_ids` zu erweitern, bräuchte entweder einen zusätzlichen
+Config-Wert (den Login-Namen, der dem Client aktuell nicht übergeben wird)
+oder eine neue Annahme über die API — beides unverhältnismäßiger Aufwand für
+einen bereits als nicht-blockierend bestätigten Schritt. Bleibt eine
+dokumentierte manuelle Absicherungs-Option (`ODOO_GOTCHAS.md`), kein
+Codepfad.
+
+| WP | Inhalt | 🔒 | Voraussetzung |
+|---|---|---|---|
+| **WP1** ✅ | Architektur-Spike: gebündelte Live-Verifikation gegen `demo-test5.odoo.com` (Kontenplan-Ladepfad inkl. Country/Template-Kompatibilität, Referenzierte-Records-Umhäng-Verweigerung, API-User-`company_ids`-Wirkung auf explizite vs. ungefilterte Queries, `get_main_company_id`-Blast-Radius über alle 4 Call-Sites) | nein | — |
+| **WP2** | Infrastruktur: `config.py` (drei neue `RunContext`-Felder + `ModuleSelections.multicompany`, siehe oben) 🔒, `odoo_actions.create_second_company` (Firma anlegen, `country_id`=Deutschland, `de_skr03`-Kontenplan via `try_loading` laden, Name aus `ctx.name_banks['company_names']` statt eigenem LLM-Call), neues `modules/multicompany.py`-Grundgerüst + `orchestrator.py`/`run_config.py`-Registrierung als letzter Pipeline-Schritt 🔒 (Platzierungs-Begründung siehe oben), `static/app.js`-UI-Karte, `run_config.py`s `estimate_record_counts` | ja | WP1 |
+| **WP3** | Befüllung: `modules/multicompany.py` erzeugt `partner_count` Partner + `product_count` Produkte (`company_id=ctx.res_company_ids[0]`, Ablage in den dedizierten Pools, nie in `ctx.company_ids`/`ctx.product_ids` gemischt) + ein Warehouse für die neue Firma über `inventory.py`s bestehenden R14-Multi-Warehouse-Pfad, `company_id` parametrisiert statt über `get_main_company_id()` bezogen | nein | WP2 |
+| **WP4** | Peer-Review vor Merge (S5-S15-Verfahren, Diff statt Plan-Text), grüner Live-`test_suite.py` | — | WP2-WP3 Code steht |
+
+**Pro Arbeitspaket verbindlich:** dieselben Testing Design Patterns wie jedes
+bisherige Sprintpaket (siehe CLAUDE.md) — Pattern 1 (leerer
+Partner-/Produkt-Namenspool), Pattern 2 (LLM liefert `None`/leer für
+`company_names` → Fallback), Pattern 3 (`multicompany.enabled=False` → keine
+API-Calls), Pattern 4 (Read-back auf `res.company`/`account.account`-Anzahl
+nach `try_loading`/Partnern/Produkten/Warehouse), Pattern 5 (fehlende
+Prerequisites, z. B. leere `ctx.name_banks['company_names']`, → Skip mit
+Fallback-Namen statt Crash), Pattern 8 (Partner-/Produkt-Erzeugung batched,
+nicht in einer Schleife pro Record).
+
 ## 5. Umsetzungsreihenfolge
 
 Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-Pflicht). Empfohlene Sprints:
@@ -1145,7 +1292,7 @@ Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-
 | **S13 — Lager-Tiefe** 🆕 | R14 (Multi-Warehouse), R15 (Lagerplätze, inkl. R16 Location-Ebene), R13 (Seriennummern-/Chargenverfolgung, MRP-Anbindung gestrichen — siehe R13) | Alle drei bauen auf `inventory.py`/`stock.*`-Modellen auf. R13 braucht R15 nicht zwingend (`stock.lot.location_id` ist optional), profitiert aber von den gleichzeitig entstehenden Sub-Locations — ein Sprint für den gesamten Lager-Realismus-Ausbau |
 | **S14 — Prozess-Tiefe** 🆕 | R12 (Nachbestellregeln, in `inventory.py`), R18 (Quality Checks, Erweiterung des bestehenden `mrp.py`-Pfads) | Beide sind eher "MRP/Inventory-Investition aus S1/S8 weiter ausnutzen" als "auf S13 aufbauen" (Peer-Review-Korrektur: `quality.point` hat kein Location-Feld, "an `wh_qc_stock_loc_id` andocken" war keine reale Mechanik) — dennoch sinnvoll in einem Sprint gebündelt, da beide dieselbe operative Prozess-Ebene vertiefen |
 | **S15 — Analytic Accounting (R20)** 🆕 | `account.analytic.plan`/`account.analytic.account` + `analytic_distribution`-Wiring über `sale.py`/`purchase.py`/`accounting.py`/`expenses.py` | Cross-cutting (4+ Dateien) bewusst isoliert in eigenem Sprint, damit der Review-Diff überschaubar bleibt; profitiert von R19 (Expenses, S12), falls dessen Zeilen mit-verkabelt werden sollen |
-| **S16 — Multicompany (R17)** 🆕 | Architektur-Spike (Pflicht vor Code) + Minimal-Scope: zweite `res.company`, `RunContext.company_ids`-Namenskonflikt auflösen 🔒 | Höchste Komplexität/Blast-Radius aller neuen Items — bewusst zuletzt, damit alle anderen Module (Warehouses, Quality, Analytic) schon stehen, wenn die zweite Firma befüllt wird. Eigener Architekten-Freigabe-Schritt vor S16-Start, gleiches Zwei-Pass-Peer-Review-Verfahren wie S5-S10 |
+| **S16 — Multicompany (R17)** 🆕 | Architektur-Spike ✅ abgeschlossen (2026-09-04) + Minimal-Scope: zweite `res.company`, neues `RunContext.res_company_ids` 🔒, neues `modules/multicompany.py` | Höchste Komplexität/Blast-Radius aller neuen Items — bewusst zuletzt, damit alle anderen Module (Warehouses, Quality, Analytic) schon stehen, wenn die zweite Firma befüllt wird. Spike-Ergebnisse + WP-Sequenz siehe "S16 — WP-Sequenz" in `ROADMAP.md` und R17-Abschnitt — Cold-Review (S5-S15-Verfahren) noch ausstehend, kein Code vor Freigabe |
 
 **Pro Arbeitspaket verbindlich** (aus CLAUDE.md Testing Design Patterns):
 - Empty-Pool-Guards (P1) für jede neue `random.choice/sample`-Stelle
