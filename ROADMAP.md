@@ -1526,8 +1526,19 @@ echten Widerspruch zwischen den frischen D10/D11-Entscheidungen selbst
 (beide behaupteten, die Ziel-Firma-Auflösung passiere an ihrer jeweils
 eigenen Stelle) plus mehrere übersehene Folgeänderungen — alle unten
 eingearbeitet, inkl. zwei neuer Entscheidungen (D12 Kostenstellen-Fund,
-D13 `res.company`-Cleanup). Kein Code noch — Grundlage für die
-Implementierungsplanung.
+D13 `res.company`-Cleanup). **Cold-Review Runde 3** fand drei weitere echte
+Blocker in genau den Stellen, die Runde 2 gerade erst gefixt hatte — D11s
+Namens-Herleitung war gegen D10-Korrekturs eigene Reihenfolge unmöglich
+(`ctx.name_banks` ist zum Auflösungszeitpunkt noch leer), `build_selections`
+las Consent weiterhin aus dem falschen Dict trotz der Konsens-Entscheidung,
+und der alte `use_existing`-Mechanismus kollidierte strukturell mit D11s
+schlankerer `build_context_list`-Signatur — plus eine Falschbehauptung in
+D6 (der `app.py:353`-Wächter "bleibt funktionsfähig" war nicht mehr wahr,
+nachdem D11 `use_existing` entfernte) und eine Fehleinstufung (Teilausfall-
+Verhalten ist doch eine Architektur-Entscheidung, kein loser
+Schleifen-Zusatz). Alle unten eingearbeitet, keine neue offene Live-Frage
+mehr — dieselbe Konvergenz wie beim alten R17-Plan nach dessen dritter
+Runde. Kein Code noch — Grundlage für die Implementierungsplanung.
 
 **D1 — Ausführung: sequentieller Loop, EIN `run_id`/Client/Journal für die
 ganze Mehrfirmen-Generierung, keine N parallelen Läufe.** `web/jobs.py`s
@@ -1660,12 +1671,17 @@ bloße Schleifen-Index). **Drei weitere, von Runde 1 übersehene Stellen
   Pro-Firma-Umstellung wie `submit()` bekommen, sonst lügt die
   Prüfansicht bei einem N-Firmen-Lauf.
 - **`web/app.py:353`**s Wächter (`if body.get("skip_master_data") and not
-  body.get("use_existing")`) — bleibt funktionsfähig, weil `use_existing`
-  laut der Consent-Entscheidung unten (D11-Ergänzung) ein Top-Level-Feld
-  bleibt statt pro Firma dupliziert zu werden; die Prüf-Logik selbst
-  braucht aber trotzdem eine explizite Bestätigung im WP, dass sie
-  weiterhin gegen das richtige (jetzt: "gilt für mindestens eine Firma")
-  Feld prüft.
+  body.get("use_existing")`) — **Korrektur (Cold-Review Runde 3): bleibt
+  NICHT unverändert funktionsfähig, wie Runde 2 behauptete.** `use_existing`
+  existiert im neuen Payload gar nicht mehr (ersetzt durch `target.
+  reuse_master_data`, siehe D11s Existing-Data-Merge-Punkt), und
+  `skip_master_data` liegt jetzt pro Block, nicht mehr Top-Level — beide
+  Top-Level-Lookups laufen ins Leere (`None and ...`), der Wächter feuert
+  still nie mehr. Genau die Silent-Disable-Klasse, die der Code-Kommentar
+  direkt daneben selbst benennt. **Entscheidung:** Wächter wird umgeschrieben
+  auf "irgendeine Firma hat `skip_master_data=true` **und** weder
+  `target.reuse_master_data` noch eine andere Bestandsdaten-Quelle für
+  diese Firma" — pro Firma geprüft, nicht mehr Top-Level.
 
 **D7 — Laufzeit-Ehrlichkeit: N Firmen multiplizieren die Gesamtlaufzeit
 ungefähr linear.** `web/jobs.py`s eigener Docstring: "ein voller Lauf
@@ -1740,37 +1756,45 @@ Felder nach `build_context` um, `build_context` kopiert sie bereits per
 **D10-Korrektur — Widerspruch zu D11 aufgelöst: Ziel-Firma-Auflösung
 gehört zwingend in `_execute()`s Schleife, nicht in `build_context_list`
 (Cold-Review Runde 2, echter Blocker — Runde-1-Fassung von D10 und D11
-widersprachen sich).** `run_config.py`s eigener Modul-Docstring (Zeile 3-5)
-erklärt die Datei ausdrücklich für **Odoo-Aufruf-frei** ("no Odoo calls") —
-eine Firma anzulegen ist ein Odoo-Write. Zusätzlich existiert der
-`JournalingClient` erst in `_execute()` (`jobs.py:314`), `submit()`
-(wo `build_context` heute läuft, `jobs.py:185`) hat gar keinen Client.
-`res_company_ids` in `build_context_list` zu befüllen ist also unmöglich,
-ohne entweder `run_config.py`s eigene Grenze zu brechen oder Firmen
-außerhalb der Journalisierung anzulegen (dieselbe uncleanbare-Residue-
-Klasse wie der gestrichene Kontenplan, diesmal vermeidbar). **Endgültige
-Reihenfolge:** `submit()` baut die Liste der N frischen `RunContext`s
-Odoo-frei (`build_context_list`, D11 — Kriterien/Auswahl, aber noch KEINE
-Ziel-Firma); `_execute()`s Schleife löst **pro Iteration, unmittelbar vor
-dem `orchestrator.run()`-Aufruf für diese Firma**, über den
-`JournalingClient` die Ziel-Firma auf (neu anlegen mit Land+Name, oder
-bestehende Id per D8 übernehmen) und befüllt erst dann `ctx.
-res_company_ids` — das ist der einzige Zeitpunkt, an dem D3s "aus `ctx.
-res_company_ids[0]` der aktuellen Iteration" tatsächlich einen definierten
-Wert hat.
+widersprachen sich). Begründung präzisiert (Cold-Review Runde 3 — die
+Runde-2-Begründung "`submit()` hat keinen Client" war ungenau: `Journaling
+Client` ist auf Modulebene importiert, `session.base_url`/`database`/
+`odoo_key` liegen in `submit()` bereits vor, technisch könnte dort einer
+gebaut werden).** Der tatsächlich tragende Grund ist eine Reihenfolge, nicht
+ein fehlendes Objekt: `run_id = self._next_run_id()` läuft bei
+`jobs.py:197`, **nach** `build_context` bei `:185`; `RunJournal.__init__`
+verweigert eine `run_id`, die `_RUN_ID_RE` nicht besteht (`run_journal.py:
+57-59`). Eine in `build_context_list` angelegte Firma hätte also **beweisbar
+kein Journal**, das sie erfassen könnte — uncleanbare Residue durch
+Konstruktion, nicht nur durch Konvention. `run_config.py`s eigener
+Modul-Docstring (Zeile 3-5, "no Odoo calls") bleibt als zweiter,
+unabhängiger Grund gültig. **Endgültige Reihenfolge:** `submit()` baut die
+Liste der N frischen `RunContext`s Odoo-frei (`build_context_list`, D11 —
+Kriterien/Auswahl, aber noch KEINE Ziel-Firma); `_execute()`s Schleife löst
+**pro Iteration, unmittelbar vor dem `orchestrator.run()`-Aufruf für diese
+Firma**, über den `JournalingClient` die Ziel-Firma auf (neu anlegen mit
+Land+Name, oder bestehende Id per D8 übernehmen) und befüllt erst dann
+`ctx.res_company_ids` — das ist der einzige Zeitpunkt, an dem D3s "aus
+`ctx.res_company_ids[0]` der aktuellen Iteration" tatsächlich einen
+definierten Wert hat. **Mechanische Folge, in Runde 2 nicht genannt:**
+`job["ctx"]` (heute `jobs.py:339`/`:347`, eine einzelne `RunContext`) wird
+zu `job["contexts"]` — einer Liste — das ist auch eine Änderung in
+`submit()`, nicht nur in `_execute()`.
 
 **D11 — Config-Schema-Form: Liste von Payload-Blöcken, jeder Block hat
 die Form des heutigen Gesamt-Payloads plus Firma-Zielfelder — Runde-1-
-Fassung korrigiert, drei reale Lücken geschlossen (Cold-Review Runde 2).**
-Der heutige `POST /api/runs`-Payload beschreibt bereits genau EINE Firma
+Fassung korrigiert, drei reale Lücken geschlossen (Cold-Review Runde 2),
+**zwei weitere Blocker in Runde 3 gefunden und geschlossen**.** Der
+heutige `POST /api/runs`-Payload beschreibt bereits genau EINE Firma
 (Modus, Branche, Stammdaten-Zahlen, Modul-Toggles) — `build_criteria`/
 `build_selections` bleiben dadurch **komplett unverändert wiederverwendbar**,
-einmal pro Listen-Element aufgerufen. Korrigierte Form:
+einmal pro Listen-Element aufgerufen — **mit einer Injektion, siehe
+Korrektur 5**. Korrigierte Form:
 ```json
 {
   "existing_data_consent": "granted",
   "companies": [
-    {"target": {"mode": "new", "country": "DE", "name": "Optional, sonst LLM-Namenspool"},
+    {"target": {"mode": "new", "country": "DE", "name": "Musterfirma GmbH"},
      "mode": "both", "industry": "...", "master_data": {...}, "modules": {...},
      "skip_master_data": false},
     {"target": {"mode": "existing", "company_id": 7, "reuse_master_data": true},
@@ -1779,34 +1803,76 @@ einmal pro Listen-Element aufgerufen. Korrigierte Form:
   ]
 }
 ```
-**Drei Korrekturen gegenüber dem Erstentwurf:**
+**Fünf Korrekturen gegenüber dem Erstentwurf (1-3 Runde 2, 4-5 Runde 3):**
 1. **`"mode": "both"` fehlte in jedem Block.** `build_criteria` defaulted
    ohne dieses Feld auf `"master"` (`run_config.py:179`), `build_selections`
    liefert bei `mode != "both"` immer leer zurück (`:206`) — das ursprüngliche
    Beispiel hätte pro Firma nur Stammdaten erzeugt, jedes `"modules"`-Objekt
    wäre toter Code gewesen.
 2. **`target.name` neu, weil `res.company.name` Pflichtfeld ist** — der
-   Erstentwurf ließ die neue Firma namenlos. Optional: leer gelassen, leitet
-   `_execute()`s Ziel-Firma-Auflösung einen Namen deterministisch aus
-   `ctx.name_banks.get('company_names')` ab (gleiches Kollisions-
-   Vermeidungsmuster wie im alten, verworfenen R17-Minimal-Scope-Plan
-   bereits ausgearbeitet — Index-Fortschreibung statt `random.choice`).
-   Dieser Name ist zugleich D6s fehlendes Anzeige-Label für die
-   Fortschrittsanzeige (nicht nur der bloße Schleifen-Index).
+   Erstentwurf ließ die neue Firma namenlos.
 3. **`existing_data_consent` bleibt Top-Level, wird NICHT pro Firma
    dupliziert** — siehe eigene Konsens-Entscheidung unten.
+4. **BLOCKER, Runde 3 — `target.name` ist PFLICHT, nicht optional mit
+   LLM-Fallback wie ursprünglich vorgeschlagen.** Runde 2s Fallback-Idee
+   ("leer lassen, `_execute()` leitet aus `ctx.name_banks.get(
+   'company_names')` ab") ist unmöglich: `ctx.name_banks` wird in der
+   Produktivcode-Basis **ausschließlich** innerhalb von `orchestrator.
+   run()` gesetzt (`orchestrator.py:61`), zum Zeitpunkt der Ziel-Firma-
+   Auflösung (D10-Korrektur — läuft **vor** diesem Aufruf) ist es noch der
+   Dataclass-Default `{}` (`config.py:108`). `.get('company_names')` wäre
+   `None`, `res.company.name` (Pflichtfeld) bekäme keinen Wert, der
+   `create()`-Aufruf scheitert. `orchestrator.py` bleibt außerdem laut D6
+   unangetastet — den Aufruf vorzuziehen ist keine Option. Zusätzlich wäre
+   `company_names` ohnehin der falsche Pool (Kundenkontakt-Namen,
+   `master_data.py:160`, keine Firmennamen). **Entscheidung:** `target.name`
+   ist ein Pflichtfeld im Payload für `mode="new"` (UI liefert einen
+   sinnvollen Vorschlag/Default, siehe D9). Löst gleichzeitig D6s fehlendes
+   Anzeige-Label — bereits bei `submit()` bekannt, kein Warten auf
+   `orchestrator.run()` nötig.
+5. **BLOCKER, Runde 3 — `build_selections` liest Consent aus genau dem
+   Dict, das pro Block hereinkommt, nicht aus einem Top-Level-Feld.**
+   `run_config.py:227`: `"use_db_names": payload.get("existing_data_consent")
+   == CONSENT_GRANTED` — mit `existing_data_consent` als echtem Top-Level-
+   Feld (Korrektur 3) und `build_selections` pro Block aufgerufen, sieht
+   dieser Ausdruck `None == "granted"`, **für jede Firma dauerhaft `False`**.
+   Die Konsens-Entscheidung selbst zitiert diese Zeile als Beleg, ohne zu
+   bemerken, dass sie das per-Block-Dict liest, nicht das Top-Level-Feld.
+   **Entscheidung:** `build_context_list` injiziert das Top-Level-Consent-
+   Feld in jeden Block, bevor `build_context` aufgerufen wird —
+   `{**block, "existing_data_consent": payload.get("existing_data_consent")}`.
+   "Komplett unverändert wiederverwendbar" gilt damit **mit dieser einen
+   Injektion**, nicht ohne.
 
-`run_config` bekommt eine neue Funktion `build_context_list(payload, *,
-language_name, language_code, llm_model_name, installed_modules,
-feature_flags, model_access) -> List[Tuple[RunContext, Set[str]]]` — nimmt
-**dieselben 6 Verbindungs-Parameter wie das heutige `build_context`**
-(nicht in der Runde-1-Fassung genannt; ohne sie kann die Funktion nicht
-aufgerufen werden, `jobs.py:185-195` übergibt sie heute genauso), ruft pro
-Listen-Element `build_context` auf (D10) — löst dabei **keine** Ziel-Firma
-auf (siehe D10-Korrektur oben). Braucht eine neue `_as_list`-Validierungs-
+**Existing-Data-Merge-Punkt, Runde 3 — aufgelöst, nicht nur benannt.**
+Runde 2 fand `build_context`s heutigen `use_existing`-Merge (`run_config.py:
+474-476`, Firma-1-geformt) als betroffen, Runde 3 fand die vorgeschlagene
+`build_context_list`-Signatur (6 Verbindungs-Parameter) unvollständig — das
+echte `build_context` nimmt **8**, inklusive `existing_company_ids`/
+`existing_product_ids`. Der saubere Weg ist aber nicht, diese zwei
+Parameter einfach zu ergänzen, sondern sie ganz aus dem neuen Pfad zu
+entfernen: **der alte, Firma-1-geformte `use_existing`-Mechanismus wird
+für den Pro-Firma-Pfad vollständig durch D8bs neuen `company_id`-gescopten
+Fetch ersetzt**, nicht daneben weitergeführt. Konsequenz aus D9s "unify"-
+Entscheidung (Firma 1 ist jetzt auch ein Payload-Listen-Element): "Firma 1
+nutzt vorhandene Daten" ist im neuen Modell einfach `target.mode="existing"`
++ `target.company_id=1` + `reuse_master_data=true` für das erste
+Listen-Element — kein Sonderfall, keine zwei parallelen Mechanismen.
+`build_context_list(payload, *, language_name, language_code,
+llm_model_name, installed_modules, feature_flags, model_access) ->
+List[Tuple[RunContext, Set[str]]]` behält die 6 reinen
+Verbindungs-Parameter, **ohne** `existing_company_ids`/`existing_product_ids`
+— `ctx.company_ids`/`product_ids` bleiben für jede Firma leer, bis
+`_execute()`s Schleife sie (nur bei `reuse_master_data=true`) über D8bs
+Fetch befüllt. Reihenfolge in der Schleife, jetzt vollständig: (a)
+Ziel-Firma auflösen → `ctx.res_company_ids` (D10-Korrektur); (b) falls
+`reuse_master_data`: D8bs Fetch gegen die aufgelöste `company_id`,
+`ctx.company_ids`/`product_ids` befüllen — **vor** `orchestrator.run()`,
+weil `orchestrator.py:142`s Fallback-Partner-Erzeugung bereits auf
+`ctx.company_ids` kurzschließt; (c) Kostenstellen-Cache einsäen (D12); (d)
+`orchestrator.run()` aufrufen. Braucht eine neue `_as_list`-Validierungs-
 Helper (`run_config.py`s bestehende Coercion-Helper — `_as_dict`/`_as_int`/
-`_as_pct`/`_as_bool`/`_enabled`, `:116-153` — haben keine Listen-Variante;
-`_as_dict(payload.get("companies"), ...)` würde die neue Form ablehnen),
+`_as_pct`/`_as_bool`/`_enabled`, `:116-153` — haben keine Listen-Variante),
 inkl. serverseitiger Obergrenze für N (nicht nur eine UI-Beschränkung —
 `POST /api/runs` ist auch direkt aufrufbar, eine reine Frontend-Grenze wäre
 keine echte Grenze; die genaue Zahl bleibt Implementierungsdetail, die
@@ -1816,17 +1882,34 @@ im Python-Code (es ist Payload-JSON), aber `RunContext.res_company_ids`
 (D2/D3) ist der einzige neue Python-seitige "Firma"-Name.
 
 **Konsens-Entscheidung (Cold-Review Runde 2, echtes Datenschutz-Regressionsrisiko
-geschlossen):** `existing_data_consent` bleibt ein **einziges Top-Level-Feld**,
-nicht pro Firma dupliziert. Grund: `build_selections` liest es bereits
-heute für `crm_chatter.use_db_names` (`run_config.py:227`) — ein Payload,
-der für Firma 1 zustimmt und Firma 2 ablehnt, würde trotzdem denselben LLM
-mit denselben Prompt-Regeln füttern; die Frage ist inhärent global, nicht
-pro Firma. `validate_consent` (`:160-175`) wird erweitert: löst aus, wenn
-**mindestens eine** Firma `target.reuse_master_data=true` hat (Ersatz für
-die heutige einzelne `use_existing`-Prüfung) — nicht mehr pro Firma
-dupliziert geprüft. Schließt das Runde-2-Risiko, dass `reuse_master_data`
-den `use_existing`-Namen ersetzt, ohne dass irgendetwas mehr die
-Zustimmungs-Sperre auslöst.
+geschlossen; Mechanismus in Runde 3 konkretisiert, vorher nur behauptet):**
+`existing_data_consent` bleibt ein **einziges Top-Level-Feld**, nicht pro
+Firma dupliziert. Grund: `build_selections` liest es bereits heute für
+`crm_chatter.use_db_names` (`run_config.py:227`) — ein Payload, der für
+Firma 1 zustimmt und Firma 2 ablehnt, würde trotzdem denselben LLM mit
+denselben Prompt-Regeln füttern; die Frage ist inhärent global, nicht pro
+Firma. **Konkreter Mechanismus (Runde 3 — Runde 2 behauptete "`validate_
+consent` wird erweitert", ohne Signatur oder Call-Site zu nennen; `payload.
+get("use_existing")` als Einzeldict-Lookup kann "mindestens eine Firma"
+strukturell nicht beantworten):**
+```python
+def validate_consent(payload, *, reuse_requested: bool = False) -> Optional[str]:
+```
+Aufruf **einmal**, aus `build_context_list`, **bevor** die Firmen-Schleife
+`build_context` pro Element aufruft:
+```python
+reuse_requested = any(
+    _as_dict(c.get("target"), "target").get("reuse_master_data")
+    for c in companies
+)
+consent = validate_consent(payload, reuse_requested=reuse_requested)
+```
+`build_context`s eigener interner Aufruf bei `:452` **bleibt bestehen** —
+prüft dann nur noch redundant gegen den bereits injizierten, pro Block
+gleichen Consent-Wert (siehe D11 Korrektur 5), kein Schaden, hält den
+Einzel-Firma-Pfad (z. B. Tests) unverändert funktionsfähig. Schließt das
+Runde-2-Risiko, dass `reuse_master_data` den `use_existing`-Namen ersetzt,
+ohne dass irgendetwas mehr die Zustimmungs-Sperre auslöst.
 
 **D12 — Kostenstellen (`get_or_create_analytic_accounts`) sind Lauf-weit
 gemeinsam, nicht pro Firma — Gegenteil-Behandlung zu D3/D10, echter Fund
@@ -1860,10 +1943,27 @@ bekommt **kein** Pro-Firma-Verhalten wie D3s Helfer — stattdessen hält
 `ctx` (eine lokale Variable vor der Firmen-Schleife), sät ihn vor jedem
 `orchestrator.run()`-Aufruf in die frische `ctx.analytic_account_ids` ein
 und erntet das Ergebnis danach zurück in die geteilte Variable — "seed and
-harvest" pro Iteration, kein Config-Schema-Touch nötig. `estimate_
-record_counts`s hardcodiertes `counts["Kostenstellen"] = 3`
-(`run_config.py:627`) bleibt bei korrektem Fix exakt **3**, nicht `3×N`
-(ein Plan für den ganzen Lauf, nicht einer pro Firma).
+harvest" pro Iteration, kein Config-Schema-Touch nötig (Cold-Review Runde 3:
+`ctx.analytic_account_ids` ist ein gewöhnliches Dataclass-Feld ohne
+Property/Validierung, `config.py:172` — von außerhalb beschreibbar, keine
+technische Hürde; Aufrufmuster über alle drei Konsumenten `sale.py:159`/
+`purchase.py:230`/`expenses.py:88` bestätigt: alle laufen innerhalb der
+jeweils aktuellen Firmen-Iteration, "ernten nach `orchestrator.run()`"
+kann also nichts verpassen). **Zwei Präzisierungen aus Runde 3:**
+1. **Ernten von `[]` (echter Fehlschlag, kein "noch nicht versucht")
+   bewusst unbedingt, nicht bedingt.** Ein `[]`-Ergebnis bedeutet laut
+   `odoo_actions.py:366-371` "versucht, echt leer — nicht erneut versuchen".
+   Unbedingtes Ernten propagiert einen einmaligen Fehlschlag (z. B.
+   `model_access`-Sperre) für den Rest des Laufs — bewusst so gewählt,
+   weil die Alternative (pro Firma neu versuchen) exakt das
+   Duplikat-Plan-Risiko zurückbringt, das D12 beheben soll. Ein einzelner
+   Fehlschlag deaktiviert Analytics lauf-weit, statt N-fach zu duplizieren.
+2. **Kollision mit D6 aufgelöst:** D6s Pro-Firma-Label-Qualifizierung von
+   `estimate_record_counts` (z. B. "Kontakte (Firma 1)") **schließt
+   `"Kostenstellen"` explizit aus** — bleibt eine einzige, unqualifizierte
+   Zeile auf Lauf-Ebene (`= 3`, nicht `×N`), sobald mindestens eine Firma
+   Analytics ausgewählt hat. Ohne diesen Ausschluss hätte D6s eigene Regel
+   D12s "bleibt exakt 3" automatisch zu `3×N` gemacht.
 
 **D13 — `res.company`-Cleanup: Fix bereits bekannt, jetzt eingeplant statt
 offen gelassen.** D1 behauptete, "ein Lauf löschen räumt alles" — stimmt
@@ -1877,7 +1977,29 @@ bereits angehängtem Warehouse UND auf eine Firma mit vollem Kontenplan
 in beiden Fällen. **Entscheidung:** `"res.company"` wird zu
 `ARCHIVE_FALLBACK_MODELS` hinzugefügt (ein Set-Eintrag, kein neues
 Verhalten) — kein permanenter Rückstand akzeptiert, wo ein bekannter,
-billiger Fix existiert.
+billiger Fix existiert. **Zwei Ergänzungen aus Cold-Review Runde 3:**
+1. **Wiederverwendete bestehende Firmen werden nie journalisiert (bewusst,
+   nicht versehentlich) und daher nie archiviert.** `search_read` (D8b, für
+   `target.mode="existing"`) läuft nicht über den `JournalingClient` —
+   genau richtig: eine bereits bestehende, potenziell echte Firma darf
+   "Lauf löschen" niemals archivieren können. Nur per `create()`
+   **selbst angelegte** Firmen landen im Journal und sind damit
+   löschbar/archivierbar. Diese Sicherheitseigenschaft ist erwünscht,
+   sollte aber explizit im WP stehen, damit niemand versehentlich den
+   Ziel-Firma-Resolver so umbaut, dass er auch bestehende Firmen über den
+   Journaling-Client anfasst.
+2. **Live-Beleg deckt nicht den Fall ab, den `delete_run` tatsächlich
+   trifft.** Die zitierte Live-Probe testete Archivieren einer Firma mit
+   bereits bestehendem Server-seitigem Rest (Warehouse bzw. Kontenplan),
+   nicht eine Firma, die noch **journalisierte** Records anderer Modelle
+   hält, während `delete_run` diese in umgekehrter Erzeugungs-Reihenfolge
+   abarbeitet. Bei unterschiedlicher Modul-Auswahl pro Firma (ein
+   S16-NEU-Kernszenario) kann `res.company` vor Records einer **anderen**
+   Firma in der Lösch-Reihenfolge auftauchen, die dieselbe Firma nicht
+   verwendet — unklar, ob das reale Probleme macht (plausibel unkritisch
+   für diesen privilegierten API-User, aber unbewiesen). **WP-Vorgabe:**
+   Cleanup live verifizieren an einem 2-Firmen-Lauf mit **unterschiedlicher**
+   Modul-Auswahl je Firma, nicht nur identischer.
 
 **Eingestuft nach Ladungsfähigkeit (Cold-Review-Kategorisierung, Runde 2
 präzisiert):**
@@ -1890,15 +2012,29 @@ präzisiert):**
 - **Ohne erneute Review bei Implementierung entscheidbar:** die **exakte
   Zahl** der weichen Obergrenze für N (**Korrektur Runde 2:** die
   Durchsetzung selbst ist **nicht** UI-only — siehe D11s `_as_list`, das
-  ist jetzt entschieden; nur der konkrete Zahlenwert bleibt offen);
-  Teilausfall-Verhalten (der bestehende Code hat bereits einen impliziten
-  Default — `orchestrator._run_module` schluckt Modul-Fehler pro Firma
-  (`orchestrator.py:124-127`), ein Fehler beim Aufbau EINER Firma selbst
-  (z. B. Ziel-Firma-Erzeugung schlägt fehl) würde dagegen aus `_execute()`
-  herausfallen — "restliche Firmen trotzdem versuchen" ist ein kleiner,
-  expliziter Zusatz im Schleifenkörper, kein Architektur-Entscheid); ob die
+  ist jetzt entschieden; nur der konkrete Zahlenwert bleibt offen); ob die
   Firmenauswahl (bestehend) einen eigenen Zugriffsrechte-Check über
   `model_access` hinaus braucht.
+- **Zurückgestuft — braucht doch eine Entscheidung, kein loser Schleifen-
+  Zusatz (Cold-Review Runde 3, korrigiert gegenüber Runde 2s
+  Einordnung):** Teilausfall-Verhalten. `RunRecord.status` (`jobs.py`) ist
+  heute ein Skalar mit nur `STATUS_DONE`/`STATUS_FAILED`, `record.error`
+  ein einzelner String — "Firma 3 von 5 schlägt fehl, 1/2/4/5 gelingen" hat
+  **keine Repräsentation** in dieser Form. Ein `try` um die ganze Schleife
+  markiert Firma 4-5s nie gelaufene Zeilen fälschlich `FAILED`; ein `try`
+  pro Firma lässt `record.status` für den Mischfall undefiniert, und die
+  `end`-SSE-Nachricht sendet ohnehin nur einen einzigen Status fürs
+  gesamte Frontend-Rendering. **Entscheidung:** neuer Status-Wert
+  `STATUS_PARTIAL` (zwischen `DONE` und `FAILED`) für "mindestens eine
+  Firma erfolgreich, mindestens eine komplett fehlgeschlagen" — Modul-Ebene
+  bleibt unverändert (D6s firmen-qualifizierte Modul-Zeilen zeigen bereits,
+  welche Firma welches Modul verloren hat); `record.error` bleibt ein
+  einzelner String (erster Firma-Ebene-Fehlschlag), da die Pro-Firma-Details
+  bereits über die qualifizierten Modul-Zeilen sichtbar sind, keine
+  strukturierte Aufteilung nötig. "Restliche Firmen trotzdem versuchen"
+  bleibt der einfache Teil (ein `try` pro Iteration im Schleifenkörper) —
+  nur der Status-Wortschatz selbst ist der Architektur-Entscheid, den
+  Runde 2 übersehen hatte.
 
 ## 5. Umsetzungsreihenfolge
 
