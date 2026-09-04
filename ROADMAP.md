@@ -1511,6 +1511,114 @@ hielt jedes Mal, die Fehler saßen im nachträglich angehängten Prosa-Text —
 für den neuen Plan also kürzere, entscheidungsfokussierte WP-Zellen
 bevorzugen statt lange Should-Fix-Ketten anzuhäufen).
 
+### S16-NEU — Architektur-Spike (begonnen 2026-09-04)
+
+Neun Design-Entscheidungen, jeweils mit Beleg. Bewusst kurz gehalten (siehe
+Notiz oben zu Runde 2/3s Lehre: lange Prosa-Ketten sind, wo die neuen Fehler
+entstehen). Kein Code, keine Cold-Review noch — Grundlage für die nächste.
+
+**D1 — Ausführung: sequentieller Loop, EIN `run_id`/Client/Journal für die
+ganze Mehrfirmen-Generierung, keine N parallelen Läufe.** `web/jobs.py`s
+`_execute()` baut genau einen `JournalingClient` pro `run_id` (`:314`) — D10s
+Drossel-Zustand (`_last_request_at`) lebt auf dieser Client-Instanz. N Firmen
+als N separate `run_id`s/Clients würden je unabhängig drosseln; die reale
+Gesamtrate gegen dieselbe Odoo-Instanz wäre N×, D10 wäre wirkungslos genau in
+dem Moment, in dem es am meisten zählt. Der Docstring-Hinweis "~5 gleichzeitige
+Läufe" meint verschiedene Nutzer/Instanzen, nicht N Firmen einer Anfrage.
+**Entscheidung:** ein `run_id`, ein `client`, ein `llm`, ein `RunJournal` für
+den gesamten Mehrfirmen-Lauf; `orchestrator.run()` läuft in einer Schleife
+innerhalb `_execute()`, einmal pro Firma, sequentiell — Drossel bleibt korrekt
+getaktet, LLM-Cache profitiert firmenübergreifend, Journal sammelt alle
+Firmen unter einer löschbaren Einheit (ein "Lauf löschen" räumt alles).
+
+**D2 — Namensraum: neues Konzept braucht einen von "company" getrennten
+Namen.** Drei bestehende, verschiedene "Firma"-Begriffe kollidieren bereits
+im Repo: `DemoCriteria.num_companies` (Anzahl `res.partner`-Kundenkontakte
+PRO Firmenlauf, `config.py:8`), `RunContext.company_ids` (dieselbe Bedeutung,
+historisch falsch benannt), `RunContext.res_company_ids` (echte
+`res.company`-Ids, aktuell ≤1). Ein viertes, jetzt plurales "N Ziel-Firmen"-
+Konzept braucht einen eigenen, klar unterscheidbaren Namen (z. B.
+`target_companies`/`company_profiles`) — bloßes "company" möglichst meiden.
+Konkrete Benennung: Teil des nächsten Config-Schema-Entwurfs, hier nur als
+harte Nebenbedingung festgehalten, damit sie nicht verloren geht.
+
+**D3 — `get_main_company_id()` & Geschwister werden `ctx`-bewusst.** Heute
+ignorieren sie `ctx` komplett, fragen Odoo direkt nach "Firma id=1, sonst die
+erste gefundene" (`odoo_actions.py:322-341` u. a., 4 direkte Call-Sites plus
+3 weitere gleich gebaute Helper). Im Pro-Firma-Loop muss die "aktuelle
+Ziel-Firma" aus der gerade verarbeiteten `ctx` kommen, nicht immer id=1.
+**Entscheidung:** diese Helper nehmen `company_id` explizit entgegen (oder
+lesen `ctx.res_company_ids[0]`) statt blind zu fragen — 🔒-Signaturänderung
+über `odoo_actions.py` + 7 Call-Sites (`expenses.py`, `mrp.py`,
+`inventory.py`, `purchase.py`, plus die 3 bisher ungenutzten weiteren
+Helper). Architekten-Freigabe nötig, gleiche Kategorie wie jede andere
+grundlegende, modulübergreifende Helper-Änderung.
+
+**D4 — Live bestätigt (2026-09-04): Transaktions-Records unter einer
+Nicht-Primär-Firma funktionieren mit firmenneutralen Partnern/Produkten.**
+`sale.order` mit `company_id=<frische Firma>`, `partner_id`/`product_id`
+beide firmenneutral (`company_id=False`, heutiger Default — `master_data.py`
+setzt `company_id` nie explizit) — `create()` **und** `action_confirm()`
+beide erfolgreich, live getestet. Zusätzliche Firmen brauchen also **nicht
+zwingend** eigene Partner/Produkte — geteilte, firmenneutrale Stammdaten
+funktionieren firmenübergreifend ohne Umhäng-Konflikt (Punkt 2 im alten
+R17-Befund betraf nur bereits **einer anderen** Firma zugeordnete Records,
+nicht firmenneutrale). Vereinfacht die Architektur: eigene Kataloge pro
+Firma sind eine Realismus-Entscheidung, keine technische Pflicht.
+
+**D5 — LLM-Atom-Abruf: pro Firma, lazy innerhalb der Schleife, nicht
+gebündelt vorab.** Passt zur sequentiellen Ausführung, liefert schneller
+sichtbaren Fortschritt für Firma 1 (kein langes stilles Warten auf N
+Branchen-Abrufe, bevor überhaupt ein Modul startet), bleibt trotzdem ein
+gebatchter Aufruf pro Firma (LLM-Minimalismus intakt — N Aufrufe für N
+Branchen, nicht pro Record). Cache-Key ist bereits branchen-geschlüsselt
+(`seeds/cache/<branchen-slug>_<version>.json`) — wiederholte Branchen über
+mehrere Firmen oder erneute Läufe treffen den Cache natürlich.
+
+**D6 — Fortschrittsanzeige braucht echte Umstrukturierung, kein kleiner
+Patch.** `RunRecord.modules`/`module_order` (`web/jobs.py:99-100`) sind
+flache, nach Modul-Code geschlüsselte Dicts — eindeutig für eine Firma,
+mehrdeutig für N ("wessen CRM-Zeile ist das?"). Braucht entweder
+verschachtelte Struktur (Firma→Modul→Status) oder firmen-qualifizierte
+Keys. Betrifft `web/sse.py`s Event-Payloads und `static/app.js`s Rendering
+— eigener Entwurf nötig, in diesem Spike nicht versucht.
+
+**D7 — Laufzeit-Ehrlichkeit: N Firmen multiplizieren die Gesamtlaufzeit
+ungefähr linear.** `web/jobs.py`s eigener Docstring: "ein voller Lauf
+dauert 2–5 Minuten" pro Firma heute. N Firmen ≈ N × das (sequentiell,
+geteilte Drossel, siehe D1) — N=3 etwa 6–15 Min, N=10 etwa 20–50 Min.
+Braucht explizite Nutzer-Kommunikation (Vorab-Schätzung, "das dauert")
+und wahrscheinlich eine weiche Obergrenze für N in der UI — genaue Zahl
+nicht Teil dieses Spikes.
+
+**D8 — Bestehende-Firma-Wiederverwendung braucht zwei neue, getrennte
+Fetches.** (a) Eine echte `res.company`-Liste — `connect_service.py`s
+`existing_companies` ist ein Namens-Fallstrick, meint `res.partner`-
+Kundenkontakte, nicht echte `res.company` (`:111-116`) — braucht einen
+neuen, sauber benannten Fetch. (b) Eine `company_id`-gescopte Variante von
+`fetch_existing_data` für den Opt-in "auch die Partner/Produkte dieser
+bestehenden Firma wiederverwenden" — die heutige Funktion ist ungefiltert
+und Firma-1-geformt.
+
+**D9 — UI-Fluss: neuer Bildschirm nach Verbindung, vor/statt Konfiguration.**
+Bestätigt 3 echte Ansichten heute (`static/index.html:20-22`: Verbindung →
+Konfiguration → Generierung — CLAUDE.mds "4-View-Konsole" ist veraltet,
+"Prüfen" ging seit S10 in Konfiguration auf). Neuer Fluss: Verbindung →
+[Firmenauswahl: wie viele, je neu oder bestehend] → [Pro-Firma-
+Konfigurationsbildschirm, N-mal wiederholt: Branche, Land (falls neu),
+Wiederverwendungs-Toggle (falls bestehend), volles bestehendes
+Konfiguration-Modul-Set] → Generierung. Größere Frontend-Umstrukturierung
+als jede bisherige UI-Änderung in diesem Repo.
+
+**Offen, bewusst nicht in diesem Spike entschieden:** exakte Config-Schema-
+Form für den Payload (Liste von Firmen-Spezifikationen vs. Alternative);
+weiche Obergrenze für N; Teilausfall-Verhalten (Firma 3 von 5 schlägt fehl —
+abbrechen, überspringen, wiederholen?); ob Cleanup pro Firma teilbar sein
+muss oder wie heute komplett-oder-nichts pro `run_id` bleibt (Tendenz:
+bleibt komplett-oder-nichts); ob Firmenauswahl (bestehend) einen eigenen
+Zugriffsrechte-Check über die bereits vorhandene `model_access`-Prüfung
+hinaus braucht.
+
 ## 5. Umsetzungsreihenfolge
 
 Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-Pflicht). Empfohlene Sprints:
