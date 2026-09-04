@@ -515,32 +515,36 @@ dieser Instanz vorhanden und nutzbar. Vier zuvor offene Fragen live geklärt:
    geändert werden, solange es Lagerbuchungen gibt, die einem anderen Unternehmen gehören."` —
    bestätigt exakt das erwartete Verhalten, der Minimal-Scope (nur frisch erzeugte Records der
    zweiten Firma zuweisen) bleibt die einzig gangbare Route.
-3. **API-Key-User braucht `company_ids`-Erweiterung NICHT — bewusst nicht empfohlen, nicht
-   nur "nicht automatisiert" (Cold-Review-Korrektur).** Der API-Key-User (`res.users` id 2)
-   hat `company_ids=[1]`. Live getestet: `create()`/`write()`/`search_read()` mit explizitem
-   `company_id=2`/`['company_id','=',2]`-Domain funktionieren trotzdem (Beispiel:
-   `stock.warehouse` mit `company_id=2` angelegt und explizit zurückgelesen — beides
-   erfolgreich). Ein **ungefilterter** `search_read` ohne Domain zeigt die Firma-2-Records
-   dagegen nicht (Standard-Odoo-Record-Rule-Scoping auf `allowed_company_ids`) — jeder neue
-   Firma-2-Code-Pfad MUSS also explizit nach `company_id` filtern/erzeugen, darf sich nie auf
-   Default-Scoping verlassen. Der ursprüngliche Plan empfahl trotzdem, `company_ids` des
-   API-Users manuell zu erweitern ("billig, kein Nachteil") — **Cold-Review Runde 1 widerlegt
-   beide Teile dieser Aussage:** (a) den aufrufenden Nutzer zu bestimmen ist entgegen der
-   ursprünglichen Begründung *nicht* aufwändig — `modules/crm.py:278-291` liest bereits den
-   internen Nutzerkreis (`search_read('res.users', [['share','=',False], ...])`); (b) eine
-   Erweiterung ist **nicht** ohne Nachteil: `connect_service.fetch_existing_data` filtert
-   seine `product.product`/`res.partner`-Abfragen (`:109-124`) **nicht** nach `company_id` —
-   genau die Record-Rule-Maskierung, die Firma-2-Records heute vor einem ungefilterten
-   `search_read` verbirgt, verhindert auch, dass ein späterer Lauf mit "Vorhandene Daten
-   einbeziehen" (`use_existing`) Firma-2-Produkte in den geteilten `ctx.product_ids`-Pool
-   zieht (`run_config.py:474-476`). Eine `company_ids`-Erweiterung entfernt genau diese
-   Maskierung und würde Punkt 2s Umhäng-Verweigerung beim nächsten Lauf real auslösen.
-   **Entscheidung:** keine `company_ids`-Erweiterung, weder automatisiert noch als
-   dokumentierter manueller Schritt — die neue Firma bleibt für den API-User "erlaubt, aber
-   nicht Standard", und ist entsprechend im Odoo-Firmenumschalter für reguläre Nutzer nicht
-   ohne Weiteres sichtbar. Akzeptierte Einschränkung des Minimal-Scopes (kosmetisch, keine
-   Funktionseinbuße für die per JSON2 erzeugten Records selbst); eine spätere Erweiterung
-   braucht zuerst einen `company_id`-Filter in `fetch_existing_data`.
+3. **Keine Record-Rule-Maskierung — API-Key-User sieht Firma-2-Records IMMER, gefiltert oder
+   nicht (Cold-Review Runde 2, Blocker B1: Runde-1-Text widersprach sich selbst und war
+   falsch).** Ursprünglich stand hier, ein ungefilterter `search_read` zeige Firma-2-Records
+   nicht (Standard-Odoo-Record-Rule-Scoping). **Live nachgeprüft (2026-09-04, frische
+   Firma+Warehouse, drei parallele Reads):** `search_read` mit `id`-Domain, mit
+   `company_id`-Domain UND **komplett ungefiltert** (`limit=0`) liefern alle drei dasselbe
+   Ergebnis — das Firma-2-Warehouse erscheint in jeder der drei Abfragen. Der ursprüngliche
+   "maskiert"-Befund war ein Auswertungsfehler: die erste Stichprobe nutzte `limit=20` und
+   das gesuchte Objekt lag (nach `id` sortiert) hinter Position 20 — Limit-Abschneidung, keine
+   Record Rule. Für diesen API-Key-User (`res.users` id 2, `company_ids=[1]`) gilt: **keine**
+   company-basierte Zugriffsbeschränkung greift überhaupt, unabhängig von Domain oder
+   `company_ids`. (Ursache nicht weiter verfolgt — plausibel ein privilegierter/interner
+   API-User, dessen Zugriff Multi-Company-Record-Rules nicht unterliegt; für den Scope dieses
+   Spikes nicht relevant, das Verhalten selbst ist das, was zählt.)
+   **Konsequenz 1 (positiv):** WP3s Pattern-4-Read-Backs (Partner/Produkte/Warehouse) funktionieren
+   ohne Weiteres — keine Sonderbehandlung für Lese-Domains nötig.
+   **Konsequenz 2 (der eigentliche Befund, ersetzt die alte "company_ids-Erweiterung wäre
+   riskant"-Begründung):** weil nichts maskiert wird, **existiert das Leck-Risiko bereits
+   heute, unabhängig von jeder `company_ids`-Erweiterung.** `connect_service.fetch_existing_data`
+   filtert seine `product.product`/`res.partner`-Abfragen (`:109-124`) nicht nach `company_id` —
+   sobald dieser Sprint das erste Firma-2-Produkt anlegt, zieht jeder spätere Lauf mit
+   "Vorhandene Daten einbeziehen" (`use_existing`) es ungefiltert in den geteilten
+   `ctx.product_ids`-Pool (`run_config.py:474-476`), unabhängig davon, ob der API-User
+   `company_ids=[1]` oder `[1,2]` hat. **Das macht den `company_id`-Filter in
+   `fetch_existing_data` zu einem echten WP2-Pflichtschritt dieses Sprints, nicht zu einer
+   optionalen Zukunftsaufgabe** — R17 selbst erzeugt zum ersten Mal Records, die dieses Loch
+   real treffen können. Die `company_ids`-Erweiterung des API-Users bleibt weiterhin außerhalb
+   des Scopes (kein Bedarf — Konsequenz 1 zeigt, sie war nie nötig, um Firma-2-Records lesbar
+   zu machen), aber aus einem anderen, einfacheren Grund als ursprünglich angenommen: sie war
+   schlicht nie die Lösung für irgendetwas.
 4. **`odoo_actions.get_main_company_id`s Blast Radius ist kleiner als befürchtet.** Vier
    Call-Sites (`modules/expenses.py:50`, `modules/mrp.py:152`, `modules/inventory.py:55`,
    `modules/purchase.py:151`) — alle vier geben laut Doku-String bewusst "Firma mit id=1,
@@ -1209,13 +1213,27 @@ Kostenstellen-`write()`-Aufrufe — wenige, nicht einer pro Zeile).
 Design-Entscheidung (neues Feld statt Rename) stehen oben im R17-Abschnitt
 selbst (nicht hier verdoppelt). **Cold-Review Runde 1 gelaufen** (unabhängiger
 Opus-Agent, nur Plantext + Live-Repo, keine Konversationshistorie, S5-S15-Verfahren)
-— fand **6 Blocker + 12 Should-Fixes**, alle unten eingearbeitet (u. a. eine
+— fand **6 Blocker + 12 Should-Fixes**, alle eingearbeitet (u. a. eine
 fehlende Registrierungskette, die die Karte unsichtbar/unklickbar gemacht hätte;
 ein D7-Cleanup-Loch, das pro Lauf eine unlöschbare Firma+Kontenplan auf der
 Live-Instanz hinterlassen hätte; das Kontenplan-Laden selbst dafür gestrichen
-statt gefixt, da sein einziger Nutzen kosmetisch war; eine falsche Prämisse +
-ein echtes Leck-Risiko bei der ursprünglich empfohlenen API-User-`company_ids`-
-Erweiterung, jetzt gestrichen). Plan geht als Nächstes in Runde 2.
+statt gefixt, da sein einziger Nutzen kosmetisch war). **Cold-Review Runde 2
+gelaufen** (zweiter unabhängiger Opus-Agent, gleiches Verfahren) — fand
+**4 weitere Blocker + 7 Should-Fixes**, alle unten eingearbeitet. Wichtigster
+Fund: Runde 1s eigener Live-Befund zur `company_ids`-Record-Rule-Maskierung
+widersprach sich selbst intern — per Live-Nachtest (2026-09-04) aufgelöst:
+**es gibt für den API-Key-User keinerlei Maskierung**, gefiltert oder nicht
+(Detail siehe R17-Abschnitt Punkt 3). Das kehrt den ursprünglichen Grund für
+"`company_ids`-Erweiterung nicht empfohlen" um: nicht weil eine Erweiterung
+ein Leck öffnen würde, sondern weil das Leck (`connect_service.fetch_existing_data`
+ungefiltert nach `company_id`) bereits **heute** existiert, sobald dieser Sprint
+das erste Firma-2-Produkt anlegt — das macht den Filter in `fetch_existing_data`
+zu einem echten WP2-Pflichtschritt, kein optionales Zukunfts-Item mehr. 0
+Blocker in Runde 2 wären nötig gewesen für eine dritte Runde; da alle 4 Runde-2-
+Blocker mechanische Text-/Logikkorrekturen ohne neue offene Live-Fragen sind
+(die eine echte Live-Frage, B1, wurde noch in dieser Runde durch einen
+zusätzlichen Spike aufgelöst), gilt der Plan nach Einarbeitung als
+freigegeben zur Implementierung — kein dritter Durchgang nötig, analog S13/S15.
 
 **Zentrale Design-Entscheidung (Grund für den eigenen `modules/multicompany.py`-
 Zuschnitt statt additiver Erweiterung wie R20):** anders als R20 (nur ein
@@ -1295,17 +1313,24 @@ selbst (die entstehen unabhängig davon korrekt mit `company_id`=neue Firma).
 
 | WP | Inhalt | 🔒 | Voraussetzung |
 |---|---|---|---|
-| **WP1** ✅ | Architektur-Spike: gebündelte Live-Verifikation gegen `demo-test5.odoo.com` (Kontenplan-Ladepfad inkl. Country/Template-Kompatibilität — Ergebnis: nicht im Scope, siehe R17 Punkt 1 —, Referenzierte-Records-Umhäng-Verweigerung, API-User-`company_ids`-Wirkung auf explizite vs. ungefilterte Queries, `get_main_company_id`-Blast-Radius über alle 4 Call-Sites + 3 weitere `res.company`-Helper) | nein | — |
-| **WP2** | Infrastruktur — **vollständige Registrierungskette** (Cold-Review-Blocker B1/B2, analog §3s "Referenz — Registrierungskette", hier mit pseudo-Modul-Abweichung): `config.py` (`RunContext.res_company_ids` + `ModuleSelections.multicompany`, siehe oben) 🔒; `run_config.py`s `PSEUDO_MODULES` (`"multicompany"` ergänzen, **nicht** `WANTED_MODULES` — keine echte Odoo-App) + `MODULE_LABELS` + `MODULE_RUN_ORDER` (nach `"documents"`) + `build_selections` + `estimate_record_counts` + `test_run_config_unit.py`s `_FULL`/`_ALL_INSTALLED`-Literale (Zeile mit `selected == _ALL_INSTALLED \| {"documents", "analytic"}`, analog S15s eigenem Fund an derselben Stelle); `static/app.js:257`s hardcodierte `isPseudo`-Prüfung um `"multicompany"` erweitern (zweite hardcodierte Pseudo-Modul-Stelle, sonst bleibt die Karte dauerhaft deaktiviert — B2); `odoo_actions.MODEL_ACCESS_PROBES["multicompany"] = ["res.company"]` + `probe_model_access`s hardcodiertes Pseudo-Modul-Tupel (`odoo_actions.py:317`) um `"multicompany"` erweitern (`res.company`-Anlegen ist ein echtes, oft eingeschränktes Recht, Should-Fix S5 — verwandelt einen harten Fehlschlag in einen sauberen Pattern-3-Skip); `odoo_actions.create_second_company` (Firma anlegen — nur `name` aus `ctx.name_banks.get('company_names')` per deterministischem Index `len(ctx.criteria...)`-artig gewählt, s. u., plus `currency_id` von Firma 1 übernommen; **kein** `country_id`/Kontenplan, siehe R17 Punkt 1); `run_journal.py`s `ARCHIVE_FALLBACK_MODELS` um `"res.company"` ergänzen (D7-Cleanup-Netz, Blocker B3(a) — `res.company` lässt sich oft nicht `unlink`en sobald sie referenziert wird, Archivieren als Fallback); neues `modules/multicompany.py`-Grundgerüst + `orchestrator.py`-Registrierung als letzter Pipeline-Schritt 🔒 (Platzierungs-Begründung oben); `static/app.js`-UI-Karte | ja | WP1 |
-| **WP3** | Befüllung: `modules/multicompany.py` erzeugt `partner_count` Partner + `product_count` Produkte (`company_id=ctx.res_company_ids[0]`, batched, lokale Variablen — siehe Pool-Isolation oben) + ein Warehouse für die neue Firma. **Cold-Review-Korrektur (S1):** `odoo_actions.create_second_warehouse` (R14, `odoo_actions.py:113`) nimmt `company_id` bereits als Parameter — `inventory.py:55` übergibt heute nur zufällig `get_main_company_id(client)`, kein Refactor an R14-Code nötig, nur `create_second_warehouse(client, ctx.res_company_ids[0])` aufrufen. Namens-Kollision beachten: der Helper benennt neue Warehouses `"Lager 2 (<suffix>)"`/Code `WH2<suffix>` — für Firma 2 einen passenden Namen übergeben statt des Default-"Lager 2"-Musters. **Vor Umsetzung live prüfen (S2):** legt Odoo beim Anlegen einer `res.company` bereits automatisch ein Standard-Warehouse an? Ein `search_read('stock.warehouse', [['company_id','=', <neue id>]])` direkt nach der Firmen-Erzeugung klärt das — falls ja, entfällt dieser Schritt oder wird zu "zweitem Warehouse für Firma 2". **Produktnamen-Quelle korrigiert (S3):** `data_factory.build_products`s kategorisierte Form (`{"services": [...], ...}`) kommt aus `creative_atoms`, das nur lokal in `orchestrator.run()` existiert und nie auf `ctx` landet — `multicompany.py` erreicht es nicht. Stattdessen `ctx.name_banks.get('product_names')` (flache Liste) + `fallback_data.FALLBACK_PRODUCTS`, Vals selbst gebaut (einfache Produkte, keine Service/Consumable/Storable-Kategorisierung nötig für diesen Scope). **Namens-Kollision (S4):** Firmenname deterministisch aus dem Pool wählen (z. B. Index = Anzahl bereits erzeugter Firmen), nicht `random.choice` — vermeidet Duplikate mit `master_data.py`s Partnernamen aus demselben Pool. `'stock' in ctx.installed_modules`-Gate für den Warehouse-Schritt ergänzen (fehlte im Erstentwurf) | nein | WP2 |
-| **WP4** | Peer-Review vor Merge (S5-S15-Verfahren, Diff statt Plan-Text), grüner Live-`test_suite.py`. **Cold-Review-Korrektur (B4):** `create_second_company`/Firmenerzeugung bekommt **nur** Unit-Test-Abdeckung (gemockter Client) — gleiches Präzedens wie `create_second_warehouse` (R14/S13), das ebenfalls nie einen Live-Integrationstest hat (`tests/integration/` enthält keinen `second_warehouse`-Treffer, per grep bestätigt). Grund: ohne Kontenplan-Laden ist eine `res.company` zwar über `ARCHIVE_FALLBACK_MODELS` archivierbar (WP2), aber ein Pattern-4-Live-Test, der bei **jedem** `test_suite.py`-Lauf (CLAUDE.md-Pflicht nach jeder Code-Änderung) eine neue Firma auf der geteilten `demo-test5.odoo.com`-Instanz anlegt, würde unnötig akkumulieren — WP1s einmalige manuelle Live-Verifikation reicht als Nachweis, dass der Erzeugungspfad live funktioniert. Test-Runner-Registrierung (S10, oft vergessenes Detail, R19-Präzedens `ad26baa`): neues Testmodul in **beiden** Runnern eintragen — `tests/unit/unit_suite.py` (Import + `_MODULES`) UND `tests/integration/test_suite.py` (Import + Suite-Liste) | — | WP2-WP3 Code steht |
+| **WP1** ✅ | Architektur-Spike: gebündelte Live-Verifikation gegen `demo-test5.odoo.com` (Kontenplan-Ladepfad inkl. Country/Template-Kompatibilität — Ergebnis: nicht im Scope, siehe R17 Punkt 1 —, Referenzierte-Records-Umhäng-Verweigerung, `get_main_company_id`-Blast-Radius über alle 4 Call-Sites + 3 weitere `res.company`-Helper). **Nachtrag aus Cold-Review Runde 2:** dreifach-parallele Read-Back-Probe (id-Domain/`company_id`-Domain/komplett ungefiltert) klärte einen Selbstwiderspruch im ursprünglichen "Record-Rule-Maskierung"-Befund endgültig — keine Maskierung, siehe R17 Punkt 3. Separat: `write(active=False)` auf eine Firma, die bereits ein Warehouse hält, live bestätigt (stützt WP2s `ARCHIVE_FALLBACK_MODELS`-Ergänzung) | nein | — |
+| **WP2** | Infrastruktur — **vollständige Registrierungskette** (Cold-Review-Blocker B1/B2 Runde 1, analog §3s "Referenz — Registrierungskette", hier mit pseudo-Modul-Abweichung): `config.py` (`RunContext.res_company_ids` + `ModuleSelections.multicompany`, siehe oben) 🔒; `run_config.py`s `PSEUDO_MODULES` (`"multicompany"` ergänzen, **nicht** `WANTED_MODULES` — keine echte Odoo-App, kein `installed_modules`-Gating nötig, Runde 2 bestätigt: `active_progress_keys` hat einen eigenen pseudo-Zweig, gated nur auf Auswahl) + `MODULE_LABELS` + `MODULE_RUN_ORDER` (nach `"documents"`, **exakt** das Literal `("multicompany"` ohne Leerzeichen nach der Klammer — `test_run_config_unit.py:99`s Invariante sucht `src.index(f'("{key}"')` im rohen `orchestrator.py`-Text, Should-Fix S4 Runde 2) + `build_selections` + `estimate_record_counts` (**eigene, von "Kontakte"/"Produkte" verschiedene Labels** wie `"Kontakte (2. Firma)"`/`"Produkte (2. Firma)"` — `estimate_record_counts` ist ein einfaches Dict, ein kollidierender Key überschreibt master_datas Zahl kommentarlos, Should-Fix S1 Runde 2) + `test_run_config_unit.py`s **zwei** betroffene Stellen: Zeile mit `selected == _ALL_INSTALLED \| {"documents", "analytic"}` wird `\| {"documents", "analytic", "multicompany"}` (nur `_FULL`s Auswahl-Dict bekommt den Block, **`_ALL_INSTALLED` selbst NICHT** — das würde eine fiktive echte Odoo-App vortäuschen, Should-Fix S3 Runde 2), UND separat `test_run_config_unit.py:240`s `keys == ["stammdaten", "crm", "sale", "documents"]`-Assertion (S16 landet dort ebenfalls, weil `MODULE_RUN_ORDER`-Mitgliedschaft + Auswahl reicht — anders als `analytic`, das bewusst nie in `MODULE_RUN_ORDER` steht, Should-Fix S3 Runde 2); `static/app.js:257`s hardcodierte `isPseudo`-Prüfung um `"multicompany"` erweitern (zweite hardcodierte Pseudo-Modul-Stelle, sonst bleibt die Karte dauerhaft deaktiviert — B2 Runde 1) **plus** einen `ICONS`-Eintrag für den neuen `MODULE_DEFS`-Key ergänzen (`iconSvg` fällt bei fehlendem Key still auf ein leeres `<svg>` zurück, kein Fehler — Should-Fix S7 Runde 2; Runde 2 bestätigt: sonst nichts in `app.js` hardcodet ein Modul-Set, `renderModuleGrid`/`activeModuleKeys`/`buildPayload` iterieren durchgängig `MODULE_DEFS`); `odoo_actions.MODEL_ACCESS_PROBES["multicompany"] = ["res.company"]` + `probe_model_access`s hardcodiertes Pseudo-Modul-Tupel (`odoo_actions.py:317`) um `"multicompany"` erweitern — **und den Probe-Wert tatsächlich in `modules/multicompany.py` konsumieren** (`if not ctx.model_access.get('res.company', True): ctx.skipped_modules.add("multicompany"); return`, analog `modules/documents.py:285-288` — ohne diesen expliziten Check meldet die Progress-Zeile "Fertig" für ein Modul, das nichts getan hat, Should-Fix S2 Runde 2; `res.company`-Anlegen ist ein echtes, oft eingeschränktes Recht, verwandelt einen harten Fehlschlag in einen sauberen Pattern-3-Skip); `odoo_actions.create_second_company` (Firma anlegen — nur `name` aus `ctx.name_banks.get('company_names')` per deterministischem Index gewählt, **einheitlich** `idx = ctx.criteria.num_companies + len(ctx.res_company_ids)` (Blocker B3 Runde 2 — Erstentwurf nannte in WP2 und WP3 zwei widersprüchliche Indexformeln, die zweite kollidierte garantiert mit master_datas erster Partnerfirma; Modulo + `_unique_name`-artiges Suffix-Fallback für den Fall `num_companies >= len(pool)`, insbesondere gegen den nur 5 Einträge großen `fallback_data.FALLBACK_COMPANIES`-Pool bei UI-Maximum 20 Firmen), plus `currency_id` von Firma 1 übernommen; **kein** `country_id`/Kontenplan, siehe R17 Punkt 1; **kein Barcode** auf den WP3-Produkten — `master_data.py:59-62`s Barcode-Dedup liest ungefiltert, Runde 2s B1-Nachtest zeigt zwar keine Maskierung mehr, ein Barcode wäre also technisch sichtbar, aber ungeprüft gegen Eindeutigkeits-Constraints über Firmen hinweg — einfach vermeiden); **`connect_service.fetch_existing_data`s zwei Domains (`:109-124`) um einen `company_id`-Filter ergänzen** (`['|', ['company_id','=',False], ['company_id','=', <Firma-1-Id>]]`) — **echter WP2-Pflichtschritt, kein optionales Future-Item** (Runde 2, Konsequenz aus R17 Punkt 3: da keine Record-Rule-Maskierung existiert, zieht jeder spätere `use_existing`-Lauf sonst Firma-2-Produkte/-Partner ungefiltert in den geteilten `ctx.product_ids`/`ctx.company_ids`-Pool, sobald dieser Sprint das erste Firma-2-Produkt anlegt); `run_journal.py`s `ARCHIVE_FALLBACK_MODELS` um `"res.company"` ergänzen (D7-Cleanup-Netz — `res.company` lässt sich oft nicht `unlink`en sobald sie referenziert wird; Archivieren als Fallback **jetzt live bestätigt**: `write(active=False)` auf eine Firma, die bereits ein Warehouse hält, funktioniert, 2026-09-04 nachgeprüft, war zuvor unverifiziert); neues `modules/multicompany.py`-Grundgerüst + `orchestrator.py`-Registrierung als letzter Pipeline-Schritt 🔒 (Platzierungs-Begründung oben); `static/app.js`-UI-Karte | ja | WP1 |
+| **WP3** | Befüllung: `modules/multicompany.py` erzeugt `partner_count` Partner + `product_count` Produkte (`company_id=ctx.res_company_ids[0]`, batched, lokale Variablen — siehe Pool-Isolation oben) + ein Warehouse für die neue Firma. `odoo_actions.create_second_warehouse` (R14, `odoo_actions.py:113`) nimmt `company_id` bereits als Parameter — `inventory.py:55` übergibt heute nur zufällig `get_main_company_id(client)`, kein Refactor an R14-Code nötig, nur `create_second_warehouse(client, ctx.res_company_ids[0])` aufrufen. **Kein Namens-Parameter (Blocker B2 Runde 2 — Erstentwurf verlangte "einen passenden Namen übergeben" bei gleichzeitiger "kein Refactor nötig"-Aussage, ein Widerspruch: die Funktion hat keinen Namens-Parameter, `"Lager 2 (<suffix>)"`/Code `WH2<suffix>` sind intern gebaut).** Default-Name bleibt — Name/Code sind pro Firma eindeutigkeitsgeprüft, `"Lager 2 (...)"` unter Firma 2 ist bereits gültig, kein Aufwand für kosmetische Umbenennung gerechtfertigt. **Vor Umsetzung live prüfen:** legt Odoo beim Anlegen einer `res.company` bereits automatisch ein Standard-Warehouse an? Ein `search_read('stock.warehouse', [['company_id','=', <neue id>]])` direkt nach der Firmen-Erzeugung klärt das — falls ja, entfällt dieser Schritt oder wird zu "zweitem Warehouse für Firma 2". `create_second_warehouse` selbst ist bereits live getestet (`tests/integration/test_inventory.py`s "Step 4 — S13/R14", `modules/inventory.py:68`) — WP3 braucht dafür **keinen eigenen neuen** Live-Test, nur den bestehenden, andersparametrisierten Call. Produktnamen-Quelle: `data_factory.build_products`s kategorisierte Form (`{"services": [...], ...}`) kommt aus `creative_atoms`, das nur lokal in `orchestrator.run()` existiert und nie auf `ctx` landet — `multicompany.py` erreicht es nicht. Stattdessen `ctx.name_banks.get('product_names')` (flache Liste) + `fallback_data.FALLBACK_PRODUCTS`, Vals selbst gebaut (einfache Produkte ohne Barcode, siehe WP2-Notiz oben, keine Service/Consumable/Storable-Kategorisierung nötig für diesen Scope). `'stock' in ctx.installed_modules`-Gate für den Warehouse-Schritt ergänzen (fehlte im Erstentwurf) | nein | WP2 |
+| **WP4** | Peer-Review vor Merge (S5-S15-Verfahren, Diff statt Plan-Text), grüner Live-`test_suite.py`. `create_second_company`/Firmenerzeugung bekommt **nur** Unit-Test-Abdeckung (gemockter Client). **Begründung korrigiert (Blocker B4 Runde 2 — der Erstentwurf berief sich auf ein falsches Präzedens):** `create_second_warehouse` (R14/S13) hat entgegen der ursprünglichen Behauptung sehr wohl einen Live-Integrationstest (`tests/integration/test_inventory.py:145-190`, 4 Grep-Treffer) — dessen eigener Kommentar akzeptiert dort sogar ausdrücklich anfallenden Warehouse-Rückstand auf der geteilten Instanz. Der echte Grund, hier **anders** zu entscheiden als S13: eine im Firmenumschalter sichtbare, dauerhaft archivierte `res.company` ist deutlich schwereres Live-Restmaterial als ein zusätzliches Warehouse, und war (bevor das Kontenplan-Laden gestrichen wurde) ohnehin schon der teuerste Teil dieses Sprints — WP1s einmalige manuelle Live-Verifikation reicht als Nachweis, dass der Erzeugungspfad funktioniert, ein sich bei jedem Suite-Lauf wiederholender Live-Test nicht. Test-Runner-Registrierung (oft vergessenes Detail, R19-Präzedens `ad26baa`): neues Testmodul in **beiden** Runnern eintragen — `tests/unit/unit_suite.py` (Import + `_MODULES`) UND `tests/integration/test_suite.py` (Import + Suite-Liste) | — | WP2-WP3 Code steht |
 
-**Bekannte, akzeptierte Einschränkung (S11):** `build_selections` gibt bei
-`mode != "both"` früh zurück (`run_config.py:206-207`), `static/app.js`
-blendet den Modul-Bereich außerhalb "both" aus — ein "Nur Stammdaten"-Lauf
-erzeugt daher nie eine zweite Firma. Bewusste, nicht versehentliche
-Entscheidung: Multicompany ist inhaltlich Stammdaten-nah, aber ohne einen
-"both"-artigen Lauf ergibt eine zweite, leere Firma ohnehin wenig Demo-Wert.
+**Bekannte, akzeptierte Einschränkungen:**
+- **(mode-Gate)** `build_selections` gibt bei `mode != "both"` früh zurück
+  (`run_config.py:206-207`), `static/app.js` blendet den Modul-Bereich
+  außerhalb "both" aus — ein "Nur Stammdaten"-Lauf erzeugt daher nie eine
+  zweite Firma. Bewusste, nicht versehentliche Entscheidung: Multicompany ist
+  inhaltlich Stammdaten-nah, aber ohne einen "both"-artigen Lauf ergibt eine
+  zweite, leere Firma ohnehin wenig Demo-Wert.
+- **(un-journallierter Kontakt, Should-Fix S6 Runde 2)** `res.company.create()`
+  legt serverseitig automatisch einen zugehörigen `res.partner` an
+  (`partner_id` ist `required`) — dieser läuft nie durch `JournalingClient.create`
+  und ist strukturell derselbe Cleanup-Rest wie der gestrichene Kontenplan,
+  nur proportional harmlos (ein Kontakt statt eines ganzen Kontenplans).
+  Akzeptiert, nicht weiter behandelt.
 
 **Pro Arbeitspaket verbindlich:** dieselben Testing Design Patterns wie jedes
 bisherige Sprintpaket (siehe CLAUDE.md) — Pattern 1 (leerer
@@ -1339,7 +1364,7 @@ Jedes Paket endet mit grüner `test_suite.py` gegen die Live-Instanz (CLAUDE.md-
 | **S13 — Lager-Tiefe** 🆕 | R14 (Multi-Warehouse), R15 (Lagerplätze, inkl. R16 Location-Ebene), R13 (Seriennummern-/Chargenverfolgung, MRP-Anbindung gestrichen — siehe R13) | Alle drei bauen auf `inventory.py`/`stock.*`-Modellen auf. R13 braucht R15 nicht zwingend (`stock.lot.location_id` ist optional), profitiert aber von den gleichzeitig entstehenden Sub-Locations — ein Sprint für den gesamten Lager-Realismus-Ausbau |
 | **S14 — Prozess-Tiefe** 🆕 | R12 (Nachbestellregeln, in `inventory.py`), R18 (Quality Checks, Erweiterung des bestehenden `mrp.py`-Pfads) | Beide sind eher "MRP/Inventory-Investition aus S1/S8 weiter ausnutzen" als "auf S13 aufbauen" (Peer-Review-Korrektur: `quality.point` hat kein Location-Feld, "an `wh_qc_stock_loc_id` andocken" war keine reale Mechanik) — dennoch sinnvoll in einem Sprint gebündelt, da beide dieselbe operative Prozess-Ebene vertiefen |
 | **S15 — Analytic Accounting (R20)** 🆕 | `account.analytic.plan`/`account.analytic.account` + `analytic_distribution`-Wiring über `sale.py`/`purchase.py`/`accounting.py`/`expenses.py` | Cross-cutting (4+ Dateien) bewusst isoliert in eigenem Sprint, damit der Review-Diff überschaubar bleibt; profitiert von R19 (Expenses, S12), falls dessen Zeilen mit-verkabelt werden sollen |
-| **S16 — Multicompany (R17)** 🆕 | Architektur-Spike ✅ abgeschlossen (2026-09-04) + Minimal-Scope: zweite `res.company`, neues `RunContext.res_company_ids` 🔒, neues `modules/multicompany.py` | Höchste Komplexität/Blast-Radius aller neuen Items — bewusst zuletzt, damit alle anderen Module (Warehouses, Quality, Analytic) schon stehen, wenn die zweite Firma befüllt wird. Spike-Ergebnisse + WP-Sequenz siehe "S16 — WP-Sequenz" in `ROADMAP.md` und R17-Abschnitt — Cold-Review (S5-S15-Verfahren) noch ausstehend, kein Code vor Freigabe |
+| **S16 — Multicompany (R17)** 🆕 | Architektur-Spike ✅ abgeschlossen (2026-09-04) + Minimal-Scope: zweite `res.company` (ohne Kontenplan), neues `RunContext.res_company_ids` 🔒, neues `modules/multicompany.py`, `connect_service.fetch_existing_data`-Company-Filter | Höchste Komplexität/Blast-Radius aller neuen Items — bewusst zuletzt, damit alle anderen Module (Warehouses, Quality, Analytic) schon stehen, wenn die zweite Firma befüllt wird. Beide Cold-Review-Runden gelaufen (S5-S15-Verfahren) — Runde 1: 6 Blocker + 12 Should-Fixes, Runde 2: 4 Blocker + 7 Should-Fixes, alle eingearbeitet (siehe "S16 — WP-Sequenz" in `ROADMAP.md` und R17-Abschnitt). Plan freigegeben zur Implementierung, kein dritter Durchgang nötig |
 
 **Pro Arbeitspaket verbindlich** (aus CLAUDE.md Testing Design Patterns):
 - Empty-Pool-Guards (P1) für jede neue `random.choice/sample`-Stelle
