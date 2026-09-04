@@ -1562,9 +1562,22 @@ aufgeschriebene Schleifen-Reihenfolge (D14 und D15 sagten beide "vor
 `orchestrator.run()`", ohne sich gegeneinander zu ordnen), zwei weitere
 `STATUS_PARTIAL`-Fundstellen, und eine korrigierte Prämisse bei D13
 (der Cleanup-Reihenfolge-Effekt tritt bei **jedem** N≥2-Lauf auf, nicht
-nur bei unterschiedlicher Modul-Auswahl). Alle unten eingearbeitet. Kein
-Code noch — Grundlage für die Implementierungsplanung, sechste
-Cold-Review-Runde als Nächstes.
+nur bei unterschiedlicher Modul-Auswahl). Alle unten eingearbeitet.
+**Cold-Review Runde 6** prüfte den kompletten Dokumentstand fokussiert auf
+D14/D15 und die neue 8-Schritt-Reihenfolge — **fand keine neue
+Architektur-Lücke mehr**, nur noch mechanische/Text-Fixes: einen
+fehlenden `None`-Schutz in D14s Merge-Code-Beispiel, eine
+unvollständig spezifizierte `try`/`finally`-Grenze (jetzt als Schritte
+2-7 mit `failed_company_indices`-Tracking festgeschrieben), zwei bisher
+unzugeordnete `orchestrator.py`-Fallback-Ersteller (akzeptiert, kein Fix
+nötig — D4 lizenziert firmenneutrale Records bereits), die entschiedene
+`second_warehouse`-Kollision (D15 gilt pro Firma, nicht nur Firma 1), und
+mehrere kleinere, jetzt explizit als "WP-Autor entscheidet" markierte
+Implementierungsdetails ohne Architektur-Charakter. **Ausdrücklicher
+Runde-6-Befund: die Architektur selbst ist konvergiert — kein siebter
+Cold-Review-Durchgang mehr nötig,** nur noch dieser gezielte Text-Fix-
+Durchgang (bereits eingearbeitet). Plan gilt als freigegeben zur
+Implementierungsplanung.
 
 **D1 — Ausführung: sequentieller Loop, EIN `run_id`/Client/Journal für die
 ganze Mehrfirmen-Generierung, keine N parallelen Läufe.** `web/jobs.py`s
@@ -1679,7 +1692,10 @@ bloße Schleifen-Index). **Drei weitere, von Runde 1 übersehene Stellen
 1. **`RunRecord.public_dict()` (`jobs.py:119`)** macht `MODULE_LABELS.get(key,
    key)` — mit qualifiziertem Key `"0:crm"` gibt es dafür keinen Eintrag,
    Fallback zeigt den rohen Key statt "CRM". Firmen-Präfix muss vor dem
-   Label-Lookup abgetrennt werden, nicht danach.
+   Label-Lookup abgetrennt werden, nicht danach. **`web/app.py:403` hat
+   denselben `MODULE_LABELS.get(k, k)`-Fallback** (Cold-Review Runde 6,
+   von Runde 4 nicht mitgenannt) — für `/api/preflight`s eigene Antwort,
+   braucht denselben Fix.
 2. **`ctx.skipped_modules` → `record.modules` (`jobs.py:347-350`)** vergleicht
    heute rohe Modul-Codes gegen `record.modules`-Keys — mit qualifizierten
    Keys trifft dieser Vergleich nie, `MODULE_SKIPPED` würde damit still
@@ -1764,7 +1780,26 @@ kleinen Code-Touch — `company_id` explizit im Vals-Dict setzen, wenn die
 aktuelle Firmen-Iteration eine reale Ziel-Firma hat. Das ändert D14s
 Kernaussage "kein Touch an den 7 betroffenen Modul-Dateien" — `master_data.py`
 ist eine achte, zusätzliche Datei, aber ein sehr kleiner, lokaler Eingriff
-(ein Vals-Feld, keine Struktur-Änderung).
+(ein Vals-Feld, keine Struktur-Änderung). Bestätigt live umsetzbar (Runde 6):
+`_create_partners` baut `company_vals_list` in einer expliziten Schleife
+(`master_data.py:167-174`), `_create_products` hat eine einzelne `all_vals`-
+Liste vor einem `create_batch`-Aufruf (`:50`, `:100`) — beide haben eine
+natürliche Ein-Zeilen-Einfügestelle, `ctx` liegt in beiden im Scope.
+
+**Fallback-Ergänzung (Cold-Review Runde 6, echte neunte/zehnte Stelle,
+bisher niemandem zugeordnet):** `orchestrator.py`s eigene Fallback-Ersteller
+— `_ensure_fallback_partners` (`:145`, `client.create('res.partner', ...)`)
+und `_ensure_fallback_products` (`:160`, `client.create('product.product',
+...)`) — erzeugen exakt dieselben zwei Modelle, ohne `company_id` im
+Vals-Dict, über einen Pfad außerhalb von `master_data.py`. Erreichbar, wenn
+eine Firma mit weniger als 2 Produkten oder gescheiterten Stammdaten
+endet — die entstehenden Records blieben dauerhaft firmenneutral, D8bs
+gescopter Fetch findet sie nie wieder. **Entscheidung:** akzeptiert, kein
+Fix — D4 lizenziert firmenneutrale Records bereits als technisch
+unproblematisch, und dieser Pfad ist per Definition ein Fallback für einen
+bereits fehlgeschlagenen Normalfall, kein Kern-Feature. Explizit
+festgehalten, damit ein WP-Autor es nicht übersieht und versehentlich doch
+anfasst.
 
 **D9 — UI-Fluss: neuer Bildschirm nach Verbindung, vor/statt Konfiguration.**
 Bestätigt 3 echte Ansichten heute (`static/index.html:20-22`: Verbindung →
@@ -1912,11 +1947,28 @@ Fetch befüllt. **Reihenfolge in der Schleife — Runde 3s Fassung deckte nur
 gegenseitig einzuordnen (Runde 5, Blocker: die einzige Stelle, die
 "vollständig" beanspruchte, war es nicht). Jetzt wirklich vollständig, mit
 der Begründung für jede Positionierung:**
+**`try` umschließt Schritte 2-7, nicht nur Schritt 7 (Cold-Review Runde 6,
+Blocker — Runde 5 ließ offen, ob "ein `try` pro Iteration" Schritt 2 oder
+erst Schritt 7 umschließt; ein `try` nur um Schritt 7 macht `STATUS_PARTIAL`
+für seinen wahrscheinlichsten Auslöser — Firma-Erzeugung selbst schlägt
+fehl, Schritt 2 — wirkungslos).** Ein pro Iteration geführtes
+`failed_company_indices: Set[int]` (lokal in `_execute()`, außerhalb der
+Schleife initialisiert) wird bei jedem Fang dieses `try`s um den aktuellen
+Iterations-Index ergänzt — dieselbe Menge löst sowohl `jobs.py:366`s
+bisher unentschiedenes "Drei-Wege-Unterscheidung **oder** Pro-Firma-
+Tracking" (Runde 4 ließ das offen) als auch `STATUS_PARTIAL`s Berechnung
+(`len(failed_company_indices) > 0` und `< len(companies)` → `PARTIAL`;
+`== len(companies)` → `FAILED`; `== 0` → `DONE`):
+0. **Pro-Iteration-Closures bauen** (Cold-Review Runde 6, in Runde 5s
+   Liste fehlend): D6s firmen-qualifizierende `on_start`/`on_done` müssen
+   **vor** Schritt 7 existieren, nach `PROGRESS_KEY_MAP`s Übersetzung
+   (D6), damit `orchestrator.run()` sie übergeben bekommt.
 1. **`_default_context` zurücksetzen** (`None`) — verhindert, dass die
    Firmen-`create()` selbst (Schritt 2) noch unter der vorigen Iteration
    firmen-Kontext läuft.
 2. **Ziel-Firma auflösen** → `ctx.res_company_ids` befüllen
-   (D10-Korrektur).
+   (D10-Korrektur, deckt beide Zweige: neu anlegen und bestehende Id
+   übernehmen).
 3. **D14: `_default_context` setzen** auf `{'allowed_company_ids':
    [ctx.res_company_ids[0]], 'company_id': ctx.res_company_ids[0]}` —
    **muss vor Schritt 4 laufen**, sonst legt D15s Warehouse-Erzeugung
@@ -1931,9 +1983,19 @@ der Begründung für jede Positionierung:**
    `orchestrator.run()`, weil `orchestrator.py:142`s
    Fallback-Partner-Erzeugung bereits auf `ctx.company_ids` kurzschließt.
 6. **D12: Kostenstellen-Cache einsäen.**
-7. **`orchestrator.run()` aufrufen.**
-8. **D12: Kostenstellen-Cache ernten — in einem `finally` von Schritt 7s
-   `try`**, nicht danach (siehe die Teilausfall-Korrektur unten).
+7. **`orchestrator.run()` aufrufen**, mit den in Schritt 0 gebauten
+   Closures.
+
+**`finally` (des `try`s um Schritte 2-7):** **D12: Kostenstellen-Cache
+ernten — mit `None`-Schutz** (Cold-Review Runde 6, Blocker — ein
+unbedingtes Ernten nach einem Fehlschlag in Schritt 2-5, bevor Schritt 6
+je lief, würde den geteilten Cache mit `ctx.analytic_account_ids`s
+Dataclass-Default `None` überschreiben, und die nächste Firma legt einen
+zweiten Kostenstellen-Plan an — exakt das Duplikat-Problem, das D12
+beheben soll): `if ctx.analytic_account_ids is not None: shared_cache =
+ctx.analytic_account_ids`. Nur ein echtes Ergebnis (auch `[]`, siehe D12s
+erste Präzisierung) überschreibt den geteilten Cache; ein `None` (Schritt
+6 nie erreicht) lässt ihn unverändert.
 
 (D8bs Fetch in Schritt 5 und D12s Einsäen in Schritt 6 sind untereinander
 reihenfolge-unabhängig — beide müssen nur vor Schritt 7 passiert sein,
@@ -2128,10 +2190,15 @@ Methoden `create`/`create_batch`/`write`/`call_method` — **explizit
 NICHT** in `_post`/`_send` (Runde 5: sonst würde auch jeder `search`/
 `search_read`-Aufruf firmen-gescoped, inklusive `get_main_company_id`s
 eigener Lookup-Queries und D8bs Fetch — beide brauchen ungefilterten
-Zugriff). **Merge-Semantik (Runde 5 präzisiert):**
-`{**self._default_context, **(context or {})}` — Schlüssel-Ebene, nicht
-Ganzdict-Ersetzung; expliziter Aufrufer-Context gewinnt bei
-Schlüssel-Konflikten. **Korrektur (Runde 5): "heute übergibt kein
+Zugriff). **Merge-Semantik (Runde 5 präzisiert, Runde 6 korrigiert —
+fehlender `None`-Schutz hätte jeden Cleanup-Aufruf zum Absturz gebracht):**
+`{**(self._default_context or {}), **(context or {})}` — Schlüssel-Ebene,
+nicht Ganzdict-Ersetzung; expliziter Aufrufer-Context gewinnt bei
+Schlüssel-Konflikten. `self._default_context` ist `None` außerhalb einer
+Firmen-Schleife (z. B. der frische Client, den `delete_run`/`app.py:488`
+für Cleanup baut) — `{**None}` wirft `TypeError`, das `or {}` ist also
+nicht kosmetisch, sondern verhindert, dass jeder Cleanup-Aufruf sofort
+scheitert. **Korrektur (Runde 5): "heute übergibt kein
 Modul-Code einen `context`" ist falsch** — `modules/accounting.py:48-50`
 übergibt bereits `context={'active_model': ..., 'active_ids': [...]}` an
 den `sale.advance.payment.inv`-Wizard-Aufruf. Genau dieser eine Fall
@@ -2150,8 +2217,13 @@ Client-Pooling (naheliegende Optimierung, D10s Drossel-Zustand lebt ja
 schon auf derselben Instanz) würde `_default_context` zu einer Race
 Condition machen. Kleiner, gut lokalisierter 🔒-Touch an `odoo_client.py`
 (wie D10 selbst), Architekten-Freigabe nötig, aber **kein** Touch an den
-7 betroffenen Transaktions-Modul-Dateien (siehe D8-Ergänzung oben für den
-achten, kleinen Sonderfall `master_data.py`).
+7 betroffenen Transaktions-Modul-Dateien **speziell für D14s eigenen
+Mechanismus** (Runde 6 präzisiert: `documents.py` gehört zu diesen 7,
+wird aber unabhängig davon von D3 angefasst — beide Aussagen widersprechen
+sich nicht, D14 allein bräuchte keinen `documents.py`-Touch, D3 tut es aus
+einem anderen Grund). Siehe D8-Ergänzung oben für den achten, kleinen
+Sonderfall `master_data.py`, und die Fallback-Ergänzung unten (Runde 6)
+für zwei weitere, bisher unzugeordnete Stellen in `orchestrator.py`.
 
 **D15 — Kein automatisches Warehouse pro Firma (R17-Fakt) trifft jetzt
 drei Module — Fix entschieden (Cold-Review Runde 4, Umfang in Runde 5
@@ -2177,20 +2249,24 @@ genau das, was hier gebraucht wird: ein Warehouse für eine gegebene
 `company_id`.
 
 **Zwei Lücken aus Cold-Review Runde 5, noch ungeklärt:**
-1. **Kollision mit dem bestehenden `second_warehouse`-Häkchen.** Dieses
-   Feature existiert bereits und ist Nutzer-sichtbar (`config.py:57`,
+1. **Kollision mit dem bestehenden `second_warehouse`-Häkchen — entschieden
+   (Cold-Review Runde 6, Lesart 2 statt Runde 5s eigener Präferenz).**
+   Dieses Feature existiert bereits und ist Nutzer-sichtbar (`config.py:57`,
    `run_config.py:354`/`:587` Parsing+Vorschau, `static/app.js:545`
    Checkbox `stock-wh2`, `modules/inventory.py:45`/`:66` Konsum) — für
-   Firma 1 bedeutet es "leg ein zweites Warehouse an". D15 legt jetzt
+   Firma 1 bedeutet es "leg ein zweites Warehouse an". D15 legt zusätzlich
    **unconditional** ein Warehouse für jede neu angelegte Firma an, auf
-   derselben Funktion. Ist das Häkchen für Firma 1 aktiv UND eine zweite
-   Firma neu angelegt, bekäme Firma 1 zwei Warehouses (Häkchen) und Firma 2
-   eins (D15) — beide "Lager 2 (...)" benannt, die Vorschau-Zahl
-   (`run_config.py:587`) zählt nur das Häkchen-Warehouse, nicht D15s. Noch
-   zu entscheiden: gilt das Häkchen weiterhin nur für Firma 1 (D15 ist ein
-   eigener, unabhängiger Mechanismus für neue Firmen), oder wird es zu
-   "jede Firma bekommt ein zweites Warehouse, falls angehakt, plus ihr
-   erstes über D15"? Erste Lesart ist einfacher und vermeidet Verwechslung.
+   derselben Funktion. **Entscheidung:** das Häkchen gilt **pro Firma**
+   (jeder Block trägt ohnehin sein eigenes `modules.stock`, D11), nicht
+   nur für Firma 1 — "jede Firma bekommt ihr erstes Warehouse über D15
+   (falls neu angelegt), plus ein zweites, falls ihr eigenes Häkchen
+   angehakt ist". Der zunächst einfacher wirkende Sonderfall "Häkchen nur
+   für Firma 1" widerspricht D9s "unify"-Entscheidung direkt (Firma 1 hätte
+   sonst wieder eine Extra-Regel, die D9 gerade abschaffen wollte) und
+   kostet unterm Strich **mehr** Code, nicht weniger — die
+   Pro-Firma-Modul-Config existiert bereits, "nur für Firma 1" bräuchte
+   zusätzlich eine explizite Sonderfall-Prüfung. Vorschau-Zahl
+   (`run_config.py:587`) muss entsprechend pro Firma gezählt werden.
 2. **Namensgebung.** `odoo_actions.py:123-126` benennt jedes neue Warehouse
    hartcodiert `"Lager 2 (<suffix>)"`/Code `WH2<suffix>` — für eine neue
    Firma ist das aber ihr **erstes und einziges** Warehouse, sichtbar
@@ -2202,16 +2278,20 @@ genau das, was hier gebraucht wird: ein Warehouse für eine gegebene
 
 **Weitere Zuordnungen aus Cold-Review Runde 4+5 (keine eigene Nummer,
 schließen kleinere Lücken in bestehenden Entscheidungen):**
-- **N=1-Regressionskriterium (Runde 5).** D14 setzt `_default_context`
-  auch für Firma 1s Iteration, wo heute gar kein `context` übergeben wird.
-  Nach R17 Punkt 3 sollte das für diesen API-User wirkungslos sein (keine
-  Record-Rule-Maskierung, keine `company_ids`-Einschränkung) — aber D1-D15
-  behandeln D14 durchgängig als rein additiv, ohne das je als
-  Abnahme-Kriterium festzuhalten. **WP-Vorgabe:** die komplette bestehende
-  Suite (351 Unit-/87 Live-Integrationstests, Stand vor diesem Feature)
-  bleibt nach Einführung von D14 unverändert grün — das ist der Beleg,
-  dass der Ein-Firma-Pfad tatsächlich unverändert bleibt, nicht nur eine
-  Annahme.
+- **N=1-Regressionskriterium — präzisiert (Runde 6): gilt nur für D14
+  allein, nicht für den Endzustand.** D14 setzt `_default_context` auch
+  für Firma 1s Iteration, wo heute gar kein `context` übergeben wird. Nach
+  R17 Punkt 3 sollte das für diesen API-User wirkungslos sein (keine
+  Record-Rule-Maskierung, keine `company_ids`-Einschränkung). **Die
+  Kriterium-Formulierung aus Runde 5 ("komplette bestehende Suite bleibt
+  unverändert grün") ist am Ende der Implementierung nicht erfüllbar** —
+  D11s `companies: [...]`-Payload bricht zwangsläufig
+  `test_web_api_unit.py:94`s Einzel-Firma-geformtes `_PAYLOAD`. Gemeint
+  und WP-relevant ist: grün **direkt nach D14 allein**, vor D11s
+  Payload-Änderung. **Reihenfolge-Vorgabe fürs WP:** D14 (Kontext-
+  Injektion) als eigener, erster Commit landen, VOR D11 (Payload-Form) —
+  nur so ist dieses Kriterium zu einem bestimmten Zeitpunkt tatsächlich
+  prüfbar, nicht erst am Ende, wo es nicht mehr gelten kann.
 - **`target`-Block-Validierung braucht einen Besitzer.** Weder
   `build_context_list` noch `build_context` noch `_execute()` prüfen
   heute (im Plan) `target.name` (Pflicht, D11 Korrektur 4), `target.
@@ -2233,9 +2313,14 @@ schließen kleinere Lücken in bestehenden Entscheidungen):**
   — dieses eine bleibt roh und wird nur beim ersten Auftreten übernommen
   (nicht summiert), da es lauf-weit exakt einmal existiert (D12).
 - **Bestehende Firma + `reuse_master_data=false`** bekommt trotzdem frische
-  Partner/Produkte (wie eine neue Firma) — D14s Kontext-Injektion greift
-  identisch, unabhängig davon, ob die Firma neu oder bestehend ist. Kein
-  Sonderfall nötig, sobald D14 existiert.
+  Partner/Produkte (wie eine neue Firma) — **Begründung korrigiert (Runde
+  6): nicht D14s Kontext-Injektion** (die greift für `res.partner`/
+  `product.product` gerade NICHT automatisch, D8-Ergänzungs Live-Fund),
+  **sondern D8-Ergänzungs eigener expliziter `company_id`-Vals-Write in
+  `master_data.py`**, der genau danach fragt "hat diese Iteration eine
+  reale Ziel-Firma", nicht danach, ob diese Firma neu oder bestehend ist.
+  Kein Sonderfall nötig, die Schlussfolgerung bleibt richtig, nur der
+  genannte Mechanismus war falsch.
 - **`target.country` bleibt auf `res.company`/Kontenplan beschränkt**, geht
   NICHT in `data_factory`s `target_countries`-Parameter für die generierte
   Partner-Adresspool-Auswahl ein — bewusst kleinerer Scope für den ersten
@@ -2253,6 +2338,37 @@ schließen kleinere Lücken in bestehenden Entscheidungen):**
   Bruch), Pattern 8 (D14s Kontext-Injektion ist kein LLM-Batching-Fall,
   aber dieselbe "nicht pro Record" Disziplin gilt für den Kostenstellen-
   Cache aus D12).
+
+**Bewusst offen gelassen, WP-Autor entscheidet (Cold-Review Runde 6 —
+keine Architektur-Fragen mehr, reine Implementierungs-Details):**
+- **`/api/preflight`s Antwort-Form unter N Firmen** (Liste pro Firma vs.
+  Aggregat) — D6 stellt fest, dass die heutige Firma-1-Form "lügt", ohne
+  die neue Form festzulegen.
+- **Wer prüft, dass ein `target.company_id` bei `mode="existing"`
+  tatsächlich existiert.** `build_context_list` ist strukturell
+  Odoo-frei (D10-Korrektur), kann also nicht gegen die Odoo-Instanz
+  prüfen — entweder gegen D8as Verbindungs-Zeit-Liste (aktuell keiner
+  von `build_context_list`s 6 Parametern) oder in `_execute()`s Resolver
+  (Schritt 2).
+- **Schicksal des heutigen, ungescopten `fetch_existing_data`/
+  `ConnectResult.existing_company_ids`.** Der Existing-Data-Merge-Punkt
+  (D11) entfernt sie aus `build_context_list` — bleiben nur noch für die
+  Verbindungs-Anzeige ("0 Kunden, 500 Produkte gefunden") relevant, oder
+  ganz gestrichen? S16-NEU-Anforderung 3 wollte genau diese Frage geklärt
+  sehen.
+- **`ctx.res_company_ids`s Kardinalität nie explizit festgeschrieben.**
+  Jeder Konsument liest `[0]`; unter D10 hält jede `ctx` genau eine Firma.
+  R17s eigene Begründung für die flache Listenform war aber "eine Liste
+  sagt nichts über die Anzahl aus" — ein WP-Autor könnte das als "alle N
+  Firmen-Ids in eine Liste" lesen, wodurch `[0]` immer Firma 1 wäre und
+  D14 jede Iteration lautlos falsch scopen würde. Ein klarstellender Satz
+  im WP nötig: `res_company_ids` hält immer genau einen Eintrag, pro
+  `ctx`.
+- **D8bs Wiederverwendungs-Fetch-Domain, falls der heutige
+  `fetch_existing_data`-Domain als Vorlage dient:** `customer_rank > 0`
+  filtert Partner, die `data_factory.build_company` nie setzt — ein
+  Partner aus einem reinen Stammdaten-Lauf einer früheren Sitzung würde
+  vom Wiederverwendungs-Fetch nicht gefunden.
 
 **Eingestuft nach Ladungsfähigkeit (Cold-Review-Kategorisierung, Runde 2
 präzisiert):**
@@ -2292,8 +2408,11 @@ präzisiert):**
      Modul-Zeile der gescheiterten Firma wird fälschlich "fertig"**,
      genau das Gegenteil dessen, was die Wortschatz-Entscheidung oben als
      Begründung nennt ("Modul-Ebene zeigt bereits, was verloren ging").
-     Braucht eine echte Drei-Wege-Unterscheidung oder Pro-Firma-Tracking,
-     nicht nur einen neuen Enum-Wert.
+     **Aufgelöst (Runde 6):** `failed_company_indices` (siehe die
+     Schleifen-Reihenfolge oben) entscheidet das Entweder-Oder — für die
+     Modul-Zeilen einer Firma **in** dieser Menge gilt `MODULE_FAILED`,
+     für alle anderen (unabhängig vom Gesamt-`record.status`) `MODULE_DONE`,
+     nicht mehr nur `record.status == STATUS_FAILED` global.
   2. **`static/app.js:1333`** — `if (data.status === "done" || data.status
      === "failed") { setHidden("btn-cleanup", !data.journal_records); }`
      — der "Lauf löschen"-Button erscheint bei `STATUS_PARTIAL` **nie**,
@@ -2331,13 +2450,10 @@ präzisiert):**
   `STATUS_PARTIAL`-Lauf ist per Definition beendet, nicht aktiv, gehört
   also nicht in diese Menge.
 
-  "Restliche Firmen trotzdem versuchen" bleibt der einfache Teil (ein
-  `try` pro Iteration im Schleifenkörper) — aber **D12s Ernten muss in
-  einem `finally` dieses `try`s stehen**, nicht danach: scheitert Firma 2s
-  `orchestrator.run()`, würde ein reines Nach-dem-Aufruf-Ernten den bereits
-  erzeugten Kostenstellen-Plan verlieren, und Firma 3 legt einen zweiten an
-  — exakt das Duplikat-Problem, das D12 beheben soll (Fund aus Runde 4,
-  beim Nachprüfen von D12 selbst).
+  "Restliche Firmen trotzdem versuchen" bleibt der einfache Teil — exakter
+  `try`/`finally`-Zuschnitt (welche Schritte umschlossen sind, `None`-
+  Schutz beim Ernten, `failed_company_indices`) siehe die vollständige
+  Schleifen-Reihenfolge weiter oben (D11-Ergänzung, Runde 6).
 
 ## 5. Umsetzungsreihenfolge
 
