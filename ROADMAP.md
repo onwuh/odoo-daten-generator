@@ -1513,8 +1513,8 @@ bevorzugen statt lange Should-Fix-Ketten anzuhäufen).
 
 ### S16-NEU — Architektur-Spike (begonnen 2026-09-04)
 
-Dreizehn Design-Entscheidungen (D1-D9 im ersten Entwurf, D10-D13 durch
-zwei Cold-Review-Runden ergänzt), jeweils mit Beleg. Bewusst kurz gehalten
+Fünfzehn Design-Entscheidungen (D1-D9 im ersten Entwurf, D10-D15 durch drei
+Cold-Review-Runden ergänzt), jeweils mit Beleg. Bewusst kurz gehalten
 (siehe Notiz oben zu Runde 2/3s Lehre am alten R17-Plan: lange Prosa-Ketten
 sind, wo die neuen Fehler entstehen). Cold-Review Runde 1 (unabhängiger
 Opus-Agent, gleiches Verfahren) fand 2 harte Fehler + 2 unterdimensionierte
@@ -1536,9 +1536,21 @@ schlankerer `build_context_list`-Signatur — plus eine Falschbehauptung in
 D6 (der `app.py:353`-Wächter "bleibt funktionsfähig" war nicht mehr wahr,
 nachdem D11 `use_existing` entfernte) und eine Fehleinstufung (Teilausfall-
 Verhalten ist doch eine Architektur-Entscheidung, kein loser
-Schleifen-Zusatz). Alle unten eingearbeitet, keine neue offene Live-Frage
-mehr — dieselbe Konvergenz wie beim alten R17-Plan nach dessen dritter
-Runde. Kein Code noch — Grundlage für die Implementierungsplanung.
+Schleifen-Zusatz). **Cold-Review Runde 4** fand den bisher größten
+einzelnen Blocker: **keine der Entscheidungen D1-D13 hatte tatsächlich
+zugeordnet, wer die von 7 Modulen (`sale.py`/`crm.py`/`accounting.py`/
+`hr.py`/`project.py`/`recruiting.py`/`documents.py`) erzeugten Records mit
+der richtigen `company_id` versieht** — D3 deckte nur die 2 Helfer ab, die
+eine echte Firma-Id **lesen**, nicht die Module, die Records **schreiben**.
+Live aufgelöst als D14 (Odoo-Kontext-Injektion auf dem geteilten Client,
+kein Modul-Code-Touch nötig) — deckt dabei auch D15 auf (drei Module
+brechen lautlos ohne Warehouse für die neue Firma) und schließt D8-
+Ergänzungs bis dahin offene Umsetzungsfrage automatisch mit. Zusätzlich
+ein zweiter echter Blocker (der neue `STATUS_PARTIAL`-Wert bricht fünf
+bestehende Zwei-Zustand-Prüfungen, nicht null wie Runde 3 annahm) plus
+mehrere kleinere Zuordnungslücken (`target`-Validierung, D6s Label-Ort,
+Teststrategie) — alle unten eingearbeitet. Kein Code noch — Grundlage für
+die Implementierungsplanung, fünfte Cold-Review-Runde als Nächstes.
 
 **D1 — Ausführung: sequentieller Loop, EIN `run_id`/Client/Journal für die
 ganze Mehrfirmen-Generierung, keine N parallelen Läufe.** `web/jobs.py`s
@@ -1722,7 +1734,11 @@ Anforderungs-Ziel "pro Firma eigene Branche" ohnehin auf eigene Kataloge
 hindeutet). Für **bestehende, wiederverwendete** Firmen liefert D8b genau
 diese firmen-gescopten Records zurück — passt jetzt zusammen, weil die
 Records, die gefunden werden sollen, auch wirklich `company_id`-markiert
-sind.
+sind. **Umsetzungsweg geklärt (Runde 4, siehe D14):** braucht **keine**
+Code-Änderung in `data_factory.py`/`master_data.py` — D14s
+Kontext-Injektions-Mechanismus setzt `company_id` automatisch auf jedem
+`create()`/`create_batch()`-Aufruf während der jeweiligen Firmen-Iteration,
+unabhängig davon, welches Modul den Aufruf macht.
 
 **D9 — UI-Fluss: neuer Bildschirm nach Verbindung, vor/statt Konfiguration.**
 Bestätigt 3 echte Ansichten heute (`static/index.html:20-22`: Verbindung →
@@ -1764,7 +1780,8 @@ gebaut werden).** Der tatsächlich tragende Grund ist eine Reihenfolge, nicht
 ein fehlendes Objekt: `run_id = self._next_run_id()` läuft bei
 `jobs.py:197`, **nach** `build_context` bei `:185`; `RunJournal.__init__`
 verweigert eine `run_id`, die `_RUN_ID_RE` nicht besteht (`run_journal.py:
-57-59`). Eine in `build_context_list` angelegte Firma hätte also **beweisbar
+59-61` — Zeile in Runde 4 korrigiert). Eine in `build_context_list`
+angelegte Firma hätte also **beweisbar
 kein Journal**, das sie erfassen könnte — uncleanbare Residue durch
 Konstruktion, nicht nur durch Konvention. `run_config.py`s eigener
 Modul-Docstring (Zeile 3-5, "no Odoo calls") bleibt als zweiter,
@@ -1894,8 +1911,20 @@ get("use_existing")` als Einzeldict-Lookup kann "mindestens eine Firma"
 strukturell nicht beantworten):**
 ```python
 def validate_consent(payload, *, reuse_requested: bool = False) -> Optional[str]:
+    ...
+    if (_as_bool(payload.get("use_existing")) or reuse_requested) and consent != CONSENT_GRANTED:
+        raise ConfigError(...)
 ```
-Aufruf **einmal**, aus `build_context_list`, **bevor** die Firmen-Schleife
+**Blocker, Runde 4 — die Signatur allein reicht nicht, der Prädikat-Body
+muss mitgeschrieben werden.** Runde 3 nannte Signatur + Call-Site, aber
+nicht die Bedingung selbst — `validate_consent`s heutiges Gate ist
+`if _as_bool(payload.get("use_existing")) and consent != CONSENT_GRANTED`
+(`run_config.py:170`); im neuen Payload setzt **nichts** mehr
+`use_existing`, `reuse_requested` bliebe also ein ungenutzter Parameter
+und das Consent-Gate wäre für jeden Lauf **dauerhaft tot** — exakt die
+Silent-Disable-Klasse, die dieser ganze Mechanismus schließen soll. Die
+Bedingung muss `or reuse_requested` ergänzen (oben eingefügt). Aufruf
+**einmal**, aus `build_context_list`, **bevor** die Firmen-Schleife
 `build_context` pro Element aufruft:
 ```python
 reuse_requested = any(
@@ -1904,7 +1933,8 @@ reuse_requested = any(
 )
 consent = validate_consent(payload, reuse_requested=reuse_requested)
 ```
-`build_context`s eigener interner Aufruf bei `:452` **bleibt bestehen** —
+`build_context`s eigener interner Aufruf bei `:450` (Zeile in Runde 4
+korrigiert) **bleibt bestehen** —
 prüft dann nur noch redundant gegen den bereits injizierten, pro Block
 gleichen Consent-Wert (siehe D11 Korrektur 5), kein Schaden, hält den
 Einzel-Firma-Pfad (z. B. Tests) unverändert funktionsfähig. Schließt das
@@ -1999,7 +2029,112 @@ billiger Fix existiert. **Zwei Ergänzungen aus Cold-Review Runde 3:**
    verwendet — unklar, ob das reale Probleme macht (plausibel unkritisch
    für diesen privilegierten API-User, aber unbewiesen). **WP-Vorgabe:**
    Cleanup live verifizieren an einem 2-Firmen-Lauf mit **unterschiedlicher**
-   Modul-Auswahl je Firma, nicht nur identischer.
+   Modul-Auswahl je Firma, nicht nur identischer. **Zwei Ergänzungen
+   (Runde 4):** der Archiv-Fallback ist **ein einziger atomarer `write()`
+   über die gesamte Id-Gruppe** (`run_journal.py:332`) — eine einzelne
+   nicht archivierbare Firma schickt **alle** Firmen dieses Modells nach
+   `failed`, keine nach `archived` (dieselbe Asymmetrie, die die Datei
+   bereits für `stock.location` dokumentiert). Der WP-Abnahme-Schritt oben
+   braucht außerdem eine explizite Bestanden-Bedingung: `res.company` in
+   `archived` statt `deleted` **ist** Erfolg, nicht Fehlschlag — ohne diese
+   Klarstellung könnte ein nicht-leeres `failed`/`archived`-Split
+   fälschlich als Problem gelesen werden.
+
+**D14 — Wie Transaktions-Records tatsächlich der richtigen Firma
+zugeordnet werden: Odoo-Kontext-Injektion auf dem geteilten Client, live
+bestätigt, kein Modul-Code-Touch nötig (Cold-Review Runde 4, echter
+Blocker — bis hierhin entschied D1-D13 zwar, DASS N Firmen existieren,
+aber niemand entschied, WER `sale.py`/`crm.py`/`accounting.py`/`hr.py`/
+`project.py`/`recruiting.py`/`documents.py`s erzeugte Records mit der
+richtigen `company_id` versieht).** Nachgeprüft: keines dieser 7 Module
+setzt `company_id` in seinen Vals-Dicts — nur `purchase.py`/`mrp.py`/
+`inventory.py` tun es bereits, über `get_main_company_id` (D3). Ohne
+Fix würden N Firmen-Iterationen ihre CRM-Opportunities, Verkaufsaufträge,
+Rechnungen, Mitarbeiter, Projekte, Bewerbungen und Dokumente alle in der
+API-User-Standardfirma (Firma 1) anlegen — unabhängig davon, welche Firma
+gerade "dran" ist. **Live bestätigt 2026-09-04:** ein `sale.order` **ohne**
+`company_id` im Vals-Dict, aber mit `context={'allowed_company_ids': [N],
+'company_id': N}` im `create()`-Aufruf, bekommt automatisch `company_id=N`
+zugewiesen — Odoos Standard-Multi-Company-Kontextmechanismus (normalerweise
+über `with_company()` in der UI) funktioniert genauso über die JSON2-API.
+Gleiches bestätigt für `create_batch` (2 `sale.order`s in einem Aufruf) und
+für ein zweites, unabhängiges Modell (`crm.lead`) — kein Einzelfall.
+**Entscheidung:** `odoo_client.py` (nicht `JournalingClient`, tiefer) bekommt
+ein neues, mutable Attribut (z. B. `self._default_context: Optional[dict]`),
+das `create`/`create_batch`/`write`/`call_method` automatisch mit jedem
+explizit übergebenen `context` mischt (expliziter Aufrufer-Context gewinnt
+bei Konflikten — heute übergibt aber kein Modul-Code einen `context`, der
+Fall ist also nie strittig). `_execute()`s Schleife setzt dieses Attribut
+pro Iteration auf `{'allowed_company_ids': [ctx.res_company_ids[0]],
+'company_id': ctx.res_company_ids[0]}`, **unmittelbar nach** der
+Ziel-Firma-Auflösung (D10-Korrektur) und **vor** dem `orchestrator.run()`-
+Aufruf für diese Firma — löst D8-Ergänzungs offene Umsetzungsfrage
+gleich mit (siehe dort). Kleiner, gut lokalisierter 🔒-Touch an
+`odoo_client.py` (wie D10 selbst), Architekten-Freigabe nötig, aber **kein**
+Touch an den 7 betroffenen Modul-Dateien.
+
+**D15 — Kein automatisches Warehouse pro Firma (R17-Fakt) trifft jetzt
+drei Module hart — Fix entschieden (Cold-Review Runde 4).** Mit D3/D14
+liefert `get_main_company_id` für Firma N zuverlässig N — aber `purchase.py`
+(`get_default_warehouse`), `inventory.py` (dieselbe Lookup) und `mrp.py`
+(`get_manufacturing_picking_type_id`) finden dafür **kein** Warehouse, weil
+keins existiert (R17s eigener, weiterhin gültiger Fund). Alle drei
+degradieren über `logger.warning` + `return` — das ganze Modul tut nichts,
+`on_done(ok=True)` feuert trotzdem, die Fortschritts-Zeile zeigt "fertig".
+Für jede neu angelegte Firma bricht das lautlos gleich drei der
+angeforderten Voll-Pipeline-Module. **Entscheidung:** `_execute()`s
+Schleife ruft für jede **neu angelegte** Firma (nicht für wiederverwendete
+bestehende — die haben vermutlich schon eins) `odoo_actions.
+create_second_warehouse(client, ctx.res_company_ids[0])` auf (R14,
+live-getesteter Pfad, nimmt `company_id` bereits als Parameter) —
+**unmittelbar nach** der Ziel-Firma-Auflösung, **vor** `orchestrator.run()`.
+Trotz des irreführenden Namens "second" (historisch, für Firma 1) ist die
+Funktion genau das, was hier gebraucht wird: ein Warehouse für eine
+gegebene `company_id`.
+
+**Weitere Zuordnungen aus Cold-Review Runde 4 (keine eigene Nummer,
+schließen kleinere Lücken in bestehenden Entscheidungen):**
+- **`target`-Block-Validierung braucht einen Besitzer.** Weder
+  `build_context_list` noch `build_context` noch `_execute()` prüfen
+  heute (im Plan) `target.name` (Pflicht, D11 Korrektur 4), `target.
+  company_id` (Pflicht bei `mode="existing"`), einen gültigen `target.mode`,
+  oder N gegen die Server-Obergrenze (D11). Ohne das validiert `_as_list`
+  nur Listen-Form, nicht Inhalt — ein fehlendes Feld schlägt sonst
+  **mitten im Lauf** fehl, Minuten nach dem `202`, statt sofort als
+  `ConfigError` → HTTP 400 bei `submit()`. **Entscheidung:**
+  `build_context_list` validiert `target` vollständig, bevor irgendeine
+  Firma verarbeitet wird — genau der Fehler-Zeitpunkt, den `run_config.py`
+  für jedes andere Feld schon garantiert.
+- **D6s Label-Qualifizierung braucht einen Ort.** D12s "Kostenstellen
+  bleibt unqualifiziert" braucht eine konkrete Stelle, an der diese
+  Ausnahme geprüft wird — Entscheidung: `estimate_record_counts` bekommt
+  einen optionalen `company_label`-Parameter (leer = heutiges
+  Einzel-Firma-Verhalten unverändert); der Aufrufer in `submit()`/
+  `/api/preflight` ruft die Funktion pro Firma mit ihrem Label auf und
+  qualifiziert danach jedes zurückgegebene Label **außer** `"Kostenstellen"`
+  — dieses eine bleibt roh und wird nur beim ersten Auftreten übernommen
+  (nicht summiert), da es lauf-weit exakt einmal existiert (D12).
+- **Bestehende Firma + `reuse_master_data=false`** bekommt trotzdem frische
+  Partner/Produkte (wie eine neue Firma) — D14s Kontext-Injektion greift
+  identisch, unabhängig davon, ob die Firma neu oder bestehend ist. Kein
+  Sonderfall nötig, sobald D14 existiert.
+- **`target.country` bleibt auf `res.company`/Kontenplan beschränkt**, geht
+  NICHT in `data_factory`s `target_countries`-Parameter für die generierte
+  Partner-Adresspool-Auswahl ein — bewusst kleinerer Scope für den ersten
+  Wurf (Anforderungs-Punkt 4 nennt den Parameter nur als Beleg, dass die
+  Infrastruktur existiert, nicht als Pflicht, sie sofort zu nutzen). Kann
+  in einer späteren Erweiterung nachgezogen werden, ohne diesen Plan neu
+  aufzurollen.
+- **Teststrategie fehlte in D1-D13 komplett**, trotz CLAUDE.mds acht
+  Pattern-Pflicht. Betroffen: Pattern 1 (leerer `companies`-Array — sollte
+  `_as_list`s Minimalgrenze bereits als `ConfigError` abfangen, nicht als
+  leerer Lauf durchlaufen), Pattern 3 (`target.mode` ungültig → Skip mit
+  Fehler, kein stiller Crash), Pattern 4 (Read-back pro Firma, nicht nur
+  einmal fürs Ganze), Pattern 5 (fehlende `existing_data_consent` bei
+  `reuse_master_data=true` → `ConfigError`, nicht stiller Datenschutz-
+  Bruch), Pattern 8 (D14s Kontext-Injektion ist kein LLM-Batching-Fall,
+  aber dieselbe "nicht pro Record" Disziplin gilt für den Kostenstellen-
+  Cache aus D12).
 
 **Eingestuft nach Ladungsfähigkeit (Cold-Review-Kategorisierung, Runde 2
 präzisiert):**
@@ -2016,25 +2151,59 @@ präzisiert):**
   Firmenauswahl (bestehend) einen eigenen Zugriffsrechte-Check über
   `model_access` hinaus braucht.
 - **Zurückgestuft — braucht doch eine Entscheidung, kein loser Schleifen-
-  Zusatz (Cold-Review Runde 3, korrigiert gegenüber Runde 2s
-  Einordnung):** Teilausfall-Verhalten. `RunRecord.status` (`jobs.py`) ist
-  heute ein Skalar mit nur `STATUS_DONE`/`STATUS_FAILED`, `record.error`
-  ein einzelner String — "Firma 3 von 5 schlägt fehl, 1/2/4/5 gelingen" hat
-  **keine Repräsentation** in dieser Form. Ein `try` um die ganze Schleife
-  markiert Firma 4-5s nie gelaufene Zeilen fälschlich `FAILED`; ein `try`
-  pro Firma lässt `record.status` für den Mischfall undefiniert, und die
-  `end`-SSE-Nachricht sendet ohnehin nur einen einzigen Status fürs
-  gesamte Frontend-Rendering. **Entscheidung:** neuer Status-Wert
-  `STATUS_PARTIAL` (zwischen `DONE` und `FAILED`) für "mindestens eine
-  Firma erfolgreich, mindestens eine komplett fehlgeschlagen" — Modul-Ebene
-  bleibt unverändert (D6s firmen-qualifizierte Modul-Zeilen zeigen bereits,
-  welche Firma welches Modul verloren hat); `record.error` bleibt ein
-  einzelner String (erster Firma-Ebene-Fehlschlag), da die Pro-Firma-Details
-  bereits über die qualifizierten Modul-Zeilen sichtbar sind, keine
-  strukturierte Aufteilung nötig. "Restliche Firmen trotzdem versuchen"
-  bleibt der einfache Teil (ein `try` pro Iteration im Schleifenkörper) —
-  nur der Status-Wortschatz selbst ist der Architektur-Entscheid, den
-  Runde 2 übersehen hatte.
+  Zusatz (Cold-Review Runde 3, korrigiert gegenüber Runde 2s Einordnung;
+  **Runde 4 fand die Runde-3-Fassung selbst unvollständig — "nichts sonst
+  ändert sich" war falsch gegen fünf echte Call-Sites**):** Teilausfall-
+  Verhalten. `RunRecord.status` (`jobs.py`) ist heute ein Skalar mit nur
+  `STATUS_DONE`/`STATUS_FAILED`, `record.error` ein einzelner String —
+  "Firma 3 von 5 schlägt fehl, 1/2/4/5 gelingen" hat **keine
+  Repräsentation** in dieser Form. **Entscheidung (Wortschatz):** neuer
+  Status-Wert `STATUS_PARTIAL` für "mindestens eine Firma erfolgreich,
+  mindestens eine komplett fehlgeschlagen"; `record.error` bleibt ein
+  einzelner String (erster Firma-Ebene-Fehlschlag) — die Pro-Firma-Details
+  sind bereits über D6s firmen-qualifizierte Modul-Zeilen sichtbar, keine
+  strukturierte Aufteilung nötig.
+
+  **Fünf bestehende Zwei-Zustand-Stellen, die ein dritter Status bricht
+  (Runde 4, live/Code-geprüft — alle fünf müssen im selben WP mitgehen):**
+  1. **`jobs.py:366`** — `record.modules[key] = (MODULE_FAILED if
+     record.status == STATUS_FAILED else MODULE_DONE)`. Unter
+     `STATUS_PARTIAL` landet das im `else`-Zweig — **jede nie gelaufene
+     Modul-Zeile der gescheiterten Firma wird fälschlich "fertig"**,
+     genau das Gegenteil dessen, was die Wortschatz-Entscheidung oben als
+     Begründung nennt ("Modul-Ebene zeigt bereits, was verloren ging").
+     Braucht eine echte Drei-Wege-Unterscheidung oder Pro-Firma-Tracking,
+     nicht nur einen neuen Enum-Wert.
+  2. **`static/app.js:1333`** — `if (data.status === "done" || data.status
+     === "failed") { setHidden("btn-cleanup", !data.journal_records); }`
+     — der "Lauf löschen"-Button erscheint bei `STATUS_PARTIAL` **nie**,
+     ausgerechnet dort, wo ein halb erzeugter N-Firmen-Lauf Cleanup am
+     nötigsten braucht.
+  3. **`jobs.py:244`** — `prune()` filtert auf `rec.status in (STATUS_DONE,
+     STATUS_FAILED)`. Partielle Läufe werden **nie** geprunt — derselbe
+     unbeschränkte Leck, den `prune()`s eigener Docstring als Grund für
+     seine Existenz nennt, kehrt für jeden Teilausfall zurück.
+  4. **`static/app.js:1305`** (D6s Timer-Feature, diese Sitzung) — dieselbe
+     Zwei-Wert-Prüfung stoppt den Laufzeit-Ticker; bei `STATUS_PARTIAL`
+     tickt "Laufzeit" unbegrenzt weiter, "Verbleibend" wird nie auf `0:00`
+     gesetzt.
+  5. **`static/app.js:1209-1216`** `statusLabel()` fällt für einen
+     unbekannten Status auf `"Ausstehend"` zurück (auch an `:926`,
+     Feedback-Modal, wiederverwendet) — ein fertiger Teil-Lauf würde
+     "Lauf beendet (Ausstehend)" anzeigen.
+  6. **`tests/unit/test_web_api_unit.py:320`/`:438`/`:480`** — pollen
+     `while record.status != STATUS_DONE`, bevor sie assertieren; ein
+     Teil-Lauf spinnt bis zum Timeout und lässt den Test fehlschlagen statt
+     eine echte Aussage zu treffen. Alle drei müssen `STATUS_PARTIAL` als
+     gültiges Testende kennen.
+
+  "Restliche Firmen trotzdem versuchen" bleibt der einfache Teil (ein
+  `try` pro Iteration im Schleifenkörper) — aber **D12s Ernten muss in
+  einem `finally` dieses `try`s stehen**, nicht danach: scheitert Firma 2s
+  `orchestrator.run()`, würde ein reines Nach-dem-Aufruf-Ernten den bereits
+  erzeugten Kostenstellen-Plan verlieren, und Firma 3 legt einen zweiten an
+  — exakt das Duplikat-Problem, das D12 beheben soll (Fund aus Runde 4,
+  beim Nachprüfen von D12 selbst).
 
 ## 5. Umsetzungsreihenfolge
 
