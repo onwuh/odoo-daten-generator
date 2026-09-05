@@ -122,6 +122,46 @@
         </div>
 
         <div class="panel">
+          <h2>Firmen</h2>
+          <p class="field-hint">Jede Firma bekommt ihre eigene Konfiguration unten — Reiter wechseln speichert
+             die aktuelle Firma automatisch und lädt die gewählte. Der komplette Ablauf (CRM, Verkauf, Personal,
+             Buchhaltung, …) läuft für jede Firma einzeln.</p>
+          <div class="company-tabs" id="company-tabs"></div>
+          <div class="btn-row mt-14">
+            <button type="button" class="btn ghost" id="btn-add-company">+ Firma</button>
+            <button type="button" class="btn ghost" id="btn-remove-company">Firma entfernen</button>
+          </div>
+
+          <div class="segmented mt-14" id="target-mode-segmented">
+            <button type="button" class="active" data-mode="new">Neue Firma</button>
+            <button type="button" data-mode="existing">Bestehende Firma</button>
+          </div>
+
+          <div id="target-new-fields" class="mt-14">
+            <div class="field-row">
+              <label for="f-target-name">Firmenname</label>
+              <input id="f-target-name" type="text" class="wide-input" autocomplete="off">
+            </div>
+            <div class="field-row">
+              <label for="f-target-country">Land</label>
+              <select id="f-target-country">
+                <option value="DE">Deutschland</option>
+                <option value="AT">Österreich</option>
+                <option value="CH">Schweiz</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="target-existing-fields" class="mt-14 is-hidden">
+            <div class="field-row">
+              <label for="f-target-existing">Firma</label>
+              <select id="f-target-existing"></select>
+            </div>
+            <label class="check-line"><input type="checkbox" id="chk-target-reuse"> Vorhandene Stammdaten dieser Firma wiederverwenden</label>
+          </div>
+        </div>
+
+        <div class="panel">
           <h2>Modus</h2>
           <div class="segmented" id="mode-segmented">
             <button type="button" class="active" data-mode="master">Nur Stammdaten</button>

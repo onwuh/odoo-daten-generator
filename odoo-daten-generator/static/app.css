@@ -336,6 +336,15 @@
   .check-detail { color: var(--ink-dim); font-size: 12.5px; font-family: var(--font-mono); }
   .check-row.ok .check-detail { color: var(--good); }
 
+  /* ---------- Firmenauswahl (S16) ---------- */
+  .company-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+  .company-tab {
+    border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--ink-dim);
+    padding: 7px 14px; border-radius: 100px; font-size: 13px; font-weight: 500; cursor: pointer;
+  }
+  .company-tab.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .company-tab .tab-warn { color: var(--warn); margin-left: 4px; }
+
   /* ---------- Konfiguration ---------- */
   .segmented {
     display: inline-flex; background: var(--surface-2); border: 1px solid var(--line);
@@ -728,6 +737,13 @@
 .p-status.done { color: var(--good); }
 .p-status.failed { color: var(--bad); }
 .p-status.skipped { color: var(--warn); }
+.p-status.partial { color: var(--warn); }
+
+.progress-group-head {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--ink-faint); margin: 14px 0 4px; padding-top: 10px; border-top: 1px solid var(--line);
+}
+.progress-group-head:first-child { margin-top: 0; padding-top: 0; border-top: none; }
 
 .console { min-height: 320px; max-height: 460px; overflow-y: auto; }
 .console-line { white-space: pre-wrap; word-break: break-word; }
