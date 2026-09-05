@@ -317,3 +317,87 @@ Neuer Backlog-Punkt seit S3-Review: R6 — Multi-Country Customer/Supplier Gener
 §4 Roadmap). `static_data.py` ist bereits länderweise (DE/AT/CH) strukturiert, damit weitere
 Märkte eine reine Datenergänzung sind.
 
+
+---
+
+## Sprint S16 — Multicompany (R17), 2026-09-04/05
+
+Abgeschlossen und nach `main` gemerged
+([PR #35](https://github.com/pahuodoo/odoo-daten-generator/pull/35)).
+Entscheidungen (S16-D1–S16-D15) und WP-Sequenzen stehen in `ROADMAP_ARCHIVE.md` §5;
+hier steht der Review-Verlauf, aus `ROADMAP.md` hierher verschoben (2026-09-05) —
+`ROADMAP.md` ist Entscheidungsregister, nicht Review-Log.
+
+**Kennzahl:** 15 Planungs-Commits (`a9ac618` … `ff0d9e7`) und **neun**
+Cold-Review-Runden vor der ersten Implementierungszeile (`2c9f89d`) — drei auf den
+danach verworfenen Minimal-Scope, sechs auf S16-NEU. Diese Zahl ist der Auslöser für
+den `sprint-review`-Skill; dessen Abschnitt 6 ordnet jeder Regel den Befund zu, der
+sie ausgelöst hat.
+
+
+Fünfzehn Design-Entscheidungen (D1-D9 im ersten Entwurf, D10-D15 durch drei
+Cold-Review-Runden ergänzt), jeweils mit Beleg. Bewusst kurz gehalten
+(siehe Notiz oben zu Runde 2/3s Lehre am alten R17-Plan: lange Prosa-Ketten
+sind, wo die neuen Fehler entstehen). Cold-Review Runde 1 (unabhängiger
+Opus-Agent, gleiches Verfahren) fand 2 harte Fehler + 2 unterdimensionierte
+Entscheidungen — beide harten Fehler waren behauptete statt nachgeprüfte
+Tatsachen (D2s nie existierendes Feld, D3s falsch gezählte "ungenutzte"
+Helper), beide unterdimensionierten Entscheidungen (RunContext-Lebenszyklus,
+Config-Schema-Form) als D10/D11 entschieden. Cold-Review Runde 2 fand einen
+echten Widerspruch zwischen den frischen D10/D11-Entscheidungen selbst
+(beide behaupteten, die Ziel-Firma-Auflösung passiere an ihrer jeweils
+eigenen Stelle) plus mehrere übersehene Folgeänderungen — alle unten
+eingearbeitet, inkl. zwei neuer Entscheidungen (D12 Kostenstellen-Fund,
+D13 `res.company`-Cleanup). **Cold-Review Runde 3** fand drei weitere echte
+Blocker in genau den Stellen, die Runde 2 gerade erst gefixt hatte — D11s
+Namens-Herleitung war gegen D10-Korrekturs eigene Reihenfolge unmöglich
+(`ctx.name_banks` ist zum Auflösungszeitpunkt noch leer), `build_selections`
+las Consent weiterhin aus dem falschen Dict trotz der Konsens-Entscheidung,
+und der alte `use_existing`-Mechanismus kollidierte strukturell mit D11s
+schlankerer `build_context_list`-Signatur — plus eine Falschbehauptung in
+D6 (der `app.py:353`-Wächter "bleibt funktionsfähig" war nicht mehr wahr,
+nachdem D11 `use_existing` entfernte) und eine Fehleinstufung (Teilausfall-
+Verhalten ist doch eine Architektur-Entscheidung, kein loser
+Schleifen-Zusatz). **Cold-Review Runde 4** fand den bisher größten
+einzelnen Blocker: **keine der Entscheidungen D1-D13 hatte tatsächlich
+zugeordnet, wer die von 7 Modulen (`sale.py`/`crm.py`/`accounting.py`/
+`hr.py`/`project.py`/`recruiting.py`/`documents.py`) erzeugten Records mit
+der richtigen `company_id` versieht** — D3 deckte nur die 2 Helfer ab, die
+eine echte Firma-Id **lesen**, nicht die Module, die Records **schreiben**.
+Live aufgelöst als D14 (Odoo-Kontext-Injektion auf dem geteilten Client,
+kein Modul-Code-Touch nötig) — deckt dabei auch D15 auf (drei Module
+brechen lautlos ohne Warehouse für die neue Firma) und schließt D8-
+Ergänzungs bis dahin offene Umsetzungsfrage automatisch mit. Zusätzlich
+ein zweiter echter Blocker (der neue `STATUS_PARTIAL`-Wert bricht sieben
+bestehende Zwei-Zustand-Prüfungen, nicht null wie Runde 3 annahm) plus
+mehrere kleinere Zuordnungslücken (`target`-Validierung, D6s Label-Ort,
+Teststrategie) — alle unten eingearbeitet. **Cold-Review Runde 5** prüfte
+D14/D15 (beide neu, nie unabhängig geprüft) im Detail und fand einen
+weiteren echten Blocker: D14s eigene Annahme, `master_data.py` brauche
+keinen Code-Touch, war falsch — **live widerlegt** (`res.partner`/
+`product.product` übernehmen `company_id` NICHT automatisch aus dem
+Kontext, anders als `sale.order`/`crm.lead`; nur Modelle mit `default=
+lambda self: self.env.company` reagieren auf den Kontextmechanismus).
+Dazu: eine ungeklärte Kollision zwischen D15 und dem bereits bestehenden
+`second_warehouse`-Häkchen, eine bis dahin nirgends vollständig
+aufgeschriebene Schleifen-Reihenfolge (D14 und D15 sagten beide "vor
+`orchestrator.run()`", ohne sich gegeneinander zu ordnen), zwei weitere
+`STATUS_PARTIAL`-Fundstellen, und eine korrigierte Prämisse bei D13
+(der Cleanup-Reihenfolge-Effekt tritt bei **jedem** N≥2-Lauf auf, nicht
+nur bei unterschiedlicher Modul-Auswahl). Alle unten eingearbeitet.
+**Cold-Review Runde 6** prüfte den kompletten Dokumentstand fokussiert auf
+D14/D15 und die neue 8-Schritt-Reihenfolge — **fand keine neue
+Architektur-Lücke mehr**, nur noch mechanische/Text-Fixes: einen
+fehlenden `None`-Schutz in D14s Merge-Code-Beispiel, eine
+unvollständig spezifizierte `try`/`finally`-Grenze (jetzt als Schritte
+2-7 mit `failed_company_indices`-Tracking festgeschrieben), zwei bisher
+unzugeordnete `orchestrator.py`-Fallback-Ersteller (akzeptiert, kein Fix
+nötig — D4 lizenziert firmenneutrale Records bereits), die entschiedene
+`second_warehouse`-Kollision (D15 gilt pro Firma, nicht nur Firma 1), und
+mehrere kleinere, jetzt explizit als "WP-Autor entscheidet" markierte
+Implementierungsdetails ohne Architektur-Charakter. **Ausdrücklicher
+Runde-6-Befund: die Architektur selbst ist konvergiert — kein siebter
+Cold-Review-Durchgang mehr nötig,** nur noch dieser gezielte Text-Fix-
+Durchgang (bereits eingearbeitet). Plan gilt als freigegeben zur
+Implementierungsplanung.
+
