@@ -173,7 +173,11 @@ for behaviour unverifiable without side effects, but don't replace live integrat
 
 ## Current Sprint
 <!-- Architect updates this before each Claude Code session -->
-Sprint-für-Sprint-Narrativ (S1-S10, abgeschlossen) ausgelagert nach `odoo-daten-generator/SPRINT_LOG.md` (2026-09-02) — Kontext, Peer-Review-Ergebnisse und live gefundene Bugs pro Sprint stehen dort. Aktueller Stand: S1-S12 abgeschlossen und in `main` gemerged (2026-09-02, [PR #28](https://github.com/pahuodoo/odoo-daten-generator/pull/28) S11, [PR #29](https://github.com/pahuodoo/odoo-daten-generator/pull/29) S12) — S11: R5 WP1/WP2/WP4/WP5 + D9 umgesetzt, WP3 (Übersetzungs-Registry) nach Cold-Review zurückgestellt (siehe `ROADMAP_ARCHIVE.md`s R5/D9-Statusblöcken). S12: R11 (Lost Opportunities) + R19 (Expenses) vollständig umgesetzt und archiviert, R16 Produkt-Ebene (Barcode) umgesetzt (Location-Ebene bleibt in S13 offen) — siehe `ROADMAP_ARCHIVE.md` §5 "S12 — WP-Sequenz" für den Ablauf, dessen R11/R19-Statusblöcke für Details. Beide Sprints peer-reviewed vor Merge (S5-S11-Verfahren). Nächster Sprint: noch nicht festgelegt, siehe `ROADMAP.md` §5 für offene Kandidaten (S13+).
+**Stand 2026-09-05: S1–S16 abgeschlossen und in `main`.** Zuletzt S16 (Multicompany, R17) über [PR #35](https://github.com/pahuodoo/odoo-daten-generator/pull/35) — N Firmen pro Lauf, Firma-Scoping über Odoo-Kontext-Injektion auf dem geteilten Client statt über Modul-Code, `STATUS_PARTIAL` für Teilausfälle.
+
+**Kein Sprint für S17 festgelegt.** Offene Kandidaten nach Priorität: `ROADMAP.md` §5. Empfehlung von dort: D5 (typisierte Modul-Configs) und D16 (`ctx.company_ids` → `partner_company_ids`) zusammen — beide berühren `config.py` 🔒, gebündelt kosten sie eine Architekten-Freigabe statt zwei.
+
+Wo was steht: Sprint-Verlauf und Peer-Review-Ergebnisse in `odoo-daten-generator/SPRINT_LOG.md`, Item-Statusblöcke und die WP-Sequenzen abgeschlossener Sprints in `ROADMAP_ARCHIVE.md`, offene Arbeit in `ROADMAP.md`. Vor jedem Sprint-Plan und jeder Review-Runde den `sprint-review`-Skill aufrufen (siehe Planning-document rule 1 oben).
 
 ## Do Not Touch Without Architect Approval
 - Object pipeline execution order in `orchestrator.py`
