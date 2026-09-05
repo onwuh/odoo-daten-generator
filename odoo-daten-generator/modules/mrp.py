@@ -149,7 +149,8 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
 
     def _get_company_id():
         if not _company_id_cache:
-            _company_id_cache.append(odoo_actions.get_main_company_id(client))
+            _company_id_cache.append(odoo_actions.get_main_company_id(
+                client, company_id=(ctx.res_company_ids[0] if ctx.res_company_ids else None)))
         return _company_id_cache[0]
 
     logger.info("\n--- MANUFACTURING: Erstelle Fertigungsprodukte und Stücklisten ---")

@@ -249,6 +249,71 @@ def run():
             False, str(e),
         ))
 
+    # ==================================================================
+    # S16/D8-Ergänzung — company_id set explicitly on partners/products
+    # when ctx.res_company_ids is populated (D14's context injection does
+    # NOT default this field on res.partner/product.product, unlike
+    # sale.order/crm.lead — live-confirmed).
+    # ==================================================================
+
+    try:
+        client = _mock_client_for_batches()
+        ctx = _make_ctx(num_companies=2)
+        ctx.res_company_ids = [42]
+        master_data._create_partners(client, ctx, country_map={})
+        company_batch, contact_batch = client.create_batch.call_args_list
+        company_vals_list = company_batch.args[1]
+        contact_vals_list = contact_batch.args[1]
+        assert all(v.get("company_id") == 42 for v in company_vals_list), company_vals_list
+        assert all(v.get("company_id") == 42 for v in contact_vals_list), contact_vals_list
+        results.append((
+            "_create_partners: ctx.res_company_ids set -> company_id=42 on every partner/contact",
+            True, "",
+        ))
+    except AssertionError as e:
+        results.append((
+            "_create_partners: ctx.res_company_ids set -> company_id=42 on every partner/contact",
+            False, str(e),
+        ))
+
+    try:
+        # Default (single-company) path: no target company resolved -> no
+        # company_id key at all, today's behavior unchanged.
+        client = _mock_client_for_batches()
+        ctx = _make_ctx(num_companies=1)
+        assert ctx.res_company_ids == []
+        master_data._create_partners(client, ctx, country_map={})
+        company_batch = client.create_batch.call_args_list[0]
+        company_vals_list = company_batch.args[1]
+        assert all("company_id" not in v for v in company_vals_list), company_vals_list
+        results.append((
+            "_create_partners: ctx.res_company_ids empty -> no company_id key (single-company path unchanged)",
+            True, "",
+        ))
+    except AssertionError as e:
+        results.append((
+            "_create_partners: ctx.res_company_ids empty -> no company_id key (single-company path unchanged)",
+            False, str(e),
+        ))
+
+    try:
+        client = _mock_client_for_batches()
+        ctx = _make_ctx()
+        ctx.res_company_ids = [42]
+        atoms = {"product_names": {"services": ["Beratung"]}}
+        master_data._create_products(client, atoms, ctx)
+        product_vals_list = client.create_batch.call_args_list[0].args[1]
+        assert all(v.get("company_id") == 42 for v in product_vals_list), product_vals_list
+        results.append((
+            "_create_products: ctx.res_company_ids set -> company_id=42 on every product",
+            True, "",
+        ))
+    except AssertionError as e:
+        results.append((
+            "_create_products: ctx.res_company_ids set -> company_id=42 on every product",
+            False, str(e),
+        ))
+
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results
 

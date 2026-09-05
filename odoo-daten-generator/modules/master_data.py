@@ -52,6 +52,14 @@ def _create_products(client, atoms: Dict[str, Any], ctx: RunContext) -> None:
         logger.info("-> Keine Produkte zu erstellen.")
         return
 
+    # S16/D8-Ergänzung: same reasoning as _create_partners above — D14's
+    # Odoo-context injection does not default product.product's company_id
+    # from context (live-confirmed), needs setting explicitly in vals.
+    target_company_id = ctx.res_company_ids[0] if ctx.res_company_ids else None
+    if target_company_id is not None:
+        for vals in all_vals:
+            vals['company_id'] = target_company_id
+
     # R16: EAN-13 barcodes, deduped against barcodes already on the target DB
     # (not just within this run) — a duplicate would fail product.product's
     # unique constraint and, per odoo_client.create_batch, is outside the
@@ -161,6 +169,15 @@ def _create_partners(client, ctx: RunContext, country_map: Dict[str, int]) -> No
     person_pool = ctx.name_banks.get('employee_names') or fallback_data.FALLBACK_EMPLOYEES
     used_names: Set[str] = set()
 
+    # S16/D8-Ergänzung: the real res.company this run's partners belong to —
+    # NOT to be confused with the company_id loop variable below (a
+    # res.partner id, the customer/company contact just created). D14's
+    # Odoo-context injection does NOT make res.partner default this field
+    # from the context (live-confirmed, unlike sale.order/crm.lead) — has to
+    # be set explicitly in vals. None (single-company run, or ctx never
+    # resolved a target company) leaves it unset, today's behavior.
+    target_company_id = ctx.res_company_ids[0] if ctx.res_company_ids else None
+
     # Pass 1: build + batch-create all companies (D3 — was 1 create() call per company).
     company_names: List[str] = []
     company_vals_list: List[Dict[str, Any]] = []
@@ -170,6 +187,8 @@ def _create_partners(client, ctx: RunContext, country_map: Dict[str, int]) -> No
         country_code = vals.pop('country_code')
         if country_code in country_map:
             vals['country_id'] = country_map[country_code]
+        if target_company_id is not None:
+            vals['company_id'] = target_company_id
         company_names.append(name)
         company_vals_list.append(vals)
 
@@ -193,6 +212,8 @@ def _create_partners(client, ctx: RunContext, country_map: Dict[str, int]) -> No
             contact_cc = cvals.pop('country_code', None)
             if contact_cc and contact_cc in country_map:
                 cvals['country_id'] = country_map[contact_cc]
+            if target_company_id is not None:
+                cvals['company_id'] = target_company_id
             all_contact_vals.append(cvals)
 
     client.create_batch('res.partner', all_contact_vals)

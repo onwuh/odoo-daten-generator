@@ -319,9 +319,15 @@ def probe_model_access(client, installed_modules) -> Dict[str, bool]:
     return {model: client.has_create_access(model) for model in sorted(wanted)}
 
 
-def get_main_company_id(client) -> Optional[int]:
-    """Returns the id of the main res.company (tries id=1 first, falls back
-    to the first company found), or None.
+def get_main_company_id(client, company_id: Optional[int] = None) -> Optional[int]:
+    """Returns the id of the target res.company, or None.
+
+    S16/D3: if `company_id` is given, it's returned directly — no lookup —
+    since the caller already knows its target company (the per-company loop
+    in web/jobs.py passes ctx.res_company_ids[0]). Omitted (the default):
+    falls back to the original single-company behavior, id=1 first, else
+    the first company found — used at connect time, before any RunContext
+    exists, where there is no target company to pass yet.
 
     NOT the same as RunContext.company_ids, which despite its name holds
     res.partner ids (customer/company contacts created by master_data.py,
@@ -329,6 +335,8 @@ def get_main_company_id(client) -> Optional[int]:
     a real res.company id. Use this helper wherever an actual res.company id
     is needed (e.g. stock.warehouse/purchase.order/stock.quant company_id).
     """
+    if company_id is not None:
+        return company_id
     try:
         companies = client.search_read('res.company', [["id", "=", 1]], fields=["id"], limit=1)
         if companies:
@@ -424,10 +432,14 @@ def get_main_company_name(client) -> Optional[str]:
     return None
 
 
-def get_main_company_info(client) -> Dict[str, Any]:
-    """Address/VAT snapshot of the main res.company, for documents that need
-    to print a "bill to" block — the vendor-bill PDF's recipient is this
-    run's own company (see modules/documents.py).
+def get_main_company_info(client, company_id: Optional[int] = None) -> Dict[str, Any]:
+    """Address/VAT snapshot of the target res.company, for documents that
+    need to print a "bill to" block — the vendor-bill PDF's recipient is
+    this run's own company (see modules/documents.py).
+
+    S16/D3: `company_id`, if given, is looked up directly instead of id=1 —
+    the per-company loop in web/jobs.py passes ctx.res_company_ids[0].
+    Omitted (the default): original single-company behavior, id=1 first.
 
     Best-effort: returns {} on total failure. Callers must degrade
     gracefully rather than assume street/zip/city are populated — on a
@@ -435,8 +447,9 @@ def get_main_company_info(client) -> Dict[str, Any]:
     (live-confirmed on demo-test5's id=1 company), not missing keys.
     """
     fields = ["name", "street", "street2", "zip", "city", "country_id", "vat"]
+    target_id = company_id if company_id is not None else 1
     try:
-        companies = client.search_read('res.company', [["id", "=", 1]], fields=fields, limit=1)
+        companies = client.search_read('res.company', [["id", "=", target_id]], fields=fields, limit=1)
         if not companies:
             companies = client.search_read('res.company', [], fields=fields, limit=1)
         if not companies:

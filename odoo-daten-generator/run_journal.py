@@ -270,7 +270,17 @@ CANCEL_BEFORE_UNLINK = {
 # stock.lot has no `active` field at all (live-verified) — deliberately
 # absent from this set. A tracked lot with a live-referencing quant is
 # permanent residue; no fix in this sprint (Befund 2).
-ARCHIVE_FALLBACK_MODELS = {"stock.warehouse", "stock.location"}
+#
+# res.company (S16/D13): unlink fails once a company holds referenced
+# records (FK constraints observed live on account_fiscal_position and
+# stock_picking_type) — write(active=False) succeeds in both cases,
+# live-confirmed, including on a company already holding a full chart of
+# accounts (1312 accounts) or a stock.warehouse. Only a company THIS run
+# created (via create(), journaled) can ever be archived here — a reused
+# existing company is found via search_read (D8b), never journaled, and
+# therefore never touched by delete_run at all, which is the intended
+# safety property, not an oversight.
+ARCHIVE_FALLBACK_MODELS = {"stock.warehouse", "stock.location", "res.company"}
 
 
 def _first_new_error(client: OdooJson2Client, mark: int) -> Optional[str]:

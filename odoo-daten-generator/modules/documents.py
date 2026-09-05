@@ -94,7 +94,8 @@ def _create_bill_pdfs(client, ctx: RunContext) -> None:
     # tenant's company record is typically address-less (live-confirmed on
     # demo-test5), so a blank street/zip/city falls back to a deterministic
     # synthetic address instead of printing an empty "bill to" block.
-    company_info = odoo_actions.get_main_company_info(client)
+    company_info = odoo_actions.get_main_company_info(
+        client, company_id=(ctx.res_company_ids[0] if ctx.res_company_ids else None))
     buyer_name = company_info.get("name") or "Kunde"
     if company_info.get("street") and company_info.get("zip") and company_info.get("city"):
         addr_lines = [company_info["street"]]

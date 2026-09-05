@@ -47,7 +47,8 @@ def create_expense_data(client, gemini, ctx: RunContext) -> None:
         return
 
     currency_id = None
-    company_id = odoo_actions.get_main_company_id(client)
+    company_id = odoo_actions.get_main_company_id(
+        client, company_id=(ctx.res_company_ids[0] if ctx.res_company_ids else None))
     if company_id:
         company = client.search_read(
             'res.company', [["id", "=", company_id]], fields=["currency_id"], limit=1,
