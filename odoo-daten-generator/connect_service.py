@@ -70,6 +70,9 @@ class ConnectResult:
     field_warnings: List[str] = field(default_factory=list)
     existing_company_ids: List[int] = field(default_factory=list)
     existing_product_ids: List[int] = field(default_factory=list)
+    # S16/D8a: real res.company records, for the Firmenauswahl "existing
+    # company" picker — disjoint from existing_company_ids above (res.partner).
+    real_companies: List[Dict[str, Any]] = field(default_factory=list)
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
     # S10/R10 (F2): the resolved database name — surfaced so the frontend can
@@ -101,6 +104,7 @@ class ConnectResult:
             "field_warnings": self.field_warnings,
             "existing_companies": len(self.existing_company_ids),
             "existing_products": len(self.existing_product_ids),
+            "real_companies": self.real_companies,
             "llm_provider": self.llm_provider,
             "llm_model": self.llm_model,
         }
@@ -151,6 +155,17 @@ def fetch_existing_company_data(client, company_id: int) -> tuple:
         [r["id"] for r in existing_partners],
         [r["id"] for r in existing_products],
     )
+
+
+def fetch_real_companies(client) -> List[Dict[str, Any]]:
+    """S16/D8a: real res.company records for the Firmenauswahl "existing
+    company" picker. Distinct from fetch_existing_data's "existing_companies"
+    (res.partner customer contacts, not res.company records) — that fetch
+    answers "does this instance already have customer data", this one answers
+    "which company can a block target with mode=existing".
+    """
+    companies = client.search_read('res.company', [], fields=["id", "name"], limit=0)
+    return [{"id": r["id"], "name": r["name"]} for r in companies]
 
 
 def detect_provider(llm_key: str, explicit: Optional[str] = None) -> str:
@@ -278,6 +293,13 @@ def probe(*, base_url: str, database: str, odoo_key: str,
             step("existing", True, detail)
         except Exception as exc:
             step("existing", False, str(exc)[:200])
+
+        # -- Real companies for Firmenauswahl (S16/D8a, non-fatal) --
+        try:
+            result.real_companies = fetch_real_companies(client)
+        except Exception as exc:
+            logger.warning(f"res.company-Liste nicht ermittelbar: {exc}")
+            result.real_companies = []
 
     # -- LLM connection (fatal) --
     provider = detect_provider(llm_key, llm_provider)

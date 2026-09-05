@@ -50,6 +50,7 @@ def _fake_connect_result():
     result.odoo_version = "saas-19.4"
     result.existing_company_ids = [1, 2, 3]
     result.existing_product_ids = [10, 11]
+    result.real_companies = [{"id": 1, "name": "Testfirma GmbH"}]
     result.llm_provider = "groq"
     result.llm_model = "llama-3.3-70b-versatile"
     return result
@@ -266,6 +267,21 @@ def run():
         results.append(("Connect: feature_flags + purchase/stock im Ergebnis", True, ""))
     except Exception as e:
         results.append(("Connect: feature_flags + purchase/stock im Ergebnis", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # S16/D8a: /api/connect returns real_companies (res.company id+name),
+    # separate from the existing_companies count (res.partner-based)
+    # ------------------------------------------------------------------
+    try:
+        with TestClient(web_app.app) as client:
+            csrf = _login(client)
+            response = _connect(client, csrf)
+            assert response.status_code == 200, response.text
+            data = response.json()
+            assert data["real_companies"] == [{"id": 1, "name": "Testfirma GmbH"}], data["real_companies"]
+        results.append(("Connect: real_companies (D8a) im Ergebnis", True, ""))
+    except Exception as e:
+        results.append(("Connect: real_companies (D8a) im Ergebnis", False, str(e)))
 
     # ------------------------------------------------------------------
     # S10/R10 — a blocked module's model_access reaches build_context via
