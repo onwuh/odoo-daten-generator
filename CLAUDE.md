@@ -41,6 +41,24 @@ API keys via env vars:
 - **`odoo-daten-generator/SPRINT_LOG.md`** — full sprint narrative (peer-review process, live-found bugs, test counts per sprint), pulled from this file's old "Current Sprint" section. Read on demand, not part of per-session load.
 - **`odoo-daten-generator/ODOO_GOTCHAS.md`** — live-tested Odoo field/behavior quirks, pulled from "Odoo API Conventions" below. Read before touching any field it covers.
 
+### Planning-document rules (2026-09-05)
+
+These three rules are cheap to state and were previously implicit — the cost of leaving
+them implicit is documented in `ROADMAP.md`'s D19 and in the `sprint-review` skill.
+
+1. **Invoke the `sprint-review` skill before writing any sprint plan or architecture
+   spike, and before every cold-review round.** It carries the plan form (decision
+   register + coverage matrix), the reviewer briefing, and the abort condition. The
+   procedure was referenced eight times across these docs as "the S5-S11 process" and
+   defined nowhere until that skill existed.
+2. **Item-ID namespace:** bare `D<n>`/`B<n>`/`R<n>` belong to `ROADMAP.md`'s numbered
+   sections. Sprint-local decisions from an architecture spike are prefixed with their
+   sprint — `S16-D1`, `S17-D4`. Without the prefix the namespaces collide and a commit
+   citing "D8" is ambiguous (this already happened, see `ROADMAP.md`'s D19).
+3. **A sprint's WP sequence moves to `ROADMAP_ARCHIVE.md` §5 when that sprint merges.**
+   `ROADMAP.md` holds open and planned work only — its own header says so, and 463 lines
+   of finished S12–S15 sequences had accumulated there before 2026-09-05.
+
 ## Architecture
 
 Generates AI-powered demo data, writes to Odoo via JSON 2 REST API.
@@ -155,7 +173,7 @@ for behaviour unverifiable without side effects, but don't replace live integrat
 
 ## Current Sprint
 <!-- Architect updates this before each Claude Code session -->
-Sprint-für-Sprint-Narrativ (S1-S10, abgeschlossen) ausgelagert nach `odoo-daten-generator/SPRINT_LOG.md` (2026-09-02) — Kontext, Peer-Review-Ergebnisse und live gefundene Bugs pro Sprint stehen dort. Aktueller Stand: S1-S12 abgeschlossen und in `main` gemerged (2026-09-02, [PR #28](https://github.com/pahuodoo/odoo-daten-generator/pull/28) S11, [PR #29](https://github.com/pahuodoo/odoo-daten-generator/pull/29) S12) — S11: R5 WP1/WP2/WP4/WP5 + D9 umgesetzt, WP3 (Übersetzungs-Registry) nach Cold-Review zurückgestellt (siehe `ROADMAP_ARCHIVE.md`s R5/D9-Statusblöcken). S12: R11 (Lost Opportunities) + R19 (Expenses) vollständig umgesetzt und archiviert, R16 Produkt-Ebene (Barcode) umgesetzt (Location-Ebene bleibt in S13 offen) — siehe `ROADMAP.md`s "S12 — WP-Sequenz" für den Ablauf, `ROADMAP_ARCHIVE.md`s R11/R19-Statusblöcken für Details. Beide Sprints peer-reviewed vor Merge (S5-S11-Verfahren). Nächster Sprint: noch nicht festgelegt, siehe `ROADMAP.md` §5 für offene Kandidaten (S13+).
+Sprint-für-Sprint-Narrativ (S1-S10, abgeschlossen) ausgelagert nach `odoo-daten-generator/SPRINT_LOG.md` (2026-09-02) — Kontext, Peer-Review-Ergebnisse und live gefundene Bugs pro Sprint stehen dort. Aktueller Stand: S1-S12 abgeschlossen und in `main` gemerged (2026-09-02, [PR #28](https://github.com/pahuodoo/odoo-daten-generator/pull/28) S11, [PR #29](https://github.com/pahuodoo/odoo-daten-generator/pull/29) S12) — S11: R5 WP1/WP2/WP4/WP5 + D9 umgesetzt, WP3 (Übersetzungs-Registry) nach Cold-Review zurückgestellt (siehe `ROADMAP_ARCHIVE.md`s R5/D9-Statusblöcken). S12: R11 (Lost Opportunities) + R19 (Expenses) vollständig umgesetzt und archiviert, R16 Produkt-Ebene (Barcode) umgesetzt (Location-Ebene bleibt in S13 offen) — siehe `ROADMAP_ARCHIVE.md` §5 "S12 — WP-Sequenz" für den Ablauf, dessen R11/R19-Statusblöcke für Details. Beide Sprints peer-reviewed vor Merge (S5-S11-Verfahren). Nächster Sprint: noch nicht festgelegt, siehe `ROADMAP.md` §5 für offene Kandidaten (S13+).
 
 ## Do Not Touch Without Architect Approval
 - Object pipeline execution order in `orchestrator.py`
