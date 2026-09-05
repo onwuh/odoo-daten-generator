@@ -32,7 +32,7 @@ from odoo_client import OdooJson2Client
 from run_journal import (RunJournal, delete_run, journal_dir_writable,
                          prune_journals, retention_days)
 from web import feedback, security
-from web.jobs import AdmissionRefused, JobQueue
+from web.jobs import AdmissionRefused, JobQueue, _bare_module_key
 from web.session import CSRF_HEADER, SESSION_COOKIE, SessionStore, check_access_code
 from web.sse import EventBroker
 
@@ -379,31 +379,56 @@ async def api_preflight(request: Request, session=Depends(get_session_csrf)) -> 
     _connected(session)
     body = await request.json()
     connect = session.connect
+    # S16: mirrors JobQueue.submit()'s own dual-path bridge — "companies" in
+    # the body means the new multi-company shape (D9/D11), its absence means
+    # the legacy single-company shape, unchanged since before S16 existed.
     try:
-        ctx, selected = run_config.build_context(
-            body,
-            language_name=connect.language_name,
-            language_code=connect.language_code,
-            llm_model_name=session.llm_model or "",
-            installed_modules=connect.installed_modules,
-            feature_flags=connect.feature_flags,
-            model_access=connect.model_access,
-            existing_company_ids=connect.existing_company_ids,
-            existing_product_ids=connect.existing_product_ids,
-        )
+        if "companies" in body:
+            contexts_and_selected = run_config.build_context_list(
+                body,
+                language_name=connect.language_name,
+                language_code=connect.language_code,
+                llm_model_name=session.llm_model or "",
+                installed_modules=connect.installed_modules,
+                feature_flags=connect.feature_flags,
+                model_access=connect.model_access,
+            )
+            labels = [
+                (block.get("target") or {}).get("name") or f"Firma {i + 1}"
+                for i, block in enumerate(body["companies"])
+            ]
+        else:
+            ctx, selected = run_config.build_context(
+                body,
+                language_name=connect.language_name,
+                language_code=connect.language_code,
+                llm_model_name=session.llm_model or "",
+                installed_modules=connect.installed_modules,
+                feature_flags=connect.feature_flags,
+                model_access=connect.model_access,
+                existing_company_ids=connect.existing_company_ids,
+                existing_product_ids=connect.existing_product_ids,
+            )
+            contexts_and_selected = [(ctx, selected)]
+            labels = None
     except run_config.ConfigError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-    keys = run_config.active_progress_keys(ctx, selected)
-    counts = run_config.estimate_record_counts(ctx, selected)
+    keys, counts = run_config.multi_company_preview(contexts_and_selected, labels)
+    first_ctx = contexts_and_selected[0][0]
     return {
         "target": session.base_url,
         "database": session.database,
-        "mode": ctx.criteria.mode,
-        "industry": ctx.industry,
-        "skip_master_data": ctx.skip_master_data,
-        "modules": [{"key": k, "label": run_config.MODULE_LABELS.get(k, k)} for k in keys],
+        "mode": first_ctx.criteria.mode,
+        "industry": first_ctx.industry,
+        "skip_master_data": first_ctx.skip_master_data,
+        # S16: a multi-company key is "{index}:{module_code}" — MODULE_LABELS
+        # only knows the bare module_code, so the prefix must come off
+        # before the lookup (same fix as web/jobs.py's RunRecord.public_dict).
+        "modules": [{"key": k, "label": run_config.MODULE_LABELS.get(_bare_module_key(k), k)}
+                    for k in keys],
         "record_estimate": counts,
         "record_total": sum(counts.values()),
+        "company_count": len(contexts_and_selected),
     }
 
 

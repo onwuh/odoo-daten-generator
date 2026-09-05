@@ -298,6 +298,31 @@ def run():
         results.append(("Preflight: Modul ohne Schreibrechte erscheint nicht als aktiv", False, str(e)))
 
     # ------------------------------------------------------------------
+    # S16: /api/preflight with a "companies" payload returns qualified
+    # module keys + labels, merges the record estimate across companies
+    # (Kostenstellen kept once, everything else summed), and reports
+    # company_count — the same shape JobQueue.submit() builds internally.
+    # ------------------------------------------------------------------
+    try:
+        with TestClient(web_app.app) as client:
+            csrf = _login(client)
+            _connect(client, csrf)
+            response = client.post("/api/preflight", headers=_auth_headers(csrf), json=_MULTI_PAYLOAD)
+            assert response.status_code == 200, response.text
+            data = response.json()
+            assert data["company_count"] == 2, data
+            keys = [m["key"] for m in data["modules"]]
+            assert any(k == "0:stammdaten" for k in keys), keys
+            assert any(k == "1:stammdaten" for k in keys), keys
+            labels_by_key = {m["key"]: m["label"] for m in data["modules"]}
+            assert labels_by_key["0:stammdaten"] == "Stammdaten", labels_by_key
+            assert "Kontakte (Firma A)" in data["record_estimate"] or \
+                   any(k.startswith("Kontakte (") for k in data["record_estimate"]), data["record_estimate"]
+        results.append(("Preflight: companies-Payload liefert firmen-qualifizierte Keys+Labels", True, ""))
+    except AssertionError as e:
+        results.append(("Preflight: companies-Payload liefert firmen-qualifizierte Keys+Labels", False, str(e)))
+
+    # ------------------------------------------------------------------
     # Session isolation: one session cannot read another session's run
     # ------------------------------------------------------------------
     try:

@@ -770,3 +770,36 @@ def estimate_record_counts(ctx: RunContext, selected: Set[str],
             for label, value in counts.items()
         }
     return counts
+
+
+def multi_company_preview(contexts_and_selected: List[Tuple[RunContext, Set[str]]],
+                          labels: Optional[List[str]] = None) -> Tuple[List[str], Dict[str, int]]:
+    """S16/D6: shared by web/jobs.py's JobQueue.submit() and web/app.py's
+    /api/preflight — builds the company-qualified progress-key list and the
+    merged record-count preview for either a single-company run
+    (`labels=None`, or exactly one context) or a multi-company one
+    (`labels` has one entry per context, used to qualify both the module
+    keys — "{index}:{key}" — and estimate_record_counts' labels).
+
+    Kept as one function so the two callers cannot silently drift apart on
+    the merge rule for a shared label like "Kostenstellen" (D12: run-wide,
+    kept only once, never summed).
+    """
+    multi = labels is not None and len(contexts_and_selected) > 1
+    keys: List[str] = []
+    estimate: Dict[str, int] = {}
+    for index, (ctx, selected) in enumerate(contexts_and_selected):
+        company_keys = active_progress_keys(ctx, selected)
+        if multi:
+            keys.extend(f"{index}:{key}" for key in company_keys)
+            company_estimate = estimate_record_counts(ctx, selected, company_label=labels[index])
+            for est_label, value in company_estimate.items():
+                if est_label == "Kostenstellen":
+                    if est_label not in estimate:  # first occurrence wins, never summed
+                        estimate[est_label] = value
+                else:
+                    estimate[est_label] = estimate.get(est_label, 0) + value
+        else:
+            keys.extend(company_keys)
+            estimate.update(estimate_record_counts(ctx, selected))
+    return keys, estimate

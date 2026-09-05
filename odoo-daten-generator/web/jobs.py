@@ -246,29 +246,12 @@ class JobQueue:
             targets = None
 
         run_id = self._next_run_id()
-        multi = targets is not None and len(contexts_and_selected) > 1
-        module_order: List[str] = []
-        modules: Dict[str, str] = {}
-        record_estimate: Dict[str, int] = {}
-        for index, (ctx, selected) in enumerate(contexts_and_selected):
-            keys = run_config.active_progress_keys(ctx, selected)
-            if multi:
-                label = (targets[index].get("name") or f"Firma {index + 1}") if targets else None
-                qualified_keys = [f"{index}:{key}" for key in keys]
-                module_order.extend(qualified_keys)
-                modules.update({k: MODULE_PENDING for k in qualified_keys})
-                for est_label, value in run_config.estimate_record_counts(
-                        ctx, selected, company_label=label).items():
-                    # D12: "Kostenstellen" is run-wide, not per-company — kept
-                    # only once (first occurrence), never summed across companies.
-                    if est_label == "Kostenstellen" and est_label in record_estimate:
-                        continue
-                    record_estimate[est_label] = record_estimate.get(est_label, 0) + value \
-                        if est_label != "Kostenstellen" else value
-            else:
-                module_order.extend(keys)
-                modules.update({k: MODULE_PENDING for k in keys})
-                record_estimate.update(run_config.estimate_record_counts(ctx, selected))
+        labels = (
+            [t.get("name") or f"Firma {i + 1}" for i, t in enumerate(targets)]
+            if targets is not None else None
+        )
+        module_order, record_estimate = run_config.multi_company_preview(contexts_and_selected, labels)
+        modules: Dict[str, str] = {k: MODULE_PENDING for k in module_order}
 
         record = RunRecord(
             run_id=run_id,
