@@ -1,0 +1,3530 @@
+{
+  "documents": [
+    [
+      "search_read",
+      "account.move",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              201,
+              202
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "name",
+          "ref",
+          "invoice_date",
+          "invoice_date_due",
+          "currency_id",
+          "amount_untaxed",
+          "amount_tax",
+          "amount_total",
+          "partner_id",
+          "invoice_line_ids"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "search_read",
+      "res.partner",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              901,
+              902
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "name",
+          "street",
+          "zip",
+          "city"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "search_read",
+      "account.move.line",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              1101,
+              1102
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "name",
+          "quantity",
+          "price_unit",
+          "price_subtotal",
+          "price_total",
+          "product_id",
+          "product_uom_id",
+          "tax_ids"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "search_read",
+      "account.tax",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              5
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "amount"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "search_read",
+      "res.company",
+      [
+        [
+          [
+            "id",
+            "=",
+            1
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "name",
+          "street",
+          "street2",
+          "zip",
+          "city",
+          "country_id",
+          "vat"
+        ],
+        "limit": 1
+      }
+    ],
+    [
+      "create_batch",
+      "ir.attachment",
+      [
+        [
+          {
+            "mimetype": "application/pdf",
+            "name": "Rechnung_BILL/201.pdf",
+            "raw": "<PDF len=1833 sha256=6ebc3018d6a5a8650de80b8dc98f3628>",
+            "res_id": 201,
+            "res_model": "account.move",
+            "type": "binary"
+          },
+          {
+            "mimetype": "application/pdf",
+            "name": "Rechnung_BILL/202.pdf",
+            "raw": "<PDF len=1809 sha256=26ebe70cda7aa27469edb8c7120598b5>",
+            "res_id": 202,
+            "res_model": "account.move",
+            "type": "binary"
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "search_read",
+      "hr.applicant",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              301,
+              302
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "partner_name",
+          "email_from",
+          "partner_phone",
+          "applicant_skill_ids"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "search_read",
+      "hr.applicant.skill",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              3010,
+              3020
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "skill_id"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "create_batch",
+      "ir.attachment",
+      [
+        [
+          {
+            "mimetype": "application/pdf",
+            "name": "CV_Bewerber 301.pdf",
+            "raw": "<PDF len=1323 sha256=c425861fa2d8178478b1e9317ce16c17>",
+            "res_id": 301,
+            "res_model": "hr.applicant",
+            "type": "binary"
+          },
+          {
+            "mimetype": "application/pdf",
+            "name": "CV_Bewerber 302.pdf",
+            "raw": "<PDF len=1323 sha256=88f76373667ac79a6f1c00bfad9b4a64>",
+            "res_id": 302,
+            "res_model": "hr.applicant",
+            "type": "binary"
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ]
+  ],
+  "expenses_analytic": [
+    [
+      "search_read",
+      "product.product",
+      [
+        [
+          [
+            "can_be_expensed",
+            "=",
+            true
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "name"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "search_read",
+      "res.company",
+      [
+        [
+          [
+            "id",
+            "=",
+            1
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id"
+        ],
+        "limit": 1
+      }
+    ],
+    [
+      "search_read",
+      "res.company",
+      [
+        [
+          [
+            "id",
+            "=",
+            10
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "currency_id"
+        ],
+        "limit": 1
+      }
+    ],
+    [
+      "create",
+      "account.analytic.plan",
+      [
+        {
+          "name": "Kostenstellen"
+        }
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "create_batch",
+      "account.analytic.account",
+      [
+        [
+          {
+            "name": "Vertrieb",
+            "plan_id": 1001
+          },
+          {
+            "name": "Produktion",
+            "plan_id": 1001
+          },
+          {
+            "name": "Verwaltung",
+            "plan_id": 1001
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "create_batch",
+      "hr.expense",
+      [
+        [
+          {
+            "analytic_distribution": {
+              "1004": 100.0
+            },
+            "currency_id": 3,
+            "date": "<DATE>",
+            "employee_id": 71,
+            "name": "Bewirtung – Geschäftsreise",
+            "payment_mode": "own_account",
+            "product_id": 501,
+            "total_amount": 149.18
+          },
+          {
+            "currency_id": 3,
+            "date": "<DATE>",
+            "employee_id": 71,
+            "name": "Reisekosten – Geschäftsreise",
+            "payment_mode": "own_account",
+            "product_id": 500,
+            "total_amount": 197.17
+          },
+          {
+            "currency_id": 3,
+            "date": "<DATE>",
+            "employee_id": 71,
+            "name": "Bewirtung – Geschäftsreise",
+            "payment_mode": "own_account",
+            "product_id": 501,
+            "total_amount": 105.17
+          },
+          {
+            "currency_id": 3,
+            "date": "<DATE>",
+            "employee_id": 72,
+            "name": "Bewirtung – Geschäftsreise",
+            "payment_mode": "own_account",
+            "product_id": 501,
+            "total_amount": 231.61
+          },
+          {
+            "currency_id": 3,
+            "date": "<DATE>",
+            "employee_id": 72,
+            "name": "Bewirtung – Geschäftsreise",
+            "payment_mode": "own_account",
+            "product_id": 501,
+            "total_amount": 107.01
+          },
+          {
+            "analytic_distribution": {
+              "1002": 100.0
+            },
+            "currency_id": 3,
+            "date": "<DATE>",
+            "employee_id": 72,
+            "name": "Reisekosten – Geschäftsreise",
+            "payment_mode": "own_account",
+            "product_id": 500,
+            "total_amount": 193.96
+          },
+          {
+            "currency_id": 3,
+            "date": "<DATE>",
+            "employee_id": 73,
+            "name": "Bewirtung – Geschäftsreise",
+            "payment_mode": "own_account",
+            "product_id": 501,
+            "total_amount": 40.68
+          },
+          {
+            "analytic_distribution": {
+              "1004": 100.0
+            },
+            "currency_id": 3,
+            "date": "<DATE>",
+            "employee_id": 73,
+            "name": "Bewirtung – Geschäftsreise",
+            "payment_mode": "own_account",
+            "product_id": 501,
+            "total_amount": 226.53
+          },
+          {
+            "currency_id": 3,
+            "date": "<DATE>",
+            "employee_id": 73,
+            "name": "Bewirtung – Geschäftsreise",
+            "payment_mode": "own_account",
+            "product_id": 501,
+            "total_amount": 223.76
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "write",
+      "hr.expense",
+      [
+        [
+          1012,
+          1009,
+          1011,
+          1006,
+          1013
+        ],
+        {
+          "approval_state": "submitted"
+        }
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "write",
+      "hr.expense",
+      [
+        [
+          1012,
+          1009,
+          1011,
+          1006,
+          1013
+        ],
+        {
+          "approval_state": "approved"
+        }
+      ],
+      {
+        "context": null
+      }
+    ]
+  ],
+  "hr_recruitment": [
+    [
+      "search_read",
+      "hr.skill.type",
+      [
+        []
+      ],
+      {
+        "fields": [
+          "id",
+          "name"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "search_read",
+      "hr.skill",
+      [
+        []
+      ],
+      {
+        "fields": [
+          "id",
+          "name",
+          "skill_type_id"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "create_batch",
+      "hr.skill.type",
+      [
+        [
+          {
+            "name": "Kompetenzart 1"
+          },
+          {
+            "name": "Kompetenzart 2"
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "create_batch",
+      "hr.skill.level",
+      [
+        [
+          {
+            "level_progress": 33,
+            "name": "Grundlagen",
+            "skill_type_id": 1001
+          },
+          {
+            "level_progress": 66,
+            "name": "Fortgeschritten",
+            "skill_type_id": 1001
+          },
+          {
+            "level_progress": 100,
+            "name": "Experte",
+            "skill_type_id": 1001
+          },
+          {
+            "level_progress": 33,
+            "name": "Grundlagen",
+            "skill_type_id": 1002
+          },
+          {
+            "level_progress": 66,
+            "name": "Fortgeschritten",
+            "skill_type_id": 1002
+          },
+          {
+            "level_progress": 100,
+            "name": "Experte",
+            "skill_type_id": 1002
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "create_batch",
+      "hr.skill",
+      [
+        [
+          {
+            "name": "Kompetenz 1.1",
+            "skill_type_id": 1001
+          },
+          {
+            "name": "Kompetenz 1.2",
+            "skill_type_id": 1001
+          },
+          {
+            "name": "Kompetenz 1.3",
+            "skill_type_id": 1001
+          },
+          {
+            "name": "Kompetenz 2.1",
+            "skill_type_id": 1002
+          },
+          {
+            "name": "Kompetenz 2.2",
+            "skill_type_id": 1002
+          },
+          {
+            "name": "Kompetenz 2.3",
+            "skill_type_id": 1002
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "search_read",
+      "hr.skill.level",
+      [
+        []
+      ],
+      {
+        "fields": [
+          "id",
+          "skill_type_id",
+          "level_progress"
+        ],
+        "limit": null
+      }
+    ],
+    [
+      "search_read",
+      "hr.department",
+      [
+        []
+      ],
+      {
+        "fields": [
+          "id",
+          "name"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "search_read",
+      "hr.job",
+      [
+        []
+      ],
+      {
+        "fields": [
+          "id",
+          "name",
+          "department_id"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "search_read",
+      "hr.skill",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              1013,
+              1014,
+              1010
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "skill_type_id"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "search_read",
+      "hr.skill",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              1012,
+              1010,
+              1011
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "skill_type_id"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "search_read",
+      "hr.skill",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              1013
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "skill_type_id"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "create_batch",
+      "hr.job",
+      [
+        [
+          {
+            "department_id": 1,
+            "job_skill_ids": [
+              [
+                0,
+                0,
+                {
+                  "skill_id": 1013,
+                  "skill_level_id": 2,
+                  "skill_type_id": 1001
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "skill_id": 1014,
+                  "skill_level_id": 3,
+                  "skill_type_id": 1001
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "skill_id": 1010,
+                  "skill_level_id": 2,
+                  "skill_type_id": 1001
+                }
+              ]
+            ],
+            "name": "Rolle 1",
+            "no_of_recruitment": 3,
+            "payment_interval": "monthly"
+          },
+          {
+            "department_id": 1,
+            "job_skill_ids": [
+              [
+                0,
+                0,
+                {
+                  "skill_id": 1012,
+                  "skill_level_id": 2,
+                  "skill_type_id": 1001
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "skill_id": 1010,
+                  "skill_level_id": 3,
+                  "skill_type_id": 1001
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "skill_id": 1011,
+                  "skill_level_id": 2,
+                  "skill_type_id": 1001
+                }
+              ]
+            ],
+            "name": "Rolle 2",
+            "no_of_recruitment": 1,
+            "payment_interval": "monthly"
+          },
+          {
+            "department_id": 1,
+            "job_skill_ids": [
+              [
+                0,
+                0,
+                {
+                  "skill_id": 1013,
+                  "skill_level_id": 2,
+                  "skill_type_id": 1001
+                }
+              ]
+            ],
+            "name": "Rolle 3",
+            "no_of_recruitment": 3,
+            "payment_interval": "monthly"
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "search_read",
+      "hr.recruitment.stage",
+      [
+        []
+      ],
+      {
+        "fields": [
+          "id",
+          "name",
+          "sequence"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "search_read",
+      "hr.skill",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              1011
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "skill_type_id"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "search_read",
+      "hr.skill",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              1009,
+              1013,
+              1014
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "skill_type_id"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "search_read",
+      "hr.skill",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              1012
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "skill_type_id"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "search_read",
+      "hr.skill",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              1013,
+              1010
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "skill_type_id"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "search_read",
+      "hr.skill",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              1013
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "skill_type_id"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "create_batch",
+      "hr.applicant",
+      [
+        [
+          {
+            "applicant_skill_ids": [
+              [
+                0,
+                0,
+                {
+                  "skill_id": 1011,
+                  "skill_level_id": 2,
+                  "skill_type_id": 1001
+                }
+              ]
+            ],
+            "email_from": "person.1@example.com",
+            "job_id": 1015,
+            "partner_name": "Person 1",
+            "partner_phone": "+49 162 6215198",
+            "schedule_pay": "monthly",
+            "stage_id": 2
+          },
+          {
+            "applicant_skill_ids": [
+              [
+                0,
+                0,
+                {
+                  "skill_id": 1009,
+                  "skill_level_id": 2,
+                  "skill_type_id": 1001
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "skill_id": 1013,
+                  "skill_level_id": 2,
+                  "skill_type_id": 1001
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "skill_id": 1014,
+                  "skill_level_id": 3,
+                  "skill_type_id": 1001
+                }
+              ]
+            ],
+            "email_from": "person.2@example.com",
+            "job_id": 1015,
+            "partner_name": "Person 2",
+            "partner_phone": "+49 171 1299065",
+            "schedule_pay": "monthly",
+            "stage_id": 1
+          },
+          {
+            "applicant_skill_ids": [
+              [
+                0,
+                0,
+                {
+                  "skill_id": 1012,
+                  "skill_level_id": 3,
+                  "skill_type_id": 1001
+                }
+              ]
+            ],
+            "email_from": "person.3@example.com",
+            "job_id": 1016,
+            "partner_name": "Person 3",
+            "partner_phone": "+49 176 6925203",
+            "schedule_pay": "monthly",
+            "stage_id": 2
+          },
+          {
+            "applicant_skill_ids": [
+              [
+                0,
+                0,
+                {
+                  "skill_id": 1013,
+                  "skill_level_id": 3,
+                  "skill_type_id": 1001
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "skill_id": 1010,
+                  "skill_level_id": 2,
+                  "skill_type_id": 1001
+                }
+              ]
+            ],
+            "email_from": "person.4@example.com",
+            "job_id": 1016,
+            "partner_name": "Person 4",
+            "partner_phone": "+49 169 2988726",
+            "schedule_pay": "monthly",
+            "stage_id": 1
+          },
+          {
+            "applicant_skill_ids": [
+              [
+                0,
+                0,
+                {
+                  "skill_id": 1013,
+                  "skill_level_id": 2,
+                  "skill_type_id": 1001
+                }
+              ]
+            ],
+            "email_from": "person.5@example.com",
+            "job_id": 1017,
+            "partner_name": "Person 5",
+            "partner_phone": "+49 164 5133580",
+            "schedule_pay": "monthly",
+            "stage_id": 1
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ]
+  ],
+  "mrp": [
+    [
+      "create_batch",
+      "product.product",
+      [
+        [
+          {
+            "list_price": 945.3,
+            "name": "Produkt 6",
+            "purchase_ok": false,
+            "sale_ok": true,
+            "standard_price": 550.69,
+            "tracking": "none"
+          },
+          {
+            "list_price": 566.15,
+            "name": "Produkt 5",
+            "purchase_ok": false,
+            "sale_ok": true,
+            "standard_price": 305.98,
+            "tracking": "none"
+          },
+          {
+            "list_price": 591.85,
+            "name": "Produkt 7",
+            "purchase_ok": false,
+            "sale_ok": true,
+            "standard_price": 383.93,
+            "tracking": "none"
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "search_read",
+      "product.product",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              1001,
+              1002,
+              1003
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "product_tmpl_id"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "create_batch",
+      "product.product",
+      [
+        [
+          {
+            "is_storable": true,
+            "list_price": 270.76,
+            "name": "Produkt 6 Modul 1",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 164.93,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 451.01,
+            "name": "Produkt 6 Modul 2",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 297.28,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 257.76,
+            "name": "Produkt 6 Modul 3",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 136.01,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 389.46,
+            "name": "Produkt 6 Modul 4",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 260.95,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 211.25,
+            "name": "Produkt 5 Modul 1",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 126.84,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 310.69,
+            "name": "Produkt 5 Modul 2",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 161.87,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 271.53,
+            "name": "Produkt 5 Modul 3",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 133.93,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 84.63,
+            "name": "Produkt 5 Modul 4",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 42.82,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 112.61,
+            "name": "Produkt 7 Modul 1",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 53.37,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 127.1,
+            "name": "Produkt 7 Modul 2",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 83.32,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 266.87,
+            "name": "Produkt 7 Modul 3",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 180.55,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 246.33,
+            "name": "Produkt 7 Modul 4",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 143.12,
+            "tracking": "none"
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "search_read",
+      "product.product",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              1004,
+              1005,
+              1008,
+              1009,
+              1012,
+              1013
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "product_tmpl_id"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "create_batch",
+      "product.product",
+      [
+        [
+          {
+            "is_storable": true,
+            "list_price": 132.27,
+            "name": "Produkt 6 Modul 1 Rohteil 1",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 91.49,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 118.61,
+            "name": "Produkt 6 Modul 1 Rohteil 2",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 99.55,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 145.94,
+            "name": "Produkt 6 Modul 1 Rohteil 3",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 112.48,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 129.65,
+            "name": "Produkt 6 Modul 2 Rohteil 1",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 108.5,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 252.97,
+            "name": "Produkt 6 Modul 2 Rohteil 2",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 131.25,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 121.46,
+            "name": "Produkt 6 Modul 2 Rohteil 3",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 69.1,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 57.37,
+            "name": "Produkt 5 Modul 1 Rohteil 1",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 32.63,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 98.24,
+            "name": "Produkt 5 Modul 1 Rohteil 2",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 83.49,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 86.8,
+            "name": "Produkt 5 Modul 1 Rohteil 3",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 43.78,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 140.57,
+            "name": "Produkt 5 Modul 2 Rohteil 1",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 86.7,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 111.05,
+            "name": "Produkt 5 Modul 2 Rohteil 2",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 64.42,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 68.46,
+            "name": "Produkt 5 Modul 2 Rohteil 3",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 57.68,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 40.74,
+            "name": "Produkt 7 Modul 1 Rohteil 1",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 24.75,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 45.14,
+            "name": "Produkt 7 Modul 1 Rohteil 2",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 32.23,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 26.17,
+            "name": "Produkt 7 Modul 1 Rohteil 3",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 17.91,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 41.03,
+            "name": "Produkt 7 Modul 2 Rohteil 1",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 30.03,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 64.42,
+            "name": "Produkt 7 Modul 2 Rohteil 2",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 48.07,
+            "tracking": "none"
+          },
+          {
+            "is_storable": true,
+            "list_price": 57.65,
+            "name": "Produkt 7 Modul 2 Rohteil 3",
+            "purchase_ok": true,
+            "sale_ok": false,
+            "standard_price": 48.47,
+            "tracking": "none"
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "create_batch",
+      "mrp.bom",
+      [
+        [
+          {
+            "bom_line_ids": [
+              [
+                0,
+                0,
+                {
+                  "product_id": 1004,
+                  "product_qty": 1
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1005,
+                  "product_qty": 4
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1006,
+                  "product_qty": 3
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1007,
+                  "product_qty": 3
+                }
+              ]
+            ],
+            "code": "BOM-1001",
+            "product_id": 1001,
+            "product_qty": 1.0,
+            "product_tmpl_id": 1501,
+            "type": "normal"
+          },
+          {
+            "bom_line_ids": [
+              [
+                0,
+                0,
+                {
+                  "product_id": 1016,
+                  "product_qty": 1.52
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1017,
+                  "product_qty": 2.42
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1018,
+                  "product_qty": 2.9
+                }
+              ]
+            ],
+            "code": "SUB-1001-1",
+            "product_id": 1004,
+            "product_qty": 1.0,
+            "product_tmpl_id": 1504,
+            "type": "normal"
+          },
+          {
+            "bom_line_ids": [
+              [
+                0,
+                0,
+                {
+                  "product_id": 1019,
+                  "product_qty": 2.81
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1020,
+                  "product_qty": 1.63
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1021,
+                  "product_qty": 1.16
+                }
+              ]
+            ],
+            "code": "SUB-1001-2",
+            "product_id": 1005,
+            "product_qty": 1.0,
+            "product_tmpl_id": 1505,
+            "type": "normal"
+          },
+          {
+            "bom_line_ids": [
+              [
+                0,
+                0,
+                {
+                  "product_id": 1008,
+                  "product_qty": 4
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1009,
+                  "product_qty": 3
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1010,
+                  "product_qty": 1
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1011,
+                  "product_qty": 2
+                }
+              ]
+            ],
+            "code": "BOM-1002",
+            "product_id": 1002,
+            "product_qty": 1.0,
+            "product_tmpl_id": 1502,
+            "type": "normal"
+          },
+          {
+            "bom_line_ids": [
+              [
+                0,
+                0,
+                {
+                  "product_id": 1022,
+                  "product_qty": 1.85
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1023,
+                  "product_qty": 2.21
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1024,
+                  "product_qty": 2.76
+                }
+              ]
+            ],
+            "code": "SUB-1002-1",
+            "product_id": 1008,
+            "product_qty": 1.0,
+            "product_tmpl_id": 1508,
+            "type": "normal"
+          },
+          {
+            "bom_line_ids": [
+              [
+                0,
+                0,
+                {
+                  "product_id": 1025,
+                  "product_qty": 2.86
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1026,
+                  "product_qty": 1.86
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1027,
+                  "product_qty": 2.48
+                }
+              ]
+            ],
+            "code": "SUB-1002-2",
+            "product_id": 1009,
+            "product_qty": 1.0,
+            "product_tmpl_id": 1509,
+            "type": "normal"
+          },
+          {
+            "bom_line_ids": [
+              [
+                0,
+                0,
+                {
+                  "product_id": 1012,
+                  "product_qty": 2
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1013,
+                  "product_qty": 1
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1014,
+                  "product_qty": 4
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1015,
+                  "product_qty": 3
+                }
+              ]
+            ],
+            "code": "BOM-1003",
+            "product_id": 1003,
+            "product_qty": 1.0,
+            "product_tmpl_id": 1503,
+            "type": "normal"
+          },
+          {
+            "bom_line_ids": [
+              [
+                0,
+                0,
+                {
+                  "product_id": 1028,
+                  "product_qty": 1.76
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1029,
+                  "product_qty": 1.42
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1030,
+                  "product_qty": 2.31
+                }
+              ]
+            ],
+            "code": "SUB-1003-1",
+            "product_id": 1012,
+            "product_qty": 1.0,
+            "product_tmpl_id": 1512,
+            "type": "normal"
+          },
+          {
+            "bom_line_ids": [
+              [
+                0,
+                0,
+                {
+                  "product_id": 1031,
+                  "product_qty": 2.29
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1032,
+                  "product_qty": 1.53
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "product_id": 1033,
+                  "product_qty": 1.43
+                }
+              ]
+            ],
+            "code": "SUB-1003-2",
+            "product_id": 1013,
+            "product_qty": 1.0,
+            "product_tmpl_id": 1513,
+            "type": "normal"
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "search_read",
+      "res.company",
+      [
+        [
+          [
+            "id",
+            "=",
+            1
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id"
+        ],
+        "limit": 1
+      }
+    ],
+    [
+      "create_batch",
+      "mrp.workcenter",
+      [
+        [
+          {
+            "code": "ITSTATIO",
+            "company_id": 1,
+            "costs_hour": 63.38,
+            "name": "IT Station 1",
+            "sequence": 10,
+            "time_efficiency": 84.8,
+            "time_start": 9.3,
+            "time_stop": 6.26
+          },
+          {
+            "code": "ITSTATIO",
+            "company_id": 1,
+            "costs_hour": 74.89,
+            "name": "IT Station 2",
+            "sequence": 20,
+            "time_efficiency": 99.78,
+            "time_start": 8.34,
+            "time_stop": 8.12
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "create_batch",
+      "mrp.routing.workcenter",
+      [
+        [
+          {
+            "bom_id": 1034,
+            "name": "Qualitaetskontrolle",
+            "sequence": 10,
+            "time_cycle_manual": 39.13,
+            "workcenter_id": 1044
+          },
+          {
+            "bom_id": 1034,
+            "name": "Vorbereitung",
+            "sequence": 20,
+            "time_cycle_manual": 55.5,
+            "workcenter_id": 1044
+          },
+          {
+            "bom_id": 1034,
+            "name": "Vorbereitung",
+            "sequence": 30,
+            "time_cycle_manual": 63.1,
+            "workcenter_id": 1044
+          },
+          {
+            "bom_id": 1035,
+            "name": "Bearbeitung",
+            "sequence": 10,
+            "time_cycle_manual": 80.55,
+            "workcenter_id": 1044
+          },
+          {
+            "bom_id": 1035,
+            "name": "Vorbereitung",
+            "sequence": 20,
+            "time_cycle_manual": 83.79,
+            "workcenter_id": 1044
+          },
+          {
+            "bom_id": 1035,
+            "name": "Bearbeitung",
+            "sequence": 30,
+            "time_cycle_manual": 58.51,
+            "workcenter_id": 1043
+          },
+          {
+            "bom_id": 1036,
+            "name": "Vorbereitung",
+            "sequence": 10,
+            "time_cycle_manual": 43.91,
+            "workcenter_id": 1043
+          },
+          {
+            "bom_id": 1036,
+            "name": "Qualitaetskontrolle",
+            "sequence": 20,
+            "time_cycle_manual": 21.44,
+            "workcenter_id": 1044
+          },
+          {
+            "bom_id": 1036,
+            "name": "Qualitaetskontrolle",
+            "sequence": 30,
+            "time_cycle_manual": 15.22,
+            "workcenter_id": 1044
+          },
+          {
+            "bom_id": 1037,
+            "name": "Qualitaetskontrolle",
+            "sequence": 10,
+            "time_cycle_manual": 76.46,
+            "workcenter_id": 1044
+          },
+          {
+            "bom_id": 1037,
+            "name": "Bearbeitung",
+            "sequence": 20,
+            "time_cycle_manual": 89.74,
+            "workcenter_id": 1043
+          },
+          {
+            "bom_id": 1038,
+            "name": "Bearbeitung",
+            "sequence": 10,
+            "time_cycle_manual": 29.67,
+            "workcenter_id": 1044
+          },
+          {
+            "bom_id": 1038,
+            "name": "Bearbeitung",
+            "sequence": 20,
+            "time_cycle_manual": 23.53,
+            "workcenter_id": 1044
+          },
+          {
+            "bom_id": 1039,
+            "name": "Qualitaetskontrolle",
+            "sequence": 10,
+            "time_cycle_manual": 30.94,
+            "workcenter_id": 1043
+          },
+          {
+            "bom_id": 1039,
+            "name": "Qualitaetskontrolle",
+            "sequence": 20,
+            "time_cycle_manual": 39.63,
+            "workcenter_id": 1043
+          },
+          {
+            "bom_id": 1040,
+            "name": "Vorbereitung",
+            "sequence": 10,
+            "time_cycle_manual": 52.94,
+            "workcenter_id": 1044
+          },
+          {
+            "bom_id": 1040,
+            "name": "Qualitaetskontrolle",
+            "sequence": 20,
+            "time_cycle_manual": 65.37,
+            "workcenter_id": 1043
+          },
+          {
+            "bom_id": 1040,
+            "name": "Vorbereitung",
+            "sequence": 30,
+            "time_cycle_manual": 63.08,
+            "workcenter_id": 1044
+          },
+          {
+            "bom_id": 1041,
+            "name": "Vorbereitung",
+            "sequence": 10,
+            "time_cycle_manual": 83.64,
+            "workcenter_id": 1043
+          },
+          {
+            "bom_id": 1041,
+            "name": "Qualitaetskontrolle",
+            "sequence": 20,
+            "time_cycle_manual": 69.97,
+            "workcenter_id": 1043
+          },
+          {
+            "bom_id": 1041,
+            "name": "Bearbeitung",
+            "sequence": 30,
+            "time_cycle_manual": 84.79,
+            "workcenter_id": 1043
+          },
+          {
+            "bom_id": 1042,
+            "name": "Vorbereitung",
+            "sequence": 10,
+            "time_cycle_manual": 71.39,
+            "workcenter_id": 1043
+          },
+          {
+            "bom_id": 1042,
+            "name": "Qualitaetskontrolle",
+            "sequence": 20,
+            "time_cycle_manual": 18.17,
+            "workcenter_id": 1043
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "search_read",
+      "stock.picking.type",
+      [
+        [
+          [
+            "code",
+            "=",
+            "mrp_operation"
+          ],
+          [
+            "company_id",
+            "=",
+            1
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id"
+        ],
+        "limit": 1
+      }
+    ],
+    [
+      "create_batch",
+      "mrp.production",
+      [
+        [
+          {
+            "bom_id": 1041,
+            "company_id": 1,
+            "date_start": "<DATETIME>",
+            "product_id": 1012,
+            "product_qty": 34.0
+          },
+          {
+            "bom_id": 1040,
+            "company_id": 1,
+            "date_start": "<DATETIME>",
+            "product_id": 1003,
+            "product_qty": 48.0
+          },
+          {
+            "bom_id": 1038,
+            "company_id": 1,
+            "date_start": "<DATETIME>",
+            "product_id": 1008,
+            "product_qty": 25.0
+          },
+          {
+            "bom_id": 1034,
+            "company_id": 1,
+            "date_start": "<DATETIME>",
+            "product_id": 1001,
+            "product_qty": 49.0
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "call_method",
+      "mrp.production",
+      [
+        "action_confirm"
+      ],
+      {
+        "ids": [
+          1068,
+          1070,
+          1071
+        ],
+        "kwargs": null
+      }
+    ],
+    [
+      "search_read",
+      "quality.alert.team",
+      [
+        []
+      ],
+      {
+        "fields": [
+          "id"
+        ],
+        "limit": 1
+      }
+    ],
+    [
+      "search_read",
+      "quality.point.test_type",
+      [
+        []
+      ],
+      {
+        "fields": [
+          "id"
+        ],
+        "limit": 1
+      }
+    ],
+    [
+      "create_batch",
+      "quality.point",
+      [
+        [
+          {
+            "apply_to": "products",
+            "company_id": 1,
+            "name": "QP-BOM-1034",
+            "picking_type_ids": [
+              [
+                4,
+                77
+              ]
+            ],
+            "product_ids": [
+              [
+                6,
+                0,
+                [
+                  1001
+                ]
+              ]
+            ],
+            "team_id": 9,
+            "test_report_type": "pdf",
+            "test_type_id": 8
+          },
+          {
+            "apply_to": "products",
+            "company_id": 1,
+            "name": "QP-BOM-1035",
+            "picking_type_ids": [
+              [
+                4,
+                77
+              ]
+            ],
+            "product_ids": [
+              [
+                6,
+                0,
+                [
+                  1004
+                ]
+              ]
+            ],
+            "team_id": 9,
+            "test_report_type": "pdf",
+            "test_type_id": 8
+          },
+          {
+            "apply_to": "products",
+            "company_id": 1,
+            "name": "QP-BOM-1036",
+            "picking_type_ids": [
+              [
+                4,
+                77
+              ]
+            ],
+            "product_ids": [
+              [
+                6,
+                0,
+                [
+                  1005
+                ]
+              ]
+            ],
+            "team_id": 9,
+            "test_report_type": "pdf",
+            "test_type_id": 8
+          },
+          {
+            "apply_to": "products",
+            "company_id": 1,
+            "name": "QP-BOM-1037",
+            "picking_type_ids": [
+              [
+                4,
+                77
+              ]
+            ],
+            "product_ids": [
+              [
+                6,
+                0,
+                [
+                  1002
+                ]
+              ]
+            ],
+            "team_id": 9,
+            "test_report_type": "pdf",
+            "test_type_id": 8
+          },
+          {
+            "apply_to": "products",
+            "company_id": 1,
+            "name": "QP-BOM-1038",
+            "picking_type_ids": [
+              [
+                4,
+                77
+              ]
+            ],
+            "product_ids": [
+              [
+                6,
+                0,
+                [
+                  1008
+                ]
+              ]
+            ],
+            "team_id": 9,
+            "test_report_type": "pdf",
+            "test_type_id": 8
+          },
+          {
+            "apply_to": "products",
+            "company_id": 1,
+            "name": "QP-BOM-1039",
+            "picking_type_ids": [
+              [
+                4,
+                77
+              ]
+            ],
+            "product_ids": [
+              [
+                6,
+                0,
+                [
+                  1009
+                ]
+              ]
+            ],
+            "team_id": 9,
+            "test_report_type": "pdf",
+            "test_type_id": 8
+          },
+          {
+            "apply_to": "products",
+            "company_id": 1,
+            "name": "QP-BOM-1040",
+            "picking_type_ids": [
+              [
+                4,
+                77
+              ]
+            ],
+            "product_ids": [
+              [
+                6,
+                0,
+                [
+                  1003
+                ]
+              ]
+            ],
+            "team_id": 9,
+            "test_report_type": "pdf",
+            "test_type_id": 8
+          },
+          {
+            "apply_to": "products",
+            "company_id": 1,
+            "name": "QP-BOM-1041",
+            "picking_type_ids": [
+              [
+                4,
+                77
+              ]
+            ],
+            "product_ids": [
+              [
+                6,
+                0,
+                [
+                  1012
+                ]
+              ]
+            ],
+            "team_id": 9,
+            "test_report_type": "pdf",
+            "test_type_id": 8
+          },
+          {
+            "apply_to": "products",
+            "company_id": 1,
+            "name": "QP-BOM-1042",
+            "picking_type_ids": [
+              [
+                4,
+                77
+              ]
+            ],
+            "product_ids": [
+              [
+                6,
+                0,
+                [
+                  1013
+                ]
+              ]
+            ],
+            "team_id": 9,
+            "test_report_type": "pdf",
+            "test_type_id": 8
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "create_batch",
+      "quality.check",
+      [
+        [
+          {
+            "company_id": 1,
+            "point_id": 1079,
+            "product_id": 1012,
+            "production_id": 1068,
+            "team_id": 9,
+            "test_type_id": 8
+          },
+          {
+            "company_id": 1,
+            "point_id": 1076,
+            "product_id": 1008,
+            "production_id": 1070,
+            "team_id": 9,
+            "test_type_id": 8
+          },
+          {
+            "company_id": 1,
+            "point_id": 1072,
+            "product_id": 1001,
+            "production_id": 1071,
+            "team_id": 9,
+            "test_type_id": 8
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "call_method",
+      "quality.check",
+      [
+        "do_pass"
+      ],
+      {
+        "ids": [
+          1081,
+          1082,
+          1083
+        ],
+        "kwargs": null
+      }
+    ]
+  ],
+  "purchase_analytic": [
+    [
+      "search_read",
+      "res.company",
+      [
+        [
+          [
+            "id",
+            "=",
+            1
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id"
+        ],
+        "limit": 1
+      }
+    ],
+    [
+      "search_read",
+      "stock.warehouse",
+      [
+        [
+          [
+            "company_id",
+            "=",
+            1
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "lot_stock_id",
+          "in_type_id"
+        ],
+        "limit": 1
+      }
+    ],
+    [
+      "search_read",
+      "res.company",
+      [
+        [
+          [
+            "id",
+            "=",
+            1
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "currency_id"
+        ],
+        "limit": 1
+      }
+    ],
+    [
+      "search_read",
+      "product.product",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              21,
+              22,
+              23
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "name",
+          "standard_price",
+          "list_price"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "create",
+      "account.analytic.plan",
+      [
+        {
+          "name": "Kostenstellen"
+        }
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "create_batch",
+      "account.analytic.account",
+      [
+        [
+          {
+            "name": "Vertrieb",
+            "plan_id": 1001
+          },
+          {
+            "name": "Produktion",
+            "plan_id": 1001
+          },
+          {
+            "name": "Verwaltung",
+            "plan_id": 1001
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "create_batch",
+      "purchase.order",
+      [
+        [
+          {
+            "company_id": 1,
+            "currency_id": 3,
+            "date_order": "<DATETIME>",
+            "document_tax_mode": "tax_excluded",
+            "order_line": [
+              [
+                0,
+                0,
+                {
+                  "analytic_distribution": {
+                    "1002": 100.0
+                  },
+                  "name": "PO line 23",
+                  "price_unit": 33.0,
+                  "product_id": 23,
+                  "product_qty": 3
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "name": "PO line 22",
+                  "price_unit": 32.0,
+                  "product_id": 22,
+                  "product_qty": 3
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "analytic_distribution": {
+                    "1004": 100.0
+                  },
+                  "name": "PO line 21",
+                  "price_unit": 31.0,
+                  "product_id": 21,
+                  "product_qty": 3
+                }
+              ]
+            ],
+            "partner_id": 51,
+            "picking_type_id": 2
+          },
+          {
+            "company_id": 1,
+            "currency_id": 3,
+            "date_order": "<DATETIME>",
+            "document_tax_mode": "tax_excluded",
+            "order_line": [
+              [
+                0,
+                0,
+                {
+                  "name": "PO line 23",
+                  "price_unit": 33.0,
+                  "product_id": 23,
+                  "product_qty": 3
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "name": "PO line 21",
+                  "price_unit": 31.0,
+                  "product_id": 21,
+                  "product_qty": 4
+                }
+              ]
+            ],
+            "partner_id": 52,
+            "picking_type_id": 2
+          },
+          {
+            "company_id": 1,
+            "currency_id": 3,
+            "date_order": "<DATETIME>",
+            "document_tax_mode": "tax_excluded",
+            "order_line": [
+              [
+                0,
+                0,
+                {
+                  "name": "PO line 23",
+                  "price_unit": 33.0,
+                  "product_id": 23,
+                  "product_qty": 3
+                }
+              ]
+            ],
+            "partner_id": 51,
+            "picking_type_id": 2
+          },
+          {
+            "company_id": 1,
+            "currency_id": 3,
+            "date_order": "<DATETIME>",
+            "document_tax_mode": "tax_excluded",
+            "order_line": [
+              [
+                0,
+                0,
+                {
+                  "name": "PO line 22",
+                  "price_unit": 32.0,
+                  "product_id": 22,
+                  "product_qty": 3
+                }
+              ],
+              [
+                0,
+                0,
+                {
+                  "name": "PO line 23",
+                  "price_unit": 33.0,
+                  "product_id": 23,
+                  "product_qty": 4
+                }
+              ]
+            ],
+            "partner_id": 52,
+            "picking_type_id": 2
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "call_method",
+      "purchase.order",
+      [
+        "button_confirm"
+      ],
+      {
+        "ids": [
+          1005,
+          1008,
+          1006
+        ],
+        "kwargs": null
+      }
+    ],
+    [
+      "call_method",
+      "purchase.order",
+      [
+        "action_create_invoice"
+      ],
+      {
+        "ids": [
+          1005
+        ],
+        "kwargs": null
+      }
+    ],
+    [
+      "search_read",
+      "purchase.order",
+      [
+        [
+          [
+            "id",
+            "=",
+            1005
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "invoice_ids"
+        ],
+        "limit": 1
+      }
+    ],
+    [
+      "write",
+      "account.move",
+      [
+        [
+          6005
+        ],
+        {
+          "invoice_date": "<DATE>"
+        }
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "call_method",
+      "purchase.order",
+      [
+        "action_create_invoice"
+      ],
+      {
+        "ids": [
+          1008
+        ],
+        "kwargs": null
+      }
+    ],
+    [
+      "search_read",
+      "purchase.order",
+      [
+        [
+          [
+            "id",
+            "=",
+            1008
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "invoice_ids"
+        ],
+        "limit": 1
+      }
+    ],
+    [
+      "write",
+      "account.move",
+      [
+        [
+          6008
+        ],
+        {
+          "invoice_date": "<DATE>"
+        }
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "call_method",
+      "purchase.order",
+      [
+        "action_create_invoice"
+      ],
+      {
+        "ids": [
+          1006
+        ],
+        "kwargs": null
+      }
+    ],
+    [
+      "search_read",
+      "purchase.order",
+      [
+        [
+          [
+            "id",
+            "=",
+            1006
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "invoice_ids"
+        ],
+        "limit": 1
+      }
+    ],
+    [
+      "write",
+      "account.move",
+      [
+        [
+          6006
+        ],
+        {
+          "invoice_date": "<DATE>"
+        }
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "call_method",
+      "account.move",
+      [
+        "action_post"
+      ],
+      {
+        "ids": [
+          6005,
+          6008,
+          6006
+        ],
+        "kwargs": null
+      }
+    ]
+  ],
+  "sale_analytic": [
+    [
+      "search_read",
+      "product.product",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              10,
+              11,
+              12
+            ]
+          ],
+          [
+            "sale_ok",
+            "=",
+            true
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "create",
+      "sale.order",
+      [
+        {
+          "order_line": [
+            [
+              0,
+              0,
+              {
+                "product_id": 12,
+                "product_uom_qty": 3
+              }
+            ],
+            [
+              0,
+              0,
+              {
+                "product_id": 11,
+                "product_uom_qty": 4
+              }
+            ],
+            [
+              0,
+              0,
+              {
+                "product_id": 10,
+                "product_uom_qty": 3
+              }
+            ]
+          ],
+          "partner_id": 1
+        }
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "create",
+      "sale.order",
+      [
+        {
+          "order_line": [
+            [
+              0,
+              0,
+              {
+                "product_id": 11,
+                "product_uom_qty": 3
+              }
+            ],
+            [
+              0,
+              0,
+              {
+                "product_id": 10,
+                "product_uom_qty": 1
+              }
+            ]
+          ],
+          "partner_id": 2
+        }
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "create",
+      "sale.order",
+      [
+        {
+          "order_line": [
+            [
+              0,
+              0,
+              {
+                "product_id": 12,
+                "product_uom_qty": 1
+              }
+            ],
+            [
+              0,
+              0,
+              {
+                "product_id": 11,
+                "product_uom_qty": 5
+              }
+            ]
+          ],
+          "partner_id": 1
+        }
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "create",
+      "sale.order",
+      [
+        {
+          "order_line": [
+            [
+              0,
+              0,
+              {
+                "product_id": 12,
+                "product_uom_qty": 4
+              }
+            ],
+            [
+              0,
+              0,
+              {
+                "product_id": 11,
+                "product_uom_qty": 3
+              }
+            ],
+            [
+              0,
+              0,
+              {
+                "product_id": 10,
+                "product_uom_qty": 1
+              }
+            ]
+          ],
+          "partner_id": 2
+        }
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "create",
+      "sale.order",
+      [
+        {
+          "order_line": [
+            [
+              0,
+              0,
+              {
+                "product_id": 12,
+                "product_uom_qty": 4
+              }
+            ],
+            [
+              0,
+              0,
+              {
+                "product_id": 10,
+                "product_uom_qty": 2
+              }
+            ]
+          ],
+          "partner_id": 1
+        }
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "create",
+      "sale.order",
+      [
+        {
+          "order_line": [
+            [
+              0,
+              0,
+              {
+                "product_id": 11,
+                "product_uom_qty": 5
+              }
+            ]
+          ],
+          "partner_id": 2
+        }
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "search_read",
+      "crm.lead",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              401,
+              402
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "partner_id"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "write",
+      "sale.order",
+      [
+        [
+          1001
+        ],
+        {
+          "opportunity_id": 401
+        }
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "write",
+      "sale.order",
+      [
+        [
+          1002
+        ],
+        {
+          "opportunity_id": 402
+        }
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "call_method",
+      "sale.order",
+      [
+        "action_confirm"
+      ],
+      {
+        "ids": [
+          1001,
+          1002,
+          1003
+        ],
+        "kwargs": null
+      }
+    ],
+    [
+      "search_read",
+      "sale.order",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              1001,
+              1002,
+              1003
+            ]
+          ],
+          [
+            "state",
+            "in",
+            [
+              "sale",
+              "done"
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "name"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "search_read",
+      "crm.stage",
+      [
+        []
+      ],
+      {
+        "fields": [
+          "id",
+          "name"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "search_read",
+      "sale.order",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              1001,
+              1002,
+              1003
+            ]
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "opportunity_id"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "write",
+      "crm.lead",
+      [
+        [
+          401,
+          401,
+          401
+        ],
+        {
+          "stage_id": 5
+        }
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "create",
+      "account.analytic.plan",
+      [
+        {
+          "name": "Kostenstellen"
+        }
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "create_batch",
+      "account.analytic.account",
+      [
+        [
+          {
+            "name": "Vertrieb",
+            "plan_id": 1007
+          },
+          {
+            "name": "Produktion",
+            "plan_id": 1007
+          },
+          {
+            "name": "Verwaltung",
+            "plan_id": 1007
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "search_read",
+      "sale.order.line",
+      [
+        [
+          [
+            "order_id",
+            "in",
+            [
+              1001,
+              1002,
+              1003
+            ]
+          ],
+          [
+            "analytic_distribution",
+            "=",
+            false
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "write",
+      "sale.order.line",
+      [
+        [
+          608,
+          605,
+          603,
+          602
+        ],
+        {
+          "analytic_distribution": {
+            "1010": 100.0
+          }
+        }
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "write",
+      "sale.order.line",
+      [
+        [
+          601
+        ],
+        {
+          "analytic_distribution": {
+            "1008": 100.0
+          }
+        }
+      ],
+      {
+        "context": null
+      }
+    ]
+  ],
+  "stock": [
+    [
+      "search_read",
+      "res.company",
+      [
+        [
+          [
+            "id",
+            "=",
+            1
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id"
+        ],
+        "limit": 1
+      }
+    ],
+    [
+      "create",
+      "stock.warehouse",
+      [
+        {
+          "code": "WH29737",
+          "company_id": 1,
+          "name": "Lager 2 (9737)"
+        }
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "search_read",
+      "stock.warehouse",
+      [
+        [
+          [
+            "id",
+            "=",
+            1001
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "lot_stock_id"
+        ],
+        "limit": 1
+      }
+    ],
+    [
+      "search_read",
+      "stock.warehouse",
+      [
+        [
+          [
+            "company_id",
+            "=",
+            1
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "lot_stock_id",
+          "in_type_id"
+        ],
+        "limit": 1
+      }
+    ],
+    [
+      "search_read",
+      "stock.location",
+      [
+        [
+          [
+            "barcode",
+            "!=",
+            false
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "barcode"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "create_batch",
+      "stock.location",
+      [
+        [
+          {
+            "barcode": "5992565463510",
+            "location_id": 1,
+            "name": "Regal A/Fach 1",
+            "usage": "internal"
+          },
+          {
+            "barcode": "6618566405913",
+            "location_id": 1,
+            "name": "Regal A/Fach 2",
+            "usage": "internal"
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "search_read",
+      "product.product",
+      [
+        [
+          [
+            "id",
+            "in",
+            [
+              1,
+              2,
+              3,
+              4,
+              5
+            ]
+          ],
+          [
+            "is_storable",
+            "=",
+            true
+          ]
+        ]
+      ],
+      {
+        "fields": [
+          "id",
+          "tracking"
+        ],
+        "limit": 0
+      }
+    ],
+    [
+      "create_batch",
+      "stock.lot",
+      [
+        [
+          {
+            "company_id": 1,
+            "name": "LOT-1-0000",
+            "product_id": 1
+          },
+          {
+            "company_id": 1,
+            "name": "LOT-2-0000",
+            "product_id": 2
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "create_batch",
+      "stock.quant",
+      [
+        [
+          {
+            "company_id": 1,
+            "in_date": "<DATETIME>",
+            "inventory_quantity": 25,
+            "location_id": 1002,
+            "product_id": 3
+          },
+          {
+            "company_id": 1,
+            "in_date": "<DATETIME>",
+            "inventory_quantity": 44,
+            "location_id": 1003,
+            "product_id": 4
+          },
+          {
+            "company_id": 1,
+            "in_date": "<DATETIME>",
+            "inventory_quantity": 29,
+            "location_id": 1,
+            "product_id": 5
+          },
+          {
+            "company_id": 1,
+            "in_date": "<DATETIME>",
+            "inventory_quantity": 40,
+            "location_id": 1,
+            "lot_id": 1004,
+            "product_id": 1
+          },
+          {
+            "company_id": 1,
+            "in_date": "<DATETIME>",
+            "inventory_quantity": 1,
+            "location_id": 88,
+            "lot_id": 1005,
+            "product_id": 2
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ],
+    [
+      "call_method",
+      "stock.quant",
+      [
+        "action_apply_inventory"
+      ],
+      {
+        "ids": [
+          1006,
+          1007,
+          1008,
+          1009,
+          1010
+        ],
+        "kwargs": null
+      }
+    ],
+    [
+      "create_batch",
+      "stock.warehouse.orderpoint",
+      [
+        [
+          {
+            "company_id": 1,
+            "location_id": 1,
+            "product_id": 1,
+            "product_max_qty": 19,
+            "product_min_qty": 7,
+            "trigger": "manual"
+          }
+        ]
+      ],
+      {
+        "context": null
+      }
+    ]
+  ]
+}

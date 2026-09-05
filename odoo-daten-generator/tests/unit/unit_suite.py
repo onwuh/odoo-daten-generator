@@ -11,7 +11,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from tests.unit import test_leave_helpers, test_hr_unit, test_guard_patterns, test_llm_service, test_odoo_actions_unit, test_project_unit, test_data_factory, test_recruiting_unit, test_logging_setup, test_orchestrator_unit, test_master_data_unit, test_crm_batch_unit, test_project_batch_unit, test_recruiting_batch_unit, test_mrp_batch_unit, test_accounting_batch_unit, test_sale_unit, test_hr_batch_unit, test_odoo_client_unit, test_documents_unit, test_purchase_unit, test_inventory_unit, test_expenses_unit, test_web_security_unit, test_web_api_unit, test_run_config_unit, test_run_journal_unit, test_web_feedback_unit
+from tests.unit import test_leave_helpers, test_hr_unit, test_guard_patterns, test_llm_service, test_odoo_actions_unit, test_project_unit, test_data_factory, test_recruiting_unit, test_logging_setup, test_orchestrator_unit, test_master_data_unit, test_crm_batch_unit, test_project_batch_unit, test_recruiting_batch_unit, test_mrp_batch_unit, test_accounting_batch_unit, test_sale_unit, test_hr_batch_unit, test_odoo_client_unit, test_documents_unit, test_purchase_unit, test_inventory_unit, test_expenses_unit, test_web_security_unit, test_web_api_unit, test_run_config_unit, test_run_journal_unit, test_web_feedback_unit, test_selection_snapshot_unit
 
 _MODULES = [
     ("leave_helpers",      test_leave_helpers.run),
@@ -42,6 +42,8 @@ _MODULES = [
     ("web_security_unit",  test_web_security_unit.run),
     ("web_api_unit",       test_web_api_unit.run),
     ("web_feedback_unit",  test_web_feedback_unit.run),
+    # S17-D9 safety net: frozen after WP1, never edited again this sprint.
+    ("selection_snapshot", test_selection_snapshot_unit.run),
 ]
 
 
