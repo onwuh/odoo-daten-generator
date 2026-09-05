@@ -126,6 +126,33 @@ def fetch_existing_data(client) -> tuple:
     )
 
 
+def fetch_existing_company_data(client, company_id: int) -> tuple:
+    """S16/D8b: partners/products already scoped to a specific res.company —
+    used when a company block requests target.reuse_master_data=True
+    against an existing target.company_id. Called from web/jobs.py's
+    per-company loop (after resolving that company's id), never from
+    build_context_list (run_config.py is deliberately Odoo-call-free,
+    D10-Korrektur).
+
+    Filters purely by company_id, unlike fetch_existing_data above (which
+    filters res.partner on is_company+customer_rank — right for "find
+    Firma 1's own customer companies", wrong here: a prior run's
+    master_data.py write (D8-Ergänzung) sets company_id on every partner it
+    creates for a given company, contacts included, none of which
+    necessarily carry customer_rank>0 or is_company=True).
+    """
+    existing_partners = client.search_read(
+        'res.partner', [["company_id", "=", company_id]], fields=["id"], limit=0,
+    )
+    existing_products = client.search_read(
+        'product.product', [["company_id", "=", company_id]], fields=["id"], limit=500,
+    )
+    return (
+        [r["id"] for r in existing_partners],
+        [r["id"] for r in existing_products],
+    )
+
+
 def detect_provider(llm_key: str, explicit: Optional[str] = None) -> str:
     if explicit in ("groq", "gemini"):
         return explicit

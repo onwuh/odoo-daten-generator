@@ -447,6 +447,181 @@ def run():
     except Exception as e:
         results.append(("Pre-Flight-Zahlen sind rechnerisch korrekt", False, str(e)))
 
+    # ==================================================================
+    # S16/D6 — estimate_record_counts' company_label qualification,
+    # "Kostenstellen" excluded (D12: run-wide, not per-company)
+    # ==================================================================
+
+    try:
+        ctx, selected = _build(_FULL)
+        counts = run_config.estimate_record_counts(ctx, selected, company_label="Firma 1")
+        assert counts["Kontakte (Firma 1)"] == 2 * (1 + 1 + 1 + 0), counts
+        assert "Kontakte" not in counts, counts
+        assert counts["Kostenstellen"] == 3, counts  # unqualified, no "(Firma 1)" suffix
+        results.append(("estimate_record_counts: company_label qualifies every label except Kostenstellen", True, ""))
+    except Exception as e:
+        results.append(("estimate_record_counts: company_label qualifies every label except Kostenstellen", False, str(e)))
+
+    try:
+        ctx, selected = _build(_FULL)
+        counts = run_config.estimate_record_counts(ctx, selected)
+        assert "Kontakte" in counts and "Kontakte (Firma 1)" not in counts, counts
+        results.append(("estimate_record_counts: company_label omitted -> unqualified, unchanged", True, ""))
+    except Exception as e:
+        results.append(("estimate_record_counts: company_label omitted -> unqualified, unchanged", False, str(e)))
+
+    # ==================================================================
+    # S16/D11 — _as_list, _validate_target, build_context_list
+    # ==================================================================
+
+    try:
+        try:
+            run_config._as_list({"not": "a list"}, "companies")
+            raised = False
+        except run_config.ConfigError:
+            raised = True
+        assert raised, "expected ConfigError for a non-list value"
+        results.append(("_as_list: non-list value -> ConfigError", True, ""))
+    except AssertionError as e:
+        results.append(("_as_list: non-list value -> ConfigError", False, str(e)))
+
+    try:
+        try:
+            run_config._as_list([], "companies")
+            raised = False
+        except run_config.ConfigError:
+            raised = True
+        assert raised, "expected ConfigError for an empty list (min_len=1 default)"
+        results.append(("_as_list: empty list -> ConfigError (min_len default)", True, ""))
+    except AssertionError as e:
+        results.append(("_as_list: empty list -> ConfigError (min_len default)", False, str(e)))
+
+    try:
+        try:
+            run_config._as_list(list(range(run_config.MAX_COMPANIES + 1)), "companies")
+            raised = False
+        except run_config.ConfigError:
+            raised = True
+        assert raised, "expected ConfigError over the server-side cap"
+        results.append(("_as_list: over MAX_COMPANIES -> ConfigError (server-side cap, not UI-only)", True, ""))
+    except AssertionError as e:
+        results.append(("_as_list: over MAX_COMPANIES -> ConfigError (server-side cap, not UI-only)", False, str(e)))
+
+    try:
+        for bad_target, why in [
+            ({"mode": "bogus"}, "invalid mode"),
+            ({"mode": "new"}, "new without name/country"),
+            ({"mode": "new", "name": "X"}, "new without country"),
+            ({"mode": "new", "name": "X", "country": "FR"}, "country outside DACH"),
+            ({"mode": "existing"}, "existing without company_id"),
+        ]:
+            try:
+                run_config._validate_target(bad_target, 0)
+                raise AssertionError(f"expected ConfigError for {why}: {bad_target}")
+            except run_config.ConfigError:
+                pass
+        results.append(("_validate_target: every invalid shape raises ConfigError", True, ""))
+    except AssertionError as e:
+        results.append(("_validate_target: every invalid shape raises ConfigError", False, str(e)))
+
+    try:
+        # Valid shapes must NOT raise.
+        run_config._validate_target({"mode": "new", "name": "Musterfirma", "country": "DE"}, 0)
+        run_config._validate_target({"mode": "existing", "company_id": 7}, 1)
+        results.append(("_validate_target: valid new/existing shapes do not raise", True, ""))
+    except Exception as e:
+        results.append(("_validate_target: valid new/existing shapes do not raise", False, str(e)))
+
+    def _company_block(target, count=1):
+        # S16: a company block never carries the old top-level use_existing/
+        # existing_data_consent fields (superseded by target.reuse_master_data
+        # + the payload's own top-level existing_data_consent, injected by
+        # build_context_list) — _FULL sets both for the old single-company
+        # shape, so they're explicitly cleared here.
+        block = {
+            **_FULL,
+            "target": target,
+            "master_data": {**_FULL["master_data"], "num_companies": count},
+        }
+        block.pop("use_existing", None)
+        block.pop("existing_data_consent", None)
+        return block
+
+    def _build_list(companies, existing_consent=None):
+        payload = {"companies": companies}
+        if existing_consent is not None:
+            payload["existing_data_consent"] = existing_consent
+        return run_config.build_context_list(
+            payload,
+            language_name="German", language_code="de_DE", llm_model_name="m",
+            installed_modules=_ALL_INSTALLED, feature_flags={"crm_leads": True},
+        )
+
+    try:
+        companies = [
+            _company_block({"mode": "new", "name": "Firma A", "country": "DE"}),
+            _company_block({"mode": "existing", "company_id": 7}),
+        ]
+        results_list = _build_list(companies)
+        assert len(results_list) == 2, results_list
+        assert all(isinstance(ctx.module_selections, ModuleSelections) for ctx, _ in results_list)
+        results.append(("build_context_list: N blocks -> N independent (ctx, selected) results", True, ""))
+    except AssertionError as e:
+        results.append(("build_context_list: N blocks -> N independent (ctx, selected) results", False, str(e)))
+
+    try:
+        # Each ctx is genuinely independent — no shared mutable state.
+        companies = [
+            _company_block({"mode": "new", "name": "A", "country": "DE"}, count=1),
+            _company_block({"mode": "new", "name": "B", "country": "AT"}, count=1),
+        ]
+        results_list = _build_list(companies)
+        (ctx1, _), (ctx2, _) = results_list
+        assert ctx1 is not ctx2
+        assert ctx1.company_ids is not ctx2.company_ids
+        results.append(("build_context_list: each company gets its own independent RunContext (D10)", True, ""))
+    except AssertionError as e:
+        results.append(("build_context_list: each company gets its own independent RunContext (D10)", False, str(e)))
+
+    try:
+        # Konsens-Entscheidung: reuse_master_data=True on ANY block requires
+        # top-level existing_data_consent=granted, even if that block itself
+        # carries no consent field.
+        companies = [_company_block({
+            "mode": "existing", "company_id": 7, "reuse_master_data": True,
+        })]
+        try:
+            _build_list(companies)  # no existing_data_consent at all
+            raised = False
+        except run_config.ConfigError:
+            raised = True
+        assert raised, "expected ConfigError: reuse requested without consent"
+        results.append(("build_context_list: reuse_master_data=True without top-level consent -> ConfigError", True, ""))
+    except AssertionError as e:
+        results.append(("build_context_list: reuse_master_data=True without top-level consent -> ConfigError", False, str(e)))
+
+    try:
+        # D11 Korrektur 5: the top-level consent must reach build_selections'
+        # crm_chatter.use_db_names, injected per block — this is the
+        # regression the cold review caught (consent silently dead).
+        companies = [_company_block({
+            "mode": "existing", "company_id": 7, "reuse_master_data": True,
+        })]
+        results_list = _build_list(companies, existing_consent="granted")
+        ctx, _ = results_list[0]
+        assert ctx.module_selections.crm_chatter.get("use_db_names") is True, ctx.module_selections.crm_chatter
+        results.append(("build_context_list: top-level consent reaches crm_chatter.use_db_names per block", True, ""))
+    except AssertionError as e:
+        results.append(("build_context_list: top-level consent reaches crm_chatter.use_db_names per block", False, str(e)))
+
+    try:
+        # No company requests reuse -> no consent needed at all, same as today.
+        companies = [_company_block({"mode": "new", "name": "A", "country": "DE"})]
+        _build_list(companies)  # must not raise
+        results.append(("build_context_list: no reuse requested anywhere -> consent not required", True, ""))
+    except Exception as e:
+        results.append(("build_context_list: no reuse requested anywhere -> consent not required", False, str(e)))
+
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results
 

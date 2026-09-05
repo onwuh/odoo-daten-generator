@@ -700,6 +700,30 @@ def run():
     except Exception as e:
         results.append(("CSP: default-src 'self', kein unsafe-inline", False, str(e)))
 
+    # ------------------------------------------------------------------
+    # S16/D8b: fetch_existing_company_data filters by company_id alone —
+    # NOT is_company/customer_rank like fetch_existing_data (Firma-1-shaped),
+    # since a prior run's master_data.py write (D8-Ergänzung) sets company_id
+    # on contacts too, none of which carry customer_rank>0/is_company=True.
+    # ------------------------------------------------------------------
+    try:
+        mock_client = MagicMock()
+        mock_client.search_read.side_effect = [
+            [{"id": 501}, {"id": 502}],  # res.partner
+            [{"id": 601}],               # product.product
+        ]
+        partner_ids, product_ids = connect_service.fetch_existing_company_data(mock_client, 7)
+        assert partner_ids == [501, 502], partner_ids
+        assert product_ids == [601], product_ids
+        partner_call, product_call = mock_client.search_read.call_args_list
+        assert partner_call.args[0] == 'res.partner', partner_call
+        assert partner_call.args[1] == [["company_id", "=", 7]], partner_call
+        assert product_call.args[0] == 'product.product', product_call
+        assert product_call.args[1] == [["company_id", "=", 7]], product_call
+        results.append(("fetch_existing_company_data: filters both models by company_id alone", True, ""))
+    except AssertionError as e:
+        results.append(("fetch_existing_company_data: filters both models by company_id alone", False, str(e)))
+
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results
 
