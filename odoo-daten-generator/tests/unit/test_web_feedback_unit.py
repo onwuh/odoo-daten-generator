@@ -73,7 +73,7 @@ def _fake_connect_result():
     result.model_access = {}
     result.blocked_modules = set()
     result.odoo_version = "saas-19.4"
-    result.existing_company_ids = []
+    result.existing_partner_company_ids = []
     result.existing_product_ids = []
     result.llm_provider = "groq"
     result.llm_model = "model"

@@ -238,7 +238,7 @@ class JobQueue:
                 installed_modules=connect.installed_modules,
                 feature_flags=connect.feature_flags,
                 model_access=connect.model_access,
-                existing_company_ids=connect.existing_company_ids,
+                existing_partner_company_ids=connect.existing_partner_company_ids,
                 existing_product_ids=connect.existing_product_ids,
             )
             contexts_and_selected = [(ctx, selected)]
@@ -487,7 +487,7 @@ class JobQueue:
                             # exists yet to find).
                             if target.get("reuse_master_data"):
                                 partner_ids, product_ids = fetch_existing_company_data(client, company_id)
-                                ctx.company_ids.extend(partner_ids)
+                                ctx.partner_company_ids.extend(partner_ids)
                                 ctx.product_ids.extend(product_ids)
                             # Step 6 (D12): seed this iteration's analytic-
                             # accounts cache from the run-wide shared cache.

@@ -189,7 +189,7 @@ def run(client, ctx):
             industry="Test", language_name="German", language_code="de_DE",
             gemini_model_name="test",
         )
-        b12_ctx.company_ids = [partner_id]
+        b12_ctx.partner_company_ids = [partner_id]
         b12_ctx.name_banks = {"opportunity_titles": ["B12 Test Opportunity"]}
 
         create_crm_data(client, None, b12_ctx)

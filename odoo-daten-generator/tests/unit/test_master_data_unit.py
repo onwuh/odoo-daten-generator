@@ -52,7 +52,7 @@ def run():
         master_data._create_partners(client, ctx, country_map={})
         assert client.create_batch.call_count == 2, client.create_batch.call_count
         assert client.create.call_count == 0, "fell back to per-record create()"
-        assert len(ctx.company_ids) == 5, ctx.company_ids
+        assert len(ctx.partner_company_ids) == 5, ctx.partner_company_ids
         results.append((
             "_create_partners: exactly 2 create_batch calls (companies, contacts)",
             True, f"create_batch calls={client.create_batch.call_count}",
@@ -62,13 +62,13 @@ def run():
 
     # ------------------------------------------------------------------
     # Pattern 1: num_companies=0 -> no batch calls made with non-empty payloads,
-    # no crash, ctx.company_ids stays empty.
+    # no crash, ctx.partner_company_ids stays empty.
     # ------------------------------------------------------------------
     try:
         client = _mock_client_for_batches()
         ctx = _make_ctx(num_companies=0)
         master_data._create_partners(client, ctx, country_map={})
-        assert ctx.company_ids == [], ctx.company_ids
+        assert ctx.partner_company_ids == [], ctx.partner_company_ids
         # create_batch may still be invoked with an empty list (client-level Pattern-1
         # guard already handles that); what matters is nothing crashes and no ids appear.
         for call in client.create_batch.call_args_list:

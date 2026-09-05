@@ -20,7 +20,7 @@ _TARGET_COUNTRIES = ["DE", "AT", "CH"]
 
 def create_master_data(client, gemini, ctx: RunContext, atoms: Dict[str, Any]) -> None:
     """Creates products (from atoms + fallback) and companies/contacts (from
-    ctx.name_banks + fallback). Writes ctx.product_ids and ctx.company_ids.
+    ctx.name_banks + fallback). Writes ctx.product_ids and ctx.partner_company_ids.
 
     Company/contact creation no longer depends on the LLM atoms call
     succeeding — only product names/descriptions degrade to static fallbacks
@@ -193,7 +193,7 @@ def _create_partners(client, ctx: RunContext, country_map: Dict[str, int]) -> No
         company_vals_list.append(vals)
 
     company_ids = client.create_batch('res.partner', company_vals_list)
-    ctx.company_ids.extend(company_ids)
+    ctx.partner_company_ids.extend(company_ids)
     for name, company_id in zip(company_names, company_ids):
         logger.info(f"   Partner erstellt: {name} (ID: {company_id})")
 

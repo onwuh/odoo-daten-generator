@@ -107,7 +107,12 @@ class RunContext:
     # Name banks from Gemini (product_names, employee_names, etc.)
     name_banks: Dict[str, List[str]] = field(default_factory=dict)
     # IDs created during the run (modules write here, subsequent modules read)
-    company_ids: List[int] = field(default_factory=list)
+    # Besitzer (4): master_data.py:196, orchestrator.py:149 (Fallback-Partner),
+    # run_config.py:533 (use_existing), web/jobs.py:490 (D8b, per-company fetch)
+    partner_company_ids: List[int] = field(default_factory=list)
+    # Besitzer (5): master_data.py:119, mrp.py:194 (Fertigprodukte),
+    # orchestrator.py:169 (Fallback), run_config.py:534 (use_existing),
+    # web/jobs.py:491 (D8b)
     product_ids: List[int] = field(default_factory=list)
     employee_ids: List[int] = field(default_factory=list)
     project_ids: List[int] = field(default_factory=list)
@@ -147,10 +152,12 @@ class RunContext:
     # generation scopes to these instead of scanning all posted moves in the
     # DB, so re-running the generator doesn't duplicate transactions (B4).
     invoice_ids: List[int] = field(default_factory=list)
+    # Besitzer (2): accounting.py:403, purchase.py:247
     bill_ids: List[int] = field(default_factory=list)
     applicant_ids: List[int] = field(default_factory=list)
     # Vendor partners (supplier_rank>0) created this run — shared between accounting.py's
     # standalone vendor bills and purchase.py's POs so both draw from the same supplier set.
+    # Besitzer (2): accounting.py:391, purchase.py:168
     supplier_ids: List[int] = field(default_factory=list)
     # Product ids master_data.py's _create_products created THIS run (S13/R13) —
     # distinct from product_ids, which also holds use_existing's pre-existing
@@ -169,9 +176,10 @@ class RunContext:
     # plain truthiness check on a bare list default can't tell those apart
     # and would retry (and duplicate the plan) on every subsequent call,
     # same reasoning as mrp.py's _get_company_id() wrapper-list memoization.
+    # Besitzer (2): odoo_actions.py:430/:435/:438, web/jobs.py:497
     analytic_account_ids: Optional[List[int]] = None
-    # S16/D2: the real res.company id this ctx is scoped to — disambiguated
-    # from company_ids above, which despite its name holds res.partner ids
+    # S16/D2: the real res.company id this ctx is scoped to — distinct from
+    # partner_company_ids above, which holds res.partner ids
     # (customer/company contacts from master_data.py), never a real
     # res.company id. Under D10 each RunContext is scoped to exactly one
     # company, populated by exactly one caller (web/jobs.py's per-company

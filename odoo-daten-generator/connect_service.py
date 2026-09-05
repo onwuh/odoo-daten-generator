@@ -68,10 +68,11 @@ class ConnectResult:
     # materially different risk than one actually verified clean.
     version_status: str = "unknown"
     field_warnings: List[str] = field(default_factory=list)
-    existing_company_ids: List[int] = field(default_factory=list)
+    existing_partner_company_ids: List[int] = field(default_factory=list)
     existing_product_ids: List[int] = field(default_factory=list)
     # S16/D8a: real res.company records, for the Firmenauswahl "existing
-    # company" picker — disjoint from existing_company_ids above (res.partner).
+    # company" picker — disjoint from existing_partner_company_ids above
+    # (res.partner).
     real_companies: List[Dict[str, Any]] = field(default_factory=list)
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
@@ -102,7 +103,9 @@ class ConnectResult:
             "odoo_version": self.odoo_version,
             "version_status": self.version_status,
             "field_warnings": self.field_warnings,
-            "existing_companies": len(self.existing_company_ids),
+            # Response-Key bleibt "existing_companies" (S17-D8): die Form von
+            # /api/connect ändert sich in diesem Sprint nicht.
+            "existing_companies": len(self.existing_partner_company_ids),
             "existing_products": len(self.existing_product_ids),
             "real_companies": self.real_companies,
             "llm_provider": self.llm_provider,
@@ -298,7 +301,7 @@ def probe(*, base_url: str, database: str, odoo_key: str,
         # -- Existing master data --
         try:
             c_ids, p_ids = fetch_existing_data(client)
-            result.existing_company_ids = c_ids
+            result.existing_partner_company_ids = c_ids
             result.existing_product_ids = p_ids
             detail = (f"{len(c_ids)} Kunden, {len(p_ids)} Produkte"
                       if (c_ids or p_ids) else "Keine vorhanden")

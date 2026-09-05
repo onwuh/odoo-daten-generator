@@ -129,7 +129,7 @@ def create_crm_data(client, gemini, ctx: RunContext) -> None:
     num_leads = ctx.module_selections.leads
     if num_opps <= 0 and num_leads <= 0:
         return
-    if not ctx.company_ids:
+    if not ctx.partner_company_ids:
         return
 
     opp_titles_bank = ctx.name_banks.get('opportunity_titles', []) or FALLBACK_OPPORTUNITY_TITLES
@@ -144,7 +144,7 @@ def create_crm_data(client, gemini, ctx: RunContext) -> None:
     # --- Opportunities ---
     if num_opps > 0:
         logger.info(f"\n--- CRM: Erstelle {num_opps} Opportunities ---")
-        partner_pool = _build_partner_pool(ctx.company_ids, num_opps)
+        partner_pool = _build_partner_pool(ctx.partner_company_ids, num_opps)
         opp_titles = _unique_titles(opp_titles_bank, num_opps)
         opp_vals_list = []
         opp_meta = []  # (partner_id, name, salesperson), same order as opp_vals_list
@@ -198,7 +198,7 @@ def create_crm_data(client, gemini, ctx: RunContext) -> None:
     if num_leads > 0:
         logger.info(f"\n--- CRM: Erstelle {num_leads} Leads ---")
         early_ids = _early_stages(all_stages)
-        partner_pool = _build_partner_pool(ctx.company_ids, num_leads)
+        partner_pool = _build_partner_pool(ctx.partner_company_ids, num_leads)
         lead_titles = _unique_titles(opp_titles_bank, num_leads)
         lead_vals_list = []
         for partner_id, name in zip(partner_pool, lead_titles):

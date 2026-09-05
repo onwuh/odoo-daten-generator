@@ -63,7 +63,7 @@ def _build(payload, installed=None, flags=None, model_access=None):
         installed_modules=installed if installed is not None else _ALL_INSTALLED,
         feature_flags=flags if flags is not None else {"crm_leads": True},
         model_access=model_access,
-        existing_company_ids=[101, 102], existing_product_ids=[201],
+        existing_partner_company_ids=[101, 102], existing_product_ids=[201],
     )
 
 
@@ -275,11 +275,11 @@ def run():
         payload = dict(_FULL, skip_master_data=True)
         ctx, selected = _build(payload)
         assert ctx.skip_master_data is True
-        assert ctx.company_ids == [101, 102] and ctx.product_ids == [201]
+        assert ctx.partner_company_ids == [101, 102] and ctx.product_ids == [201]
         assert "stammdaten" not in run_config.active_progress_keys(ctx, selected)
         no_existing = dict(_FULL, use_existing=False)
         ctx2, _ = _build(no_existing)
-        assert ctx2.company_ids == [] and ctx2.product_ids == []
+        assert ctx2.partner_company_ids == [] and ctx2.product_ids == []
         results.append(("skip_master_data / use_existing werden übernommen", True, ""))
     except Exception as e:
         results.append(("skip_master_data / use_existing werden übernommen", False, str(e)))
@@ -308,7 +308,7 @@ def run():
         granted = dict(_FULL, use_existing=True, existing_data_consent="granted")
         ctx, _ = _build(granted)
         assert ctx.module_selections.crm_chatter["use_db_names"] is True, ctx.module_selections.crm_chatter
-        assert ctx.company_ids == [101, 102], ctx.company_ids
+        assert ctx.partner_company_ids == [101, 102], ctx.partner_company_ids
 
         # Without existing data the question does not arise, and the chatter
         # prompt still gets generic placeholders rather than real names.
@@ -316,7 +316,7 @@ def run():
         without.pop("existing_data_consent", None)
         ctx2, _ = _build(without)
         assert ctx2.module_selections.crm_chatter["use_db_names"] is False, ctx2.module_selections.crm_chatter
-        assert ctx2.company_ids == [], ctx2.company_ids
+        assert ctx2.partner_company_ids == [], ctx2.partner_company_ids
         results.append(("Einwilligung: Zustimmung gibt DB-Namen frei, sonst nicht", True, ""))
     except Exception as e:
         results.append(("Einwilligung: Zustimmung gibt DB-Namen frei, sonst nicht", False, str(e)))
@@ -578,7 +578,7 @@ def run():
         results_list = _build_list(companies)
         (ctx1, _), (ctx2, _) = results_list
         assert ctx1 is not ctx2
-        assert ctx1.company_ids is not ctx2.company_ids
+        assert ctx1.partner_company_ids is not ctx2.partner_company_ids
         results.append(("build_context_list: each company gets its own independent RunContext (D10)", True, ""))
     except AssertionError as e:
         results.append(("build_context_list: each company gets its own independent RunContext (D10)", False, str(e)))

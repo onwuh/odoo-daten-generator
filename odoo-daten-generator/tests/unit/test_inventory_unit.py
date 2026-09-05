@@ -31,7 +31,7 @@ def _make_ctx(stock_sel=None, company_ids=None, product_ids=None, component_ids=
         module_selections=ModuleSelections(stock=stock_sel if stock_sel is not None else {"avg_qty": 20}),
         industry="IT", language_name="German", language_code="de", gemini_model_name="test",
     )
-    ctx.company_ids = company_ids if company_ids is not None else [10]
+    ctx.partner_company_ids = company_ids if company_ids is not None else [10]
     ctx.product_ids = product_ids if product_ids is not None else [1, 2]
     ctx.component_ids = component_ids if component_ids is not None else [3, 4]
     ctx.new_product_ids = new_product_ids if new_product_ids is not None else list(ctx.product_ids)
@@ -498,7 +498,7 @@ def run():
     # Befund 6/Pattern 5: an orderpoint-only run (avg_qty=0, empty
     # company_ids) must still create orderpoints — company_ids only gates
     # the quant/tracking branch, never orderpoints (company_id comes from
-    # get_main_company_id, not ctx.company_ids).
+    # get_main_company_id, not ctx.partner_company_ids).
     try:
         client = _mock_client(storable_products=[{"id": 1}])
         ctx = _make_ctx(stock_sel={"avg_qty": 0, "orderpoints_pct": 100},

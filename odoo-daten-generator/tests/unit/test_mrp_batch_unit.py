@@ -256,7 +256,7 @@ def run():
     # ------------------------------------------------------------------
     # S10/R10 (A6): company_id passed to mrp.workcenter must come from
     # odoo_actions.get_main_company_id(client) — a real res.company id — not
-    # ctx.company_ids[0], which holds res.partner ids (customer contacts).
+    # ctx.partner_company_ids[0], which holds res.partner ids (customer contacts).
     # ------------------------------------------------------------------
     try:
         client = _mock_client()
@@ -278,7 +278,7 @@ def run():
         ctx.feature_flags = {"mrp_routings": True}
         # A res.partner id, deliberately different from the res.company id
         # above — if the bug regressed, this is what would leak through.
-        ctx.company_ids = [42]
+        ctx.partner_company_ids = [42]
         with patch("modules.mrp.odoo_actions.create_product"):
             mrp.create_mrp_data(client, gemini=None, ctx=ctx)
         workcenter_creates = _workcenter_vals(client)
@@ -286,12 +286,12 @@ def run():
         sent_company_id = workcenter_creates[0].get("company_id")
         assert sent_company_id == 777, (
             f"A6 regressed: expected the real res.company id (777) via "
-            f"get_main_company_id, got {sent_company_id!r} (ctx.company_ids[0] would be 42)"
+            f"get_main_company_id, got {sent_company_id!r} (ctx.partner_company_ids[0] would be 42)"
         )
-        results.append(("create_mrp_data: mrp.workcenter.company_id uses get_main_company_id, not ctx.company_ids[0] (A6)",
+        results.append(("create_mrp_data: mrp.workcenter.company_id uses get_main_company_id, not ctx.partner_company_ids[0] (A6)",
                         True, f"company_id={sent_company_id}"))
     except AssertionError as e:
-        results.append(("create_mrp_data: mrp.workcenter.company_id uses get_main_company_id, not ctx.company_ids[0] (A6)",
+        results.append(("create_mrp_data: mrp.workcenter.company_id uses get_main_company_id, not ctx.partner_company_ids[0] (A6)",
                         False, str(e)))
 
     # ------------------------------------------------------------------

@@ -224,7 +224,7 @@ def run(client, ctx):
     # invoices instead of from-orders), read-back both.
     try:
         rctx = _make_rctx(num_invoices=4)
-        rctx.company_ids = [partner_id]
+        rctx.partner_company_ids = [partner_id]
         rctx.product_ids = [product_id]
         rctx.component_ids = [product_id]
         rctx.installed_modules = set()  # force standalone invoice path
@@ -257,7 +257,7 @@ def run(client, ctx):
     try:
         rctx = _make_rctx(num_invoices=4)
         rctx.module_selections.account_bills = 7
-        rctx.company_ids = [partner_id]
+        rctx.partner_company_ids = [partner_id]
         rctx.product_ids = [product_id]
         rctx.component_ids = [product_id]
         rctx.installed_modules = set()  # force standalone invoice path

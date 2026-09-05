@@ -45,7 +45,7 @@ def run(client, ctx):
         })
 
         rctx = _make_rctx()
-        rctx.company_ids = [partner_id]
+        rctx.partner_company_ids = [partner_id]
         rctx.product_ids = [product_id]
         rctx.module_selections.stock = {"avg_qty": 20}
 
@@ -76,7 +76,7 @@ def run(client, ctx):
     # Step 2 — Pattern 5: missing prerequisites (empty company_ids) -> graceful skip.
     try:
         skip_rctx = _make_rctx()
-        skip_rctx.company_ids = []
+        skip_rctx.partner_company_ids = []
         skip_rctx.product_ids = [product_id]
         skip_rctx.module_selections.stock = {"avg_qty": 20}
         before = client.search_read('stock.quant', [["product_id", "=", product_id]], fields=["id"], limit=0)
@@ -95,7 +95,7 @@ def run(client, ctx):
     # ------------------------------------------------------------------
     try:
         rctx = _make_rctx()
-        rctx.company_ids = [partner_id]
+        rctx.partner_company_ids = [partner_id]
         product_ids = []
         for i in range(4):
             product_ids.append(client.create('product.product', {
@@ -148,7 +148,7 @@ def run(client, ctx):
     # ------------------------------------------------------------------
     try:
         rctx = _make_rctx()
-        rctx.company_ids = [partner_id]
+        rctx.partner_company_ids = [partner_id]
         product_id = client.create('product.product', {
             "name": "S13 Second Warehouse Test", "type": "consu",
             "is_storable": True, "sale_ok": False, "purchase_ok": True,
@@ -196,7 +196,7 @@ def run(client, ctx):
     # ------------------------------------------------------------------
     try:
         rctx = _make_rctx()
-        rctx.company_ids = [partner_id]
+        rctx.partner_company_ids = [partner_id]
         lot_product_id = client.create('product.product', {
             "name": "S13 Lot Tracking Test", "type": "consu",
             "is_storable": True, "sale_ok": False, "purchase_ok": True,
@@ -257,7 +257,7 @@ def run(client, ctx):
     # ------------------------------------------------------------------
     try:
         rctx = _make_rctx()
-        rctx.company_ids = [partner_id]
+        rctx.partner_company_ids = [partner_id]
         op_product_id = client.create('product.product', {
             "name": "S14 Orderpoint Test", "type": "consu",
             "is_storable": True, "sale_ok": False, "purchase_ok": True,

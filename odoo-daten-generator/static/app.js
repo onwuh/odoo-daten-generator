@@ -816,7 +816,7 @@
   // is_company+customer_rank fetch). D11 superseded that mechanism with
   // target.reuse_master_data (D8b, scoped to one specific existing
   // res.company) — build_context_list deliberately never wires the old
-  // existing_company_ids/existing_product_ids kwargs, so the old checkbox
+  // existing_partner_company_ids/existing_product_ids kwargs, so the old checkbox
   // had gone silently inert while its own consent trigger stayed wired to
   // it. Consent now triggers off chk-target-reuse, the control that
   // actually reaches the server (run_config.build_context_list's

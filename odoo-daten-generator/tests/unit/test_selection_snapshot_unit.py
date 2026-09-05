@@ -3,7 +3,8 @@
 WHY THIS FILE EXISTS
 --------------------
 S17 rewrites 10 untyped `dict` fields of `ModuleSelections` into typed
-dataclasses (D5) and renames `RunContext.company_ids` (D16). That refactoring
+dataclasses (D5) and renames RunContext's `company_ids` field to
+`partner_company_ids` (D16). That refactoring
 also rewrites ~38 `ModuleSelections(...)` constructions and ~40 field
 assignments spread across 30 existing test files — so the existing suite is
 edited by the very diff it is supposed to validate and cannot vouch for it.
@@ -381,6 +382,11 @@ def _ctx(selections, **overrides):
         language_name="German", language_code="de", gemini_model_name="stub",
     )
     for key, value in overrides.items():
+        # RunContext is a dataclass without __slots__, so a stale fixture name
+        # would silently create a dead attribute and leave the real field
+        # empty — the module then skips and the golden reddens as if
+        # production were broken. Fail on the actual cause instead.
+        assert hasattr(ctx, key), f"RunContext hat kein Feld '{key}' — Fixture veraltet?"
         setattr(ctx, key, value)
     return ctx
 
@@ -451,7 +457,7 @@ def _search_inventory(model, domain, fields, limit):
 def _case_inventory():
     client, log = _recording_client(_search_inventory)
     ctx = _ctx(ModuleSelections(stock=dict(_STOCK_SEL)),
-               company_ids=[10, 11],
+               partner_company_ids=[10, 11],
                product_ids=[1, 2, 3],
                component_ids=[4, 5],
                new_product_ids=[1, 2, 3],
@@ -567,7 +573,7 @@ def _case_sale():
     ctx = _ctx(ModuleSelections(sale=6, sale_confirm_pct=50,
                                 analytic={"enabled": True, "sale_pct": 60,
                                           "purchase_pct": 40, "expense_pct": 30}),
-               company_ids=[1, 2],
+               partner_company_ids=[1, 2],
                product_ids=[10, 11, 12],
                opportunity_ids=[401, 402],
                installed_modules={"sale", "crm"})
@@ -608,7 +614,7 @@ def _case_purchase():
     ctx = _ctx(ModuleSelections(purchase=4, purchase_confirm_pct=75,
                                 analytic={"enabled": True, "sale_pct": 60,
                                           "purchase_pct": 45, "expense_pct": 30}),
-               company_ids=[10],
+               partner_company_ids=[10],
                component_ids=[21, 22, 23],
                supplier_ids=[51, 52],
                installed_modules={"purchase"})

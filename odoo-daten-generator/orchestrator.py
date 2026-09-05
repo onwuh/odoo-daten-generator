@@ -139,14 +139,14 @@ def _ensure_fallback_partners(client, ctx: RunContext) -> None:
         or ctx.module_selections.leads > 0
         or ctx.module_selections.account > 0
     )
-    if not needs or ctx.company_ids:
+    if not needs or ctx.partner_company_ids:
         return
     from fallback_data import FALLBACK_COMPANIES
     import random
     names = ctx.name_banks.get('company_names', []) or FALLBACK_COMPANIES
     logger.info("-> Erstelle Fallback-Partner")
     cid = client.create('res.partner', {"name": random.choice(names)})
-    ctx.company_ids.append(cid)
+    ctx.partner_company_ids.append(cid)
 
 
 def _ensure_fallback_products(client, ctx: RunContext) -> None:

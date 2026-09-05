@@ -137,11 +137,11 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
     if num_mrp_products <= 0:
         return
 
-    # A6/R10: lazy + memoized. ctx.company_ids holds res.partner ids (customer
-    # contacts from master_data.py), never a real res.company id — the
-    # long-masked bug both work-center and manufacturing-order creation used
-    # to have (a broad try/except turned a wrong id into a quiet skip, not a
-    # crash). get_main_company_id(client) is the real thing, but it's still one
+    # A6/R10: lazy + memoized. ctx.partner_company_ids holds res.partner ids
+    # (customer contacts from master_data.py), never a real res.company id —
+    # the long-masked bug both work-center and manufacturing-order creation
+    # used to have (a broad try/except turned a wrong id into a quiet skip, not
+    # a crash). get_main_company_id(client) is the real thing, but it's still one
     # extra request: lazy so a products/BOMs-only run (mrp_routings off, no
     # manufacturing orders requested) never pays for it, memoized so a run
     # that needs it for both sections below only pays once.

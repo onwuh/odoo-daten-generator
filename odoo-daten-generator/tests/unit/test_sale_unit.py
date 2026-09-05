@@ -24,7 +24,7 @@ def _make_ctx(num_orders, analytic=None):
         criteria=criteria, module_selections=ModuleSelections(**sel_kwargs), industry="IT",
         language_name="German", language_code="de", gemini_model_name="test",
     )
-    ctx.company_ids = [1, 2, 3]
+    ctx.partner_company_ids = [1, 2, 3]
     ctx.product_ids = [10, 11, 12]
     return ctx
 
@@ -121,7 +121,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(num_orders=1)
-        ctx.company_ids = [2]  # only company 2 gets an order this run
+        ctx.partner_company_ids = [2]  # only company 2 gets an order this run
         ctx.opportunity_ids = [500]
 
         def _search_read(model, domain=None, fields=None, limit=None, **kw):
@@ -151,7 +151,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(num_orders=1)
-        ctx.company_ids = [1]
+        ctx.partner_company_ids = [1]
         ctx.opportunity_ids = [500]
 
         def _search_read(model, domain=None, fields=None, limit=None, **kw):

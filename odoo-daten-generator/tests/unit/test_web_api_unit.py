@@ -48,7 +48,7 @@ def _fake_connect_result():
                            "purchase.order": True, "stock.quant": True}
     result.blocked_modules = set()
     result.odoo_version = "saas-19.4"
-    result.existing_company_ids = [1, 2, 3]
+    result.existing_partner_company_ids = [1, 2, 3]
     result.existing_product_ids = [10, 11]
     result.real_companies = [{"id": 1, "name": "Testfirma GmbH"}]
     result.llm_provider = "groq"

@@ -47,7 +47,7 @@ from tests.integration import (
 
 @dataclass
 class TestContext:
-    company_ids:       list = field(default_factory=list)
+    partner_company_ids: list = field(default_factory=list)
     product_ids:       list = field(default_factory=list)
     partner_ids:       list = field(default_factory=list)
     workcenter_ids:    list = field(default_factory=list)

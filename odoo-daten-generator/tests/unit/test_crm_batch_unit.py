@@ -23,7 +23,7 @@ def _make_ctx(num_opps=0, num_leads=0, company_ids=None):
         module_selections=ModuleSelections(crm=num_opps, leads=num_leads),
         industry="IT", language_name="German", language_code="de", gemini_model_name="test",
     )
-    ctx.company_ids = company_ids if company_ids is not None else [1, 2, 3]
+    ctx.partner_company_ids = company_ids if company_ids is not None else [1, 2, 3]
     return ctx
 
 

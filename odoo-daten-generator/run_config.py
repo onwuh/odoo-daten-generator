@@ -491,7 +491,7 @@ def build_context(payload: Dict[str, Any], *, language_name: str, language_code:
                   llm_model_name: str, installed_modules: Set[str],
                   feature_flags: Dict[str, bool],
                   model_access: Optional[Dict[str, bool]] = None,
-                  existing_company_ids=None, existing_product_ids=None) -> Tuple[RunContext, Set[str]]:
+                  existing_partner_company_ids=None, existing_product_ids=None) -> Tuple[RunContext, Set[str]]:
     """Assemble a RunContext from a validated request payload.
 
     `feature_flags` is not optional in practice: passing `{}` silently disables
@@ -530,7 +530,7 @@ def build_context(payload: Dict[str, Any], *, language_name: str, language_code:
     )
 
     if _as_bool(payload.get("use_existing")):
-        ctx.company_ids.extend(existing_company_ids or [])
+        ctx.partner_company_ids.extend(existing_partner_company_ids or [])
         ctx.product_ids.extend(existing_product_ids or [])
 
     ctx.skip_master_data = _as_bool(payload.get("skip_master_data"))
@@ -558,13 +558,13 @@ def build_context_list(payload: Dict[str, Any], *, language_name: str, language_
     res.company, or resolve an existing one) happens later, in
     web/jobs.py's per-company loop, where a JournalingClient actually
     exists to journal a newly created company for cleanup. This function
-    also does not merge existing-company data into ctx.company_ids/
-    product_ids — that "existing_company_ids"/"existing_product_ids"
+    also does not merge existing-company data into ctx.partner_company_ids/
+    product_ids — that "existing_partner_company_ids"/"existing_product_ids"
     mechanism on `build_context` is Firma-1-shaped and superseded here by
     D8b's per-company scoped fetch, called from the same later loop.
 
     Takes the same connection-level kwargs `build_context` does, minus
-    `existing_company_ids`/`existing_product_ids` (not applicable — see
+    `existing_partner_company_ids`/`existing_product_ids` (not applicable — see
     above) — one connect result applies identically to every company.
     """
     companies_raw = _as_list(payload.get("companies"), "companies")

@@ -50,8 +50,8 @@ def create_inventory_data(client, gemini, ctx: RunContext) -> None:
 
     logger.info("\n--- INVENTORY: Seede Lagerbestände ---")
 
-    # NOT ctx.company_ids[0] — despite the name, RunContext.company_ids holds
-    # res.partner ids (customer/company contacts), never a real res.company id.
+    # NOT ctx.partner_company_ids[0] — those are res.partner ids
+    # (customer/company contacts), never a real res.company id.
     company_id = odoo_actions.get_main_company_id(
         client, company_id=(ctx.res_company_ids[0] if ctx.res_company_ids else None))
     if not company_id:
@@ -95,11 +95,11 @@ def create_inventory_data(client, gemini, ctx: RunContext) -> None:
     # S14/Befund 6: this guard is a Pattern-5 proxy for the quant/tracking
     # branch only ("does this run have any customer contacts at all") — it
     # is not a real prerequisite for orderpoints, which never read
-    # ctx.company_ids (company_id comes from get_main_company_id above).
+    # ctx.partner_company_ids (company_id comes from get_main_company_id above).
     # Must not be a `return`: an orderpoint-only run (avg_qty=0 or empty
-    # company_ids, orderpoints_pct>0) must still reach the loop below.
-    seed_quants = avg_qty > 0 and bool(ctx.company_ids)
-    if avg_qty > 0 and not ctx.company_ids:
+    # partner_company_ids, orderpoints_pct>0) must still reach the loop below.
+    seed_quants = avg_qty > 0 and bool(ctx.partner_company_ids)
+    if avg_qty > 0 and not ctx.partner_company_ids:
         logger.info("-> Keine Firmen vorhanden — Bestands-Seeding übersprungen")
     if not seed_quants and orderpoints_pct <= 0:
         return

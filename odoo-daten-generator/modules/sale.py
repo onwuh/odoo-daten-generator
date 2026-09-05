@@ -45,7 +45,7 @@ def confirm_sale_orders(client, order_ids):
 def create_sale_data(client, gemini, ctx: RunContext) -> None:
     """Creates sale orders, confirms a subset, and moves linked opportunities to Won."""
     num_orders = ctx.module_selections.sale
-    if num_orders <= 0 or not ctx.company_ids:
+    if num_orders <= 0 or not ctx.partner_company_ids:
         return
 
     logger.info("\n--- SALES: Erstelle Verkaufsaufträge ---")
@@ -65,7 +65,7 @@ def create_sale_data(client, gemini, ctx: RunContext) -> None:
 
     order_partner_map = {}  # oid -> partner_id, for B14 partner-matched linking
     for i in range(num_orders):
-        cid = ctx.company_ids[i % len(ctx.company_ids)]
+        cid = ctx.partner_company_ids[i % len(ctx.partner_company_ids)]
         num_lines = random.randint(1, min(5, len(sellable_ids)))
         chosen = random.sample(sellable_ids, k=num_lines)
         lines = [(0, 0, {"product_id": pid, "product_uom_qty": random.randint(1, 5)}) for pid in chosen]

@@ -48,7 +48,7 @@ def run(client, ctx):
     # and real applicants (P2 prerequisite), same pattern test_accounting.py /
     # test_recruiting.py use to exercise their own module end-to-end.
     rctx = _make_rctx()
-    rctx.company_ids = [partner_id]
+    rctx.partner_company_ids = [partner_id]
     rctx.product_ids = [product_id]
     rctx.component_ids = [product_id]
     rctx.installed_modules = set()  # force standalone invoice path in accounting

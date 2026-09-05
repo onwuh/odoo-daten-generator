@@ -64,7 +64,7 @@ def run():
     try:
         client = _mock_client(product_price_rows=[{"id": 1, "standard_price": 10.0, "list_price": 20.0}])
         ctx = _make_ctx(num_invoices=6)  # standalone path: 'sale' not installed
-        ctx.company_ids = [1, 2]
+        ctx.partner_company_ids = [1, 2]
         ctx.product_ids = [1]
         accounting.create_accounting_data(client, gemini=None, ctx=ctx)
 
@@ -204,7 +204,7 @@ def run():
     try:
         client = _mock_client(product_price_rows=[{"id": 1, "standard_price": 10.0, "list_price": 20.0}])
         ctx = _make_ctx(num_invoices=1)
-        ctx.company_ids = [1]
+        ctx.partner_company_ids = [1]
         ctx.product_ids = [1]
         accounting.create_accounting_data(client, gemini=None, ctx=ctx)
         assert len(ctx.bill_ids) == 1, f"B7: expected 1 vendor bill for num_invoices=1, got {len(ctx.bill_ids)}"
@@ -220,7 +220,7 @@ def run():
         client = _mock_client(product_price_rows=[{"id": 1, "standard_price": 10.0, "list_price": 20.0}])
         ctx = _make_ctx(num_invoices=3)
         ctx.module_selections.account_bills = 25
-        ctx.company_ids = [1]
+        ctx.partner_company_ids = [1]
         ctx.product_ids = [1]
         accounting.create_accounting_data(client, gemini=None, ctx=ctx)
         assert len(ctx.bill_ids) == 25, f"B7: expected 25 vendor bills (override), got {len(ctx.bill_ids)}"
@@ -238,7 +238,7 @@ def run():
         client = _mock_client(product_price_rows=[{"id": 1, "standard_price": 10.0, "list_price": 20.0}])
         ctx = _make_ctx(num_invoices=3)
         ctx.module_selections.account_bills = 0
-        ctx.company_ids = [1]
+        ctx.partner_company_ids = [1]
         ctx.product_ids = [1]
         accounting.create_accounting_data(client, gemini=None, ctx=ctx)
         assert ctx.bill_ids == [], f"B7: expected no vendor bills, got {ctx.bill_ids}"
@@ -264,7 +264,7 @@ def run():
         ctx = _make_ctx(num_invoices=3)
         ctx.module_selections.account_bills = 0
         ctx.module_selections.create_bank_transactions = True
-        ctx.company_ids = [1]
+        ctx.partner_company_ids = [1]
         ctx.product_ids = [1]
         accounting.create_accounting_data(client, gemini=None, ctx=ctx)
         assert ctx.bill_ids == [], ctx.bill_ids
@@ -288,7 +288,7 @@ def run():
     try:
         client = _mock_client(product_price_rows=[{"id": 1, "standard_price": 10.0, "list_price": 20.0}])
         ctx = _make_ctx(num_invoices=3, installed_modules={"sale"})  # installed, but unselected this run
-        ctx.company_ids = [1]
+        ctx.partner_company_ids = [1]
         ctx.product_ids = [1]
         ctx.confirmed_order_ids = []  # sale module didn't run -> nothing confirmed
         accounting.create_accounting_data(client, gemini=None, ctx=ctx)
