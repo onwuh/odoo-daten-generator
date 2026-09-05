@@ -158,18 +158,6 @@
               <select id="f-target-existing"></select>
             </div>
             <label class="check-line"><input type="checkbox" id="chk-target-reuse"> Vorhandene Stammdaten dieser Firma wiederverwenden</label>
-          </div>
-        </div>
-
-        <div class="panel">
-          <h2>Modus</h2>
-          <div class="segmented" id="mode-segmented">
-            <button type="button" class="active" data-mode="master">Nur Stammdaten</button>
-            <button type="button" data-mode="both">Stammdaten + Bewegungsdaten</button>
-          </div>
-
-          <div class="mt-14">
-            <label class="check-line"><input type="checkbox" id="chk-use-existing"> Vorhandene Daten einbeziehen <span class="sub" id="existing-sub">(noch nicht geprüft)</span></label>
 
             <div class="note consent is-hidden" id="consent-block">
               <div>
@@ -182,6 +170,17 @@
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Modus</h2>
+          <div class="segmented" id="mode-segmented">
+            <button type="button" class="active" data-mode="master">Nur Stammdaten</button>
+            <button type="button" data-mode="both">Stammdaten + Bewegungsdaten</button>
+          </div>
+
+          <div class="mt-14">
 
             <label class="check-line"><input type="checkbox" id="chk-skip-master"> Keine neuen Stammdaten anlegen <span class="sub">(nur vorhandene verwenden)</span></label>
           </div>

@@ -151,28 +151,35 @@ def resolve_target_company(client, target: Dict[str, Any]) -> Tuple[int, bool]:
     safety property: existing companies must never become deletable by
     this tool, only ones it created itself.
 
-    No chart of accounts is loaded (R17 finding: cosmetic-only benefit,
-    real cleanup/portability cost — dropped from scope entirely). This is
-    WHY `country_id` is set via a separate write() AFTER create(), not in
-    the create() vals: live-confirmed this session that Odoo's own
-    res.company.create() override auto-provisions a FULL chart of accounts
-    the moment `country_id` is present in the creation vals (1312 accounts,
-    chart_template auto-picked) — but a write() of the same field right
-    after create() triggers nothing (0 accounts, chart_template stays
-    False). Same end state for the company record (country_id set,
-    satisfying the per-company country requirement) without the unwanted
-    side effect the architecture explicitly excluded.
+    S16/B2 (pre-merge cold review): loads a full chart of accounts for every
+    newly-created company. Setting `country_id` IN create()'s vals is what
+    triggers Odoo's own res.company.create() override to auto-provision one
+    — live-confirmed for all three target countries on demo-test5:
+    de_skr03/at/ch templates, 1312/245/246 accounts, and the full default
+    journal set (sale/purchase/bank/general x5) including a per-company bank
+    journal. This reverses the original R17 finding ("cosmetic-only benefit,
+    real cleanup cost — drop it") that WP4 initially carried forward: S16-NEU
+    requirement 7 ("die komplette bestehende Pipeline läuft pro Firma
+    erneut") needs a working chart of accounts for accounting/invoicing to
+    function at all against a new company, so the cleanup-residue cost is
+    accepted instead — same accepted-residue shape as D13's archive fallback
+    for res.company/stock.warehouse, just one step earlier.
+
+    country_id must be in the create() vals themselves (not a follow-up
+    write(), which was WP4's original approach specifically to AVOID this
+    side effect) — a write() after create() triggers nothing.
     """
     if target.get("mode") == "existing":
         return int(target["company_id"]), False
 
-    company_id = client.create('res.company', {"name": target["name"]})
+    vals = {"name": target["name"]}
     country_code = (target.get("country") or "").upper()
     if country_code:
         country_map = resolve_country_ids(client, [country_code])
         country_id = country_map.get(country_code)
         if country_id:
-            client.write('res.company', [company_id], {"country_id": country_id})
+            vals["country_id"] = country_id
+    company_id = client.create('res.company', vals)
     return company_id, True
 
 

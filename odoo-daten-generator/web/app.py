@@ -350,7 +350,27 @@ async def api_connect(request: Request, session=Depends(get_session_csrf)) -> Di
 async def api_create_run(request: Request, session=Depends(get_session_csrf)) -> JSONResponse:
     _connected(session)
     body = await request.json()
-    if body.get("skip_master_data") and not body.get("use_existing"):
+    if "companies" in body:
+        # S16/B4 (pre-merge cold review): the check below reads TOP-LEVEL
+        # skip_master_data/use_existing — meaningless for this shape, where
+        # both live per company block, and use_existing itself is superseded
+        # by target.reuse_master_data (D11/D8b; build_context_list never
+        # wires the old existing_company_ids/existing_product_ids kwargs).
+        # Without this, a block combining skip_master_data=True with a
+        # target that isn't an existing company with reuse requested got
+        # NO guard at all — silently ran with an empty pool instead of 400ing.
+        for index, block in enumerate(body.get("companies") or []):
+            if not isinstance(block, dict) or not block.get("skip_master_data"):
+                continue
+            target = block.get("target") or {}
+            if not (isinstance(target, dict) and target.get("mode") == "existing"
+                    and target.get("reuse_master_data")):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"companies[{index}]: 'skip_master_data' ohne bestehende Firma "
+                           "mit 'Vorhandene Stammdaten wiederverwenden' ergibt einen Lauf "
+                           "ohne Stammdaten — jedes Modul würde übersprungen.")
+    elif body.get("skip_master_data") and not body.get("use_existing"):
         # The browser forces use_existing on when skip_master_data is ticked; a
         # direct API call could ask for neither new master data nor existing IDs,
         # which leaves every module with an empty pool and Pattern-5-skips the

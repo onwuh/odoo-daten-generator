@@ -784,14 +784,32 @@ def multi_company_preview(contexts_and_selected: List[Tuple[RunContext, Set[str]
     Kept as one function so the two callers cannot silently drift apart on
     the merge rule for a shared label like "Kostenstellen" (D12: run-wide,
     kept only once, never summed).
+
+    S16/B1 (pre-merge cold review): key qualification and label qualification
+    are DIFFERENT decisions, gated on different things — conflating them into
+    one `multi` flag was the bug. web/jobs.py's `_execute()` dispatches to
+    the qualified-key branch whenever `targets is not None` (i.e. whenever
+    the caller sent the "companies" payload shape at all, regardless of
+    company count — see its own `if targets is None:` check). Gating key
+    qualification here on `len(...) > 1` instead meant a genuine 1-company
+    "companies" payload got UNqualified keys from this function while
+    _execute() published and looked up QUALIFIED ones — `record.modules`
+    then never matched, so every module silently reported "done" at the end
+    regardless of whether the run actually failed. Label qualification (the
+    cosmetic "(Firma 1)" suffix on record-estimate rows) has no such
+    constraint and can still skip itself for a single company.
     """
-    multi = labels is not None and len(contexts_and_selected) > 1
+    qualify_keys = labels is not None
+    qualify_labels = labels is not None and len(contexts_and_selected) > 1
     keys: List[str] = []
     estimate: Dict[str, int] = {}
     for index, (ctx, selected) in enumerate(contexts_and_selected):
         company_keys = active_progress_keys(ctx, selected)
-        if multi:
+        if qualify_keys:
             keys.extend(f"{index}:{key}" for key in company_keys)
+        else:
+            keys.extend(company_keys)
+        if qualify_labels:
             company_estimate = estimate_record_counts(ctx, selected, company_label=labels[index])
             for est_label, value in company_estimate.items():
                 if est_label == "Kostenstellen":
@@ -800,6 +818,5 @@ def multi_company_preview(contexts_and_selected: List[Tuple[RunContext, Set[str]
                 else:
                     estimate[est_label] = estimate.get(est_label, 0) + value
         else:
-            keys.extend(company_keys)
             estimate.update(estimate_record_counts(ctx, selected))
     return keys, estimate

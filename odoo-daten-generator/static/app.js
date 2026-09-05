@@ -21,8 +21,8 @@
     source: null,
     moduleRows: {},
     // S16: per-company config blocks. Each entry is a collectConfigBlock()
-    // shape ({target, mode, industry, use_existing, skip_master_data,
-    // master_data, modules}). The Konfiguration screen stays a single set of
+    // shape ({target, mode, industry, skip_master_data, master_data,
+    // modules}). The Konfiguration screen stays a single set of
     // DOM controls — switching tabs saves the active block's current DOM
     // state here, then writes the newly active block back into the same DOM.
     companies: [],
@@ -750,12 +750,29 @@
     },
   ];
 
+  // S16/S4 (pre-merge cold review): buildCard() pre-checks each module's own
+  // sensible default (installed + not blocked + defaultOn !== false) — but
+  // every company block starts from defaultCompanyBlock()'s modules:{},
+  // which restoreCompanyBlock() then applies by unchecking everything.
+  // Snapshotting the grid's own just-rendered defaults right here, once per
+  // connect, is what defaultCompanyBlock() hands back instead of a bare {}.
+  var defaultModuleSnapshot = {};
+
+  function captureDefaultModuleSnapshot() {
+    defaultModuleSnapshot = {};
+    MODULE_DEFS.forEach(function (def) {
+      var box = $("mod-" + def.key);
+      if (box && box.checked) defaultModuleSnapshot[def.key] = def.collect();
+    });
+  }
+
   function renderModuleGrid(installed, blocked) {
     var gridEl = $("module-grid");
     clear(gridEl);
     MODULE_DEFS.forEach(function (def) {
       gridEl.appendChild(buildCard(def, installed, blocked || []));
     });
+    captureDefaultModuleSnapshot();
     updateFuture();
     onConfigChanged();
   }
@@ -794,25 +811,33 @@
   });
 
   // ------------------------------------------------- existing-data consent
-  // Including existing records is the one setting that lets a value read out of
-  // the target database reach an LLM prompt: modules/crm.py's chatter prompt
-  // carries the customer's name and the salesperson's name. Everything else the
-  // pipeline sends is LLM-invented or was created by this run, and existing
-  // products are used as IDs only, never as text.
+  // S16/B4 (pre-merge cold review): this used to be driven by a top-level
+  // "Vorhandene Daten einbeziehen" checkbox (build_context's DB-wide
+  // is_company+customer_rank fetch). D11 superseded that mechanism with
+  // target.reuse_master_data (D8b, scoped to one specific existing
+  // res.company) — build_context_list deliberately never wires the old
+  // existing_company_ids/existing_product_ids kwargs, so the old checkbox
+  // had gone silently inert while its own consent trigger stayed wired to
+  // it. Consent now triggers off chk-target-reuse, the control that
+  // actually reaches the server (run_config.build_context_list's
+  // `reuse_requested = any(t.get("reuse_master_data") ...)`).
   //
-  // Declining is not just a UI state — it is passed to the server, which then
-  // sends "Kunde"/"Verkäufer" instead of the real names.
+  // Same privacy shape as before: modules/crm.py's chatter prompt carries
+  // the reused company's customer/salesperson name to the LLM provider.
+  // Declining is not just a UI state — it is passed to the server, which
+  // then sends "Kunde"/"Verkäufer" instead of the real names.
   var CONSENT_TEXT =
-    "„Vorhandene Daten einbeziehen“ verwendet Kontakte und Produkte, die bereits in der "
-    + "Zieldatenbank stehen. Für die Chatter-Konversationen wird dabei der Name des "
-    + "Kunden und der des zuständigen Benutzers an den LLM-Anbieter übermittelt, damit "
-    + "die Nachrichten die richtigen Personen ansprechen. Produkte, Beträge und alle "
-    + "übrigen Felder werden ausschließlich im Code verarbeitet und nie gesendet.\n\n"
-    + "Bei Ablehnung wird die Option abgewählt: der Lauf legt eigene Stammdaten an und "
-    + "die Konversationen sprechen neutral von „Kunde“ und „Verkäufer“.";
+    "„Vorhandene Stammdaten dieser Firma wiederverwenden“ verwendet Kontakte und Produkte, "
+    + "die für die gewählte bestehende Firma bereits in der Zieldatenbank stehen. Für die "
+    + "Chatter-Konversationen wird dabei der Name des Kunden und der des zuständigen "
+    + "Benutzers an den LLM-Anbieter übermittelt, damit die Nachrichten die richtigen "
+    + "Personen ansprechen. Produkte, Beträge und alle übrigen Felder werden ausschließlich "
+    + "im Code verarbeitet und nie gesendet.\n\n"
+    + "Bei Ablehnung wird die Option abgewählt: der Lauf legt eigene Stammdaten an und die "
+    + "Konversationen sprechen neutral von „Kunde“ und „Verkäufer“.";
 
   function updateConsentUi() {
-    var wanted = checked("chk-use-existing");
+    var wanted = checked("chk-target-reuse");
     setHidden("consent-block", !wanted || state.consent === "granted");
     setText("consent-detail", CONSENT_TEXT);
     var label = $("consent-state");
@@ -828,11 +853,10 @@
     }
   }
 
-  $("chk-use-existing").addEventListener("change", function () {
+  $("chk-target-reuse").addEventListener("change", function () {
     // Any change re-opens the question; a stale yes must not survive a toggle.
     state.consent = null;
     updateConsentUi();
-    onConfigChanged();
   });
 
   $("btn-consent-yes").addEventListener("click", function () {
@@ -842,7 +866,7 @@
 
   $("btn-consent-no").addEventListener("click", function () {
     state.consent = "denied";
-    $("chk-use-existing").checked = false;
+    $("chk-target-reuse").checked = false;
     // Declining also releases "keine neuen Stammdaten", which forces the option
     // back on — otherwise the two settings would fight each other.
     $("chk-skip-master").checked = false;
@@ -855,10 +879,12 @@
     var skip = checked("chk-skip-master");
     setHidden("master-data-block", skip);
     if (skip) {
-      // Skipping master data is only meaningful with existing records, so it
-      // implies the option — and therefore the same question.
-      if (!checked("chk-use-existing")) state.consent = null;
-      $("chk-use-existing").checked = true;
+      // Skipping master data only makes sense against an existing company's
+      // reused data — it implies the option, and therefore the same question.
+      // (If the active tab's target isn't "existing", this combination still
+      // reaches the server and gets a clear 400 rather than an empty run.)
+      if (!checked("chk-target-reuse")) state.consent = null;
+      $("chk-target-reuse").checked = true;
     }
     updateConsentUi();
     onConfigChanged();
@@ -987,13 +1013,12 @@
       target: { mode: "new", name: "", country: "DE" },
       mode: "master",
       industry: "IT-Dienstleistung",
-      use_existing: false,
       skip_master_data: false,
       master_data: {
         num_companies: 3, num_delivery_contacts: 1, num_invoice_contacts: 1,
         num_other_contacts: 1, num_services: 5, num_consumables: 3, num_storables: 3,
       },
-      modules: {},
+      modules: JSON.parse(JSON.stringify(defaultModuleSnapshot)),
     };
   }
 
@@ -1002,7 +1027,6 @@
       target: collectTarget(),
       mode: currentMode(),
       industry: ($("f-industry").value || "").trim(),
-      use_existing: checked("chk-use-existing"),
       skip_master_data: checked("chk-skip-master"),
       master_data: {
         num_companies: intVal("s-unternehmen", 3),
@@ -1025,7 +1049,6 @@
     });
     setHidden("module-section", block.mode !== "both");
     setVal("f-industry", block.industry || "");
-    setChecked("chk-use-existing", !!block.use_existing);
     updateConsentUi();
     setChecked("chk-skip-master", !!block.skip_master_data);
     setHidden("master-data-block", !!block.skip_master_data);
@@ -1417,8 +1440,6 @@
     setText("server-tag", (urlField.value || "").replace(/^https:\/\//, ""));
     setText("foot-odoo-text", "Odoo: " + (data.ok ? "verbunden" : "Fehler"));
     setText("foot-llm-text", "LLM: " + (data.llm_provider || "nicht verbunden"));
-    setText("existing-sub",
-      "(" + (data.existing_companies || 0) + " Kunden, " + (data.existing_products || 0) + " Produkte gefunden)");
     state.consent = null;
     updateConsentUi();
     renderModuleGrid(data.installed_modules || [], data.blocked_modules || []);
@@ -1434,8 +1455,28 @@
   }
 
   // -------------------------------------------------------------- preflight
+  // S16/B4: checked at submit time, across ALL saved companies, not just the
+  // active tab — reuse_master_data can be set on a company you're not
+  // currently looking at, and the server's consent gate
+  // (run_config.validate_consent's reuse_requested) is a run-wide OR, same
+  // as this must be.
+  function reuseRequestingCompanyIndex() {
+    saveActiveCompanyBlock();
+    for (var i = 0; i < state.companies.length; i++) {
+      if (state.companies[i].target && state.companies[i].target.reuse_master_data) return i;
+    }
+    return -1;
+  }
+
   function consentSatisfied() {
-    if (!checked("chk-use-existing") || state.consent === "granted") return true;
+    var offender = reuseRequestingCompanyIndex();
+    if (offender === -1 || state.consent === "granted") return true;
+    // The consent block lives inside the Firmen panel's "existing" target
+    // fields — if the offending company isn't the tab on screen, its own
+    // target-existing-fields (and therefore consent-block) is display:none
+    // via #target-existing-fields.is-hidden, so switch to it first or the
+    // unhide below has nothing visible to unhide.
+    if (offender !== state.activeCompanyIndex) switchToCompany(offender);
     setHidden("consent-block", false);
     $("consent-block").scrollIntoView({ block: "center" });
     var label = $("consent-state");

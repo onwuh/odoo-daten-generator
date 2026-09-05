@@ -123,6 +123,16 @@ _MULTI_PAYLOAD = {
     ],
 }
 
+# S16/B1: the "companies" shape with exactly ONE company — this is what the
+# frontend actually sends for a plain single-company run (it always uses the
+# new shape, never the legacy top-level one below). Distinct from _PAYLOAD:
+# that one has no "companies" key at all and exercises the OTHER bridge path.
+_SINGLE_COMPANY_PAYLOAD = {
+    "companies": [
+        _company_block({"mode": "new", "name": "Solo GmbH", "country": "DE"}),
+    ],
+}
+
 
 def _fake_orchestrator_run_stammdaten(client, llm, ctx, on_module_start=None, on_module_done=None):
     if on_module_start:
@@ -578,6 +588,38 @@ def run():
     except Exception as e:
         results.append(("Lauf: skip_master_data ohne use_existing wird abgelehnt", False, str(e)))
 
+    try:
+        # S16/B4 (pre-merge cold review): the top-level check above reads
+        # keys that don't exist in the "companies" shape (skip_master_data/
+        # use_existing live per block there) — it must not silently pass a
+        # multi-company payload with the same empty-pool combination.
+        with TestClient(web_app.app) as client:
+            csrf = _login(client)
+            _connect(client, csrf)
+            bad_block = _company_block({"mode": "new", "name": "Firma A", "country": "DE"})
+            bad_block["skip_master_data"] = True
+            response = client.post("/api/runs", headers=_auth_headers(csrf),
+                                   json={"companies": [bad_block]})
+            assert response.status_code == 400, response.status_code
+            assert "companies[0]" in response.json()["detail"], response.text
+
+            # Same skip_master_data=True is fine when the target is an
+            # existing company that also asks to reuse its own data.
+            good_block = _company_block({"mode": "existing", "company_id": 1,
+                                         "reuse_master_data": True})
+            good_block["skip_master_data"] = True
+            with patch("web.jobs.JournalingClient"), patch("web.jobs.LLMService"), \
+                 patch("orchestrator.run"), \
+                 patch("web.jobs.odoo_actions.resolve_target_company", return_value=(1, False)):
+                allowed = client.post("/api/runs", headers=_auth_headers(csrf),
+                                      json={"existing_data_consent": "granted",
+                                            "companies": [good_block]})
+                assert allowed.status_code == 202, allowed.text
+                time.sleep(0.3)
+        results.append(("Lauf (S16/B4): skip_master_data pro Firma ohne reuse_master_data wird abgelehnt", True, ""))
+    except Exception as e:
+        results.append(("Lauf (S16/B4): skip_master_data pro Firma ohne reuse_master_data wird abgelehnt", False, str(e)))
+
     # ------------------------------------------------------------------
     # Consent is enforced by the API, not only by the browser
     # ------------------------------------------------------------------
@@ -769,10 +811,13 @@ def run():
         results.append(("CSP: default-src 'self', kein unsafe-inline", False, str(e)))
 
     # ------------------------------------------------------------------
-    # S16/D8b: fetch_existing_company_data filters by company_id alone —
-    # NOT is_company/customer_rank like fetch_existing_data (Firma-1-shaped),
-    # since a prior run's master_data.py write (D8-Ergänzung) sets company_id
-    # on contacts too, none of which carry customer_rank>0/is_company=True.
+    # S16/D8b+S1: fetch_existing_company_data filters by company_id OR
+    # company-neutral (company_id=False) — NOT is_company/customer_rank like
+    # fetch_existing_data (Firma-1-shaped), since a prior run's
+    # master_data.py write (D8-Ergänzung) sets company_id on contacts too,
+    # none of which carry customer_rank>0/is_company=True. S1 (pre-merge
+    # cold review): a strict company_id=X domain missed almost all real
+    # data — company-neutral records are shared across every company.
     # ------------------------------------------------------------------
     try:
         mock_client = MagicMock()
@@ -783,14 +828,15 @@ def run():
         partner_ids, product_ids = connect_service.fetch_existing_company_data(mock_client, 7)
         assert partner_ids == [501, 502], partner_ids
         assert product_ids == [601], product_ids
+        expected_domain = ['|', ["company_id", "=", False], ["company_id", "=", 7]]
         partner_call, product_call = mock_client.search_read.call_args_list
         assert partner_call.args[0] == 'res.partner', partner_call
-        assert partner_call.args[1] == [["company_id", "=", 7]], partner_call
+        assert partner_call.args[1] == expected_domain, partner_call
         assert product_call.args[0] == 'product.product', product_call
-        assert product_call.args[1] == [["company_id", "=", 7]], product_call
-        results.append(("fetch_existing_company_data: filters both models by company_id alone", True, ""))
+        assert product_call.args[1] == expected_domain, product_call
+        results.append(("fetch_existing_company_data: filters both models by company_id or company-neutral", True, ""))
     except AssertionError as e:
-        results.append(("fetch_existing_company_data: filters both models by company_id alone", False, str(e)))
+        results.append(("fetch_existing_company_data: filters both models by company_id or company-neutral", False, str(e)))
 
     # ==================================================================
     # S16 — multi-company execution loop in web/jobs.py
@@ -822,6 +868,43 @@ def run():
         results.append(("multi-company: 2 companies succeed -> STATUS_DONE, both qualified rows done", True, ""))
     except AssertionError as e:
         results.append(("multi-company: 2 companies succeed -> STATUS_DONE, both qualified rows done", False, str(e)))
+
+    try:
+        # S16/B1 (pre-merge cold review): a genuine ONE-company "companies"
+        # payload must still get QUALIFIED keys ("0:stammdaten") — the bug
+        # was multi_company_preview() qualifying keys only when count > 1,
+        # while _execute() qualifies whenever `targets is not None`
+        # (count-independent). Before the fix, record.modules held the
+        # UNqualified key while the run published/looked up the qualified
+        # one, so the module's status was never actually written — and the
+        # finally-block reconciliation's `key.split(":", 1)[0].isdigit()`
+        # check then forced it to "done" regardless of the real outcome.
+        record, mock_resolve, mock_wh = _run_multi(
+            _SINGLE_COMPANY_PAYLOAD, resolve_side_effect=[(201, True)])
+        assert record.status == STATUS_DONE, record.status
+        assert "0:stammdaten" in record.modules, record.modules
+        assert "stammdaten" not in record.modules, record.modules
+        assert record.modules["0:stammdaten"] == "done", record.modules
+        results.append(("multi-company (B1): single-company \"companies\" payload gets qualified keys", True, ""))
+    except AssertionError as e:
+        results.append(("multi-company (B1): single-company \"companies\" payload gets qualified keys", False, str(e)))
+
+    try:
+        # Same shape, but the single company's own pipeline actually fails —
+        # this is the exact case B1 mis-reported as "done".
+        def _fake_orchestrator_run_fails(client, llm, ctx, on_module_start=None, on_module_done=None):
+            if on_module_start:
+                on_module_start("Stammdaten")
+            raise RuntimeError("pipeline blew up")
+
+        record, mock_resolve, mock_wh = _run_multi(
+            _SINGLE_COMPANY_PAYLOAD, resolve_side_effect=[(201, True)],
+            orchestrator_side_effect=_fake_orchestrator_run_fails)
+        assert record.status == STATUS_FAILED, record.status
+        assert record.modules["0:stammdaten"] == "failed", record.modules
+        results.append(("multi-company (B1): single company's own pipeline failure reports failed, not done", True, ""))
+    except AssertionError as e:
+        results.append(("multi-company (B1): single company's own pipeline failure reports failed, not done", False, str(e)))
 
     try:
         # D15: create_second_warehouse fires ONLY for the newly created
