@@ -137,6 +137,45 @@ def create_second_warehouse(client, company_id) -> Optional[Dict[str, int]]:
     return {"warehouse_id": wh_id, "stock_location_id": stock_location_id}
 
 
+def resolve_target_company(client, target: Dict[str, Any]) -> Tuple[int, bool]:
+    """S16/D10-Korrektur: resolves one company block's `target` (D9/D11,
+    already shape-validated by run_config._validate_target) to a real
+    res.company id. Returns (company_id, was_created) — was_created tells
+    the caller whether this company needs D15's warehouse (only newly
+    created companies do; an existing one presumably already has one).
+
+    `client` should be a JournalingClient (web/jobs.py's per-company loop)
+    so a newly created company gets journaled for D13's cleanup fallback —
+    the "existing" branch below never calls create(), so an existing
+    company is never journaled by this function, which is the intended
+    safety property: existing companies must never become deletable by
+    this tool, only ones it created itself.
+
+    No chart of accounts is loaded (R17 finding: cosmetic-only benefit,
+    real cleanup/portability cost — dropped from scope entirely). This is
+    WHY `country_id` is set via a separate write() AFTER create(), not in
+    the create() vals: live-confirmed this session that Odoo's own
+    res.company.create() override auto-provisions a FULL chart of accounts
+    the moment `country_id` is present in the creation vals (1312 accounts,
+    chart_template auto-picked) — but a write() of the same field right
+    after create() triggers nothing (0 accounts, chart_template stays
+    False). Same end state for the company record (country_id set,
+    satisfying the per-company country requirement) without the unwanted
+    side effect the architecture explicitly excluded.
+    """
+    if target.get("mode") == "existing":
+        return int(target["company_id"]), False
+
+    company_id = client.create('res.company', {"name": target["name"]})
+    country_code = (target.get("country") or "").upper()
+    if country_code:
+        country_map = resolve_country_ids(client, [country_code])
+        country_id = country_map.get(country_code)
+        if country_id:
+            client.write('res.company', [company_id], {"country_id": country_id})
+    return company_id, True
+
+
 def get_installed_modules(client, wanted_modules: List[str]) -> Set[str]:
     """Returns a set of installed module technical names from wanted_modules."""
     records = client.search_read(

@@ -27,7 +27,7 @@ from fastapi.testclient import TestClient
 
 import connect_service
 from web import app as web_app
-from web.jobs import AdmissionRefused, JobQueue, STATUS_DONE
+from web.jobs import AdmissionRefused, JobQueue, STATUS_DONE, STATUS_FAILED, STATUS_PARTIAL
 from web.session import Session
 from web.sse import EventBroker
 
@@ -101,6 +101,33 @@ _PAYLOAD = {
                     "num_storables": 1},
     "modules": {"crm": {"enabled": True, "count": 2}},
 }
+
+
+def _company_block(target):
+    return {
+        "target": target,
+        "mode": "both", "industry": "IT", "skip_master_data": False,
+        "master_data": {"num_companies": 1, "num_delivery_contacts": 0, "num_invoice_contacts": 0,
+                        "num_other_contacts": 0, "num_services": 1, "num_consumables": 0,
+                        "num_storables": 1},
+        "modules": {"crm": {"enabled": True, "count": 2}},
+    }
+
+
+# S16: two companies, one new (gets a warehouse, D15) one existing (doesn't).
+_MULTI_PAYLOAD = {
+    "companies": [
+        _company_block({"mode": "new", "name": "Firma A", "country": "DE"}),
+        _company_block({"mode": "existing", "company_id": 1}),
+    ],
+}
+
+
+def _fake_orchestrator_run_stammdaten(client, llm, ctx, on_module_start=None, on_module_done=None):
+    if on_module_start:
+        on_module_start("Stammdaten")
+    if on_module_done:
+        on_module_done("Stammdaten", ok=True)
 
 
 def run():
@@ -723,6 +750,136 @@ def run():
         results.append(("fetch_existing_company_data: filters both models by company_id alone", True, ""))
     except AssertionError as e:
         results.append(("fetch_existing_company_data: filters both models by company_id alone", False, str(e)))
+
+    # ==================================================================
+    # S16 — multi-company execution loop in web/jobs.py
+    # ==================================================================
+
+    def _run_multi(payload, resolve_side_effect, orchestrator_side_effect=_fake_orchestrator_run_stammdaten):
+        broker = EventBroker()
+        queue_obj = JobQueue(broker, workers=1)
+        with patch("web.jobs.JournalingClient"), patch("web.jobs.LLMService"), \
+             patch("orchestrator.run", side_effect=orchestrator_side_effect), \
+             patch("web.jobs.odoo_actions.resolve_target_company", side_effect=resolve_side_effect) as mock_resolve, \
+             patch("web.jobs.odoo_actions.create_second_warehouse") as mock_wh:
+            queue_obj.start()
+            record = queue_obj.submit(session=_fake_session("s-multi"), payload=payload)
+            deadline = time.time() + 5
+            while record.status not in (STATUS_DONE, STATUS_FAILED, STATUS_PARTIAL) and time.time() < deadline:
+                time.sleep(0.05)
+            queue_obj.stop()
+        return record, mock_resolve, mock_wh
+
+    try:
+        record, mock_resolve, mock_wh = _run_multi(
+            _MULTI_PAYLOAD, resolve_side_effect=[(101, True), (1, False)])
+        assert record.status == STATUS_DONE, record.status
+        assert any(k == "0:stammdaten" for k in record.modules), record.modules
+        assert any(k == "1:stammdaten" for k in record.modules), record.modules
+        assert record.modules["0:stammdaten"] == "done", record.modules
+        assert record.modules["1:stammdaten"] == "done", record.modules
+        results.append(("multi-company: 2 companies succeed -> STATUS_DONE, both qualified rows done", True, ""))
+    except AssertionError as e:
+        results.append(("multi-company: 2 companies succeed -> STATUS_DONE, both qualified rows done", False, str(e)))
+
+    try:
+        # D15: create_second_warehouse fires ONLY for the newly created
+        # company (index 0, was_created=True), never for the existing one.
+        record, mock_resolve, mock_wh = _run_multi(
+            _MULTI_PAYLOAD, resolve_side_effect=[(101, True), (1, False)])
+        assert mock_wh.call_count == 1, mock_wh.call_args_list
+        assert mock_wh.call_args_list[0].args[1] == 101, mock_wh.call_args_list
+        results.append(("multi-company (D15): create_second_warehouse only for the new company", True, ""))
+    except AssertionError as e:
+        results.append(("multi-company (D15): create_second_warehouse only for the new company", False, str(e)))
+
+    try:
+        # A company whose target resolution itself fails (before
+        # orchestrator.run ever starts) still counts as a failed company,
+        # and the OTHER company still succeeds -> STATUS_PARTIAL.
+        def _resolve_second_fails(client, target):
+            if target.get("mode") == "existing":
+                raise RuntimeError("company not found")
+            return (101, True)
+
+        record, mock_resolve, mock_wh = _run_multi(_MULTI_PAYLOAD, resolve_side_effect=_resolve_second_fails)
+        assert record.status == STATUS_PARTIAL, record.status
+        assert record.modules["0:stammdaten"] == "done", record.modules
+        assert record.modules["1:stammdaten"] == "failed", record.modules
+        results.append(("multi-company: one company's target resolution fails -> STATUS_PARTIAL, correct per-company rows", True, ""))
+    except AssertionError as e:
+        results.append(("multi-company: one company's target resolution fails -> STATUS_PARTIAL, correct per-company rows", False, str(e)))
+
+    try:
+        # Every company fails -> STATUS_FAILED, not STATUS_PARTIAL.
+        record, mock_resolve, mock_wh = _run_multi(
+            _MULTI_PAYLOAD, resolve_side_effect=RuntimeError("boom"))
+        assert record.status == STATUS_FAILED, record.status
+        assert record.modules["0:stammdaten"] == "failed", record.modules
+        assert record.modules["1:stammdaten"] == "failed", record.modules
+        results.append(("multi-company: all companies fail -> STATUS_FAILED, not STATUS_PARTIAL", True, ""))
+    except AssertionError as e:
+        results.append(("multi-company: all companies fail -> STATUS_FAILED, not STATUS_PARTIAL", False, str(e)))
+
+    try:
+        # D12 seed-and-harvest: the shared analytic cache set by company 0's
+        # (fake) orchestrator.run call must be seeded into company 1's ctx
+        # BEFORE its own orchestrator.run call — proves the cache actually
+        # crosses the iteration boundary, not just that each ctx has its own.
+        seen_seeds = []
+
+        def _fake_run_records_seed(client, llm, ctx, on_module_start=None, on_module_done=None):
+            seen_seeds.append(ctx.analytic_account_ids)
+            if ctx.analytic_account_ids is None:
+                ctx.analytic_account_ids = [701, 702, 703]  # simulate get_or_create_analytic_accounts
+            if on_module_start:
+                on_module_start("Stammdaten")
+            if on_module_done:
+                on_module_done("Stammdaten", ok=True)
+
+        record, mock_resolve, mock_wh = _run_multi(
+            _MULTI_PAYLOAD, resolve_side_effect=[(101, True), (1, False)],
+            orchestrator_side_effect=_fake_run_records_seed)
+        assert seen_seeds == [None, [701, 702, 703]], seen_seeds
+        results.append(("multi-company (D12): analytic cache seeded from company 0 into company 1", True, ""))
+    except AssertionError as e:
+        results.append(("multi-company (D12): analytic cache seeded from company 0 into company 1", False, str(e)))
+
+    try:
+        # D12 None-guard: company 0's target resolution fails BEFORE the
+        # analytic seed step ever runs — company 1 must still start from
+        # None, not from an overwritten-with-None cache that erased a
+        # (nonexistent, in this case) earlier real value.
+        def _resolve_first_fails(client, target):
+            if target.get("mode") == "new":
+                raise RuntimeError("company create failed")
+            return (1, False)
+
+        seen_seeds = []
+
+        def _fake_run_records_seed(client, llm, ctx, on_module_start=None, on_module_done=None):
+            seen_seeds.append(ctx.analytic_account_ids)
+
+        record, mock_resolve, mock_wh = _run_multi(
+            _MULTI_PAYLOAD, resolve_side_effect=_resolve_first_fails,
+            orchestrator_side_effect=_fake_run_records_seed)
+        assert seen_seeds == [None], seen_seeds  # only company 1 ever reaches orchestrator.run
+        assert record.status == STATUS_PARTIAL, record.status
+        results.append(("multi-company (D12): failed company before seed step doesn't poison the shared cache", True, ""))
+    except AssertionError as e:
+        results.append(("multi-company (D12): failed company before seed step doesn't poison the shared cache", False, str(e)))
+
+    try:
+        # Legacy single-company payload (no "companies" key) still works
+        # exactly as before S16 — the bridge path, N=1 regression criterion.
+        record, mock_resolve, mock_wh = _run_multi(_PAYLOAD, resolve_side_effect=[])
+        assert record.status == STATUS_DONE, record.status
+        assert "stammdaten" in record.modules, record.modules  # unqualified, no "0:" prefix
+        mock_resolve.assert_not_called()
+        mock_wh.assert_not_called()
+        results.append(("legacy single-company payload: unchanged, no S16 machinery invoked", True, ""))
+    except AssertionError as e:
+        results.append(("legacy single-company payload: unchanged, no S16 machinery invoked", False, str(e)))
 
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results
