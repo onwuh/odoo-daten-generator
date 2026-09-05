@@ -11,7 +11,7 @@ enters `ctx.installed_modules`, so `orchestrator.py` skips it forever with no
 error. Same silent-disable class as the historical B1 bug.
 """
 import logging
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from config import DemoCriteria, ModuleSelections, RunContext
 from odoo_actions import PRIMARY_MODEL_PER_MODULE
@@ -153,21 +153,79 @@ def _enabled(block: Dict[str, Any]) -> bool:
     return bool(block) and _as_bool(block.get("enabled"), default=False)
 
 
+# S16, D11/Anforderungs-Punkt 4: DACH-only for the first cut (matches
+# modules/master_data.py's own _TARGET_COUNTRIES and data_factory.py's
+# _DEFAULT_COUNTRIES — kept as a separate constant here rather than an
+# import, since this file is deliberately module-agnostic, framework-free).
+_TARGET_COUNTRY_CODES = {"DE", "AT", "CH"}
+
+# S16/D11: no company count is officially decided yet — this is a
+# deliberately generous placeholder, not a load-bearing product decision.
+# What matters architecturally (per the cold-review) is that the cap is
+# enforced server-side, not left to a UI-only checkbox limit, since
+# POST /api/runs is directly callable.
+MAX_COMPANIES = 20
+
+
+def _as_list(value: Any, label: str, *, min_len: int = 1, max_len: int = MAX_COMPANIES) -> List[Any]:
+    if not isinstance(value, list):
+        raise ConfigError(f"'{label}' muss eine Liste sein.")
+    if len(value) < min_len:
+        raise ConfigError(f"'{label}' braucht mindestens {min_len} Eintrag/Einträge.")
+    if len(value) > max_len:
+        raise ConfigError(f"'{label}' erlaubt höchstens {max_len} Einträge.")
+    return value
+
+
+VALID_TARGET_MODES = ("new", "existing")
+
+
+def _validate_target(target: Dict[str, Any], index: int) -> None:
+    """S16/D11: full validation of one company's `target` block, at request
+    time — a ConfigError here becomes an HTTP 400 on POST /api/runs, not a
+    failure minutes into a run. Existing-company-id existence itself is NOT
+    checked here (run_config.py makes no Odoo calls, D10-Korrektur) — that
+    happens in web/jobs.py's per-company loop against the live instance.
+    """
+    label = f"companies[{index}].target"
+    mode = target.get("mode")
+    if mode not in VALID_TARGET_MODES:
+        raise ConfigError(f"'{label}.mode' muss 'new' oder 'existing' sein.")
+    if mode == "new":
+        if not (target.get("name") or "").strip():
+            raise ConfigError(f"'{label}.name' ist für eine neue Firma Pflicht.")
+        country = target.get("country")
+        if country not in _TARGET_COUNTRY_CODES:
+            raise ConfigError(
+                f"'{label}.country' muss eines von {sorted(_TARGET_COUNTRY_CODES)} sein.")
+    else:
+        _as_int(target.get("company_id"), f"{label}.company_id", 1, 2**31 - 1)
+
+
 # ---------------------------------------------------------------------------
 # Payload → dataclasses
 # ---------------------------------------------------------------------------
 
-def validate_consent(payload: Dict[str, Any]) -> Optional[str]:
+def validate_consent(payload: Dict[str, Any], *, reuse_requested: bool = False) -> Optional[str]:
     """Check the existing-data consent answer.
 
     Including existing records means the chatter prompt can carry a real
     customer's name, so the answer must be an explicit yes or no — an unanswered
     question is refused rather than silently treated as either.
+
+    S16/D11 Konsens-Entscheidung: `reuse_requested` is the multi-company
+    equivalent of `use_existing` — True when at least one company block in
+    the payload has `target.reuse_master_data=True` (checked once, by
+    build_context_list, across the whole `companies` list, since this
+    function only ever sees one block's flat dict). `existing_data_consent`
+    itself stays a single top-level answer, not duplicated per company —
+    the question is inherently global (same LLM, same chatter prompt rules
+    regardless of which company's data is being reused).
     """
     consent = payload.get("existing_data_consent")
     if consent is not None and consent not in VALID_CONSENT:
         raise ConfigError(f"Unbekannte Einwilligung '{consent}'.")
-    if _as_bool(payload.get("use_existing")) and consent != CONSENT_GRANTED:
+    if (_as_bool(payload.get("use_existing")) or reuse_requested) and consent != CONSENT_GRANTED:
         raise ConfigError(
             "Vorhandene Daten einbeziehen erfordert eine Entscheidung: Ohne Zustimmung "
             "können Namen aus der Zieldatenbank nicht an den LLM-Anbieter gehen. "
@@ -479,11 +537,79 @@ def build_context(payload: Dict[str, Any], *, language_name: str, language_code:
     return ctx, selected
 
 
+def build_context_list(payload: Dict[str, Any], *, language_name: str, language_code: str,
+                       llm_model_name: str, installed_modules: Set[str],
+                       feature_flags: Dict[str, bool],
+                       model_access: Optional[Dict[str, bool]] = None,
+                       ) -> List[Tuple[RunContext, Set[str]]]:
+    """S16/D11: assemble N independent RunContexts from a
+    `{"companies": [...]}` payload — one call per list element, each
+    element having exactly today's single-company payload shape (mode/
+    industry/master_data/modules/skip_master_data) plus a `target` block
+    (D9) saying which company it's for. `build_criteria`/`build_selections`
+    are unchanged — this only adds a loop and the two things a single
+    `build_context(block)` call structurally cannot do on its own:
+    Consent-Injektion (a block never sees the top-level
+    `existing_data_consent`) and cross-block validation (whether ANY
+    company requests reuse, decided once, not per block).
+
+    Deliberately Odoo-call-free (D10-Korrektur, matching this module's own
+    "no Odoo calls" contract) — target-company resolution (create a new
+    res.company, or resolve an existing one) happens later, in
+    web/jobs.py's per-company loop, where a JournalingClient actually
+    exists to journal a newly created company for cleanup. This function
+    also does not merge existing-company data into ctx.company_ids/
+    product_ids — that "existing_company_ids"/"existing_product_ids"
+    mechanism on `build_context` is Firma-1-shaped and superseded here by
+    D8b's per-company scoped fetch, called from the same later loop.
+
+    Takes the same connection-level kwargs `build_context` does, minus
+    `existing_company_ids`/`existing_product_ids` (not applicable — see
+    above) — one connect result applies identically to every company.
+    """
+    companies_raw = _as_list(payload.get("companies"), "companies")
+    targets: List[Dict[str, Any]] = []
+    for index, block in enumerate(companies_raw):
+        target = _as_dict(block.get("target"), f"companies[{index}].target")
+        _validate_target(target, index)
+        targets.append(target)
+
+    # Konsens-Entscheidung: consent is checked ONCE, across the whole list —
+    # build_context's own internal validate_consent(block) call below only
+    # ever sees one block and cannot answer "does ANY company reuse data".
+    reuse_requested = any(t.get("reuse_master_data") for t in targets)
+    validate_consent(payload, reuse_requested=reuse_requested)
+
+    existing_consent = payload.get("existing_data_consent")
+    results: List[Tuple[RunContext, Set[str]]] = []
+    for block in companies_raw:
+        # D11 Korrektur 5: existing_data_consent is top-level in the
+        # payload, but build_selections (crm_chatter.use_db_names) reads it
+        # off the per-block dict it's handed — inject it into every block
+        # before delegating, or the consent gate silently never fires.
+        block_payload = {**block, "existing_data_consent": existing_consent}
+        results.append(build_context(
+            block_payload,
+            language_name=language_name, language_code=language_code,
+            llm_model_name=llm_model_name, installed_modules=installed_modules,
+            feature_flags=feature_flags, model_access=model_access,
+        ))
+    return results
+
+
 def active_progress_keys(ctx: RunContext, selected: Set[str]) -> list:
-    """Progress rows for a run, in execution order.
+    """Progress rows for one company's run, in execution order.
 
     Gated on installed AND selected (B10), except the "documents" pseudo-module
     which has no installed_modules entry and is gated on selection only.
+
+    S16/D6: unchanged — no company-qualification parameter here, unlike
+    estimate_record_counts. This returns bare module codes; the multi-company
+    caller (web/jobs.py's per-company loop) calls this once per company and
+    qualifies the returned keys itself (e.g. f"{index}:{key}") when building
+    the combined, firmen-qualified progress list — qualification is a
+    machine-key concern for that caller, not a label-text concern this
+    function needs to know about.
     """
     keys = [] if ctx.skip_master_data else ["stammdaten"]
     for key in MODULE_RUN_ORDER:
@@ -495,13 +621,18 @@ def active_progress_keys(ctx: RunContext, selected: Set[str]) -> list:
     return keys
 
 
-def estimate_record_counts(ctx: RunContext, selected: Set[str]) -> Dict[str, int]:
+def estimate_record_counts(ctx: RunContext, selected: Set[str],
+                           *, company_label: Optional[str] = None) -> Dict[str, int]:
     """Pre-flight summary numbers, derived arithmetically from the config.
 
     Deliberately not a dry run — these are the records this tool asks Odoo to
     create. Odoo's own automation creates more on top (a project and task per
     confirmed service order, invoices via the wizard, vendor bills from POs,
     applied stock moves); the UI names those separately rather than guessing.
+
+    `company_label`, if given, qualifies every label for a multi-company
+    preview (S16/D6) — see the qualification note at the return below.
+    Omitted (the default): today's single-company behavior, unqualified.
     """
     c = ctx.criteria
     sel = ctx.module_selections
@@ -626,4 +757,66 @@ def estimate_record_counts(ctx: RunContext, selected: Set[str]) -> Dict[str, int
         # using them.
         counts["Kostenstellen"] = 3
 
-    return {label: value for label, value in counts.items() if value}
+    counts = {label: value for label, value in counts.items() if value}
+    if company_label:
+        # S16/D6: qualify every label with which company it belongs to —
+        # except "Kostenstellen" (D12): that's one shared plan for the
+        # whole multi-company run, not one per company, so qualifying it
+        # would misrepresent a total that doesn't scale with N. The caller
+        # is expected to merge company-scoped previews across companies
+        # and keep "Kostenstellen" only once (first occurrence), not summed.
+        counts = {
+            (label if label == "Kostenstellen" else f"{label} ({company_label})"): value
+            for label, value in counts.items()
+        }
+    return counts
+
+
+def multi_company_preview(contexts_and_selected: List[Tuple[RunContext, Set[str]]],
+                          labels: Optional[List[str]] = None) -> Tuple[List[str], Dict[str, int]]:
+    """S16/D6: shared by web/jobs.py's JobQueue.submit() and web/app.py's
+    /api/preflight — builds the company-qualified progress-key list and the
+    merged record-count preview for either a single-company run
+    (`labels=None`, or exactly one context) or a multi-company one
+    (`labels` has one entry per context, used to qualify both the module
+    keys — "{index}:{key}" — and estimate_record_counts' labels).
+
+    Kept as one function so the two callers cannot silently drift apart on
+    the merge rule for a shared label like "Kostenstellen" (D12: run-wide,
+    kept only once, never summed).
+
+    S16/B1 (pre-merge cold review): key qualification and label qualification
+    are DIFFERENT decisions, gated on different things — conflating them into
+    one `multi` flag was the bug. web/jobs.py's `_execute()` dispatches to
+    the qualified-key branch whenever `targets is not None` (i.e. whenever
+    the caller sent the "companies" payload shape at all, regardless of
+    company count — see its own `if targets is None:` check). Gating key
+    qualification here on `len(...) > 1` instead meant a genuine 1-company
+    "companies" payload got UNqualified keys from this function while
+    _execute() published and looked up QUALIFIED ones — `record.modules`
+    then never matched, so every module silently reported "done" at the end
+    regardless of whether the run actually failed. Label qualification (the
+    cosmetic "(Firma 1)" suffix on record-estimate rows) has no such
+    constraint and can still skip itself for a single company.
+    """
+    qualify_keys = labels is not None
+    qualify_labels = labels is not None and len(contexts_and_selected) > 1
+    keys: List[str] = []
+    estimate: Dict[str, int] = {}
+    for index, (ctx, selected) in enumerate(contexts_and_selected):
+        company_keys = active_progress_keys(ctx, selected)
+        if qualify_keys:
+            keys.extend(f"{index}:{key}" for key in company_keys)
+        else:
+            keys.extend(company_keys)
+        if qualify_labels:
+            company_estimate = estimate_record_counts(ctx, selected, company_label=labels[index])
+            for est_label, value in company_estimate.items():
+                if est_label == "Kostenstellen":
+                    if est_label not in estimate:  # first occurrence wins, never summed
+                        estimate[est_label] = value
+                else:
+                    estimate[est_label] = estimate.get(est_label, 0) + value
+        else:
+            estimate.update(estimate_record_counts(ctx, selected))
+    return keys, estimate

@@ -261,6 +261,30 @@ class OdooJson2Client:
         self._min_request_interval = (
             _min_request_interval() if min_request_interval is None else max(0.0, min_request_interval)
         )
+        # S16/D14: per-instance default Odoo context, merged into every
+        # create/create_batch/write/call_method call. Set by the caller
+        # (web/jobs.py's per-company loop) to scope every write of that
+        # iteration to a given res.company via Odoo's own multi-company
+        # context mechanism ({'allowed_company_ids': [id], 'company_id': id}
+        # — live-confirmed this makes company_id default correctly on models
+        # whose field derives it from self.env.company, e.g. sale.order/
+        # crm.lead; does NOT do so for res.partner/product.product, which
+        # need it set explicitly in vals instead). None outside a per-company
+        # loop (e.g. the fresh client run_journal.delete_run builds for
+        # cleanup) — every merge site below falls back to {} in that case.
+        self._default_context: Optional[Dict[str, Any]] = None
+
+    def _merge_context(self, context: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Key-level merge of the per-instance default context (D14) under
+        whatever context a caller explicitly passes — caller wins on key
+        conflicts. Must be key-level, not whole-dict replacement:
+        modules/accounting.py already passes its own context (the invoicing
+        wizard's active_model/active_ids) on one call site, which a
+        replacement would silently drop the moment a default is set.
+        """
+        if self._default_context is None and context is None:
+            return None
+        return {**(self._default_context or {}), **(context or {})}
 
     def _throttle(self) -> None:
         """D10: sleep just enough to keep this client's requests at least
@@ -467,6 +491,7 @@ class OdooJson2Client:
 
     def create(self, model: str, values: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> int:
         _capture_fields(model, values)
+        context = self._merge_context(context)
         with self._record_failure(model, "create"):
             payload: Dict[str, Any] = {"vals_list": [values]}
             if context is not None:
@@ -486,6 +511,7 @@ class OdooJson2Client:
         if _capture_fields_enabled:
             for values in values_list:
                 _capture_fields(model, values)
+        context = self._merge_context(context)
         payload: Dict[str, Any] = {"vals_list": values_list}
         if context is not None:
             payload["context"] = context
@@ -516,6 +542,7 @@ class OdooJson2Client:
 
     def write(self, model: str, ids: List[int], values: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> bool:
         _capture_fields(model, values)
+        context = self._merge_context(context)
         payload: Dict[str, Any] = {"ids": ids, "vals": values}
         if context is not None:
             payload["context"] = context
@@ -533,6 +560,7 @@ class OdooJson2Client:
         # mixing them into the model's field-manifest entry would corrupt the
         # FIELD_COMPAT_WHITELIST comparison WP1 exists to sharpen.
         _capture_fields(f"{model}#{method}", kwargs)
+        context = self._merge_context(context)
         payload: Dict[str, Any] = dict(kwargs or {})
         if ids is not None:
             payload["ids"] = ids

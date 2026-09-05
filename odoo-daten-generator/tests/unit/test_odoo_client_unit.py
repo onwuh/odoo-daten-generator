@@ -709,6 +709,116 @@ def run():
     except AssertionError as e:
         results.append(("_send: calls _throttle before sending", False, str(e)))
 
+    # ==================================================================
+    # S16/D14 — per-instance default context, merged into every write call
+    # ==================================================================
+
+    # ------------------------------------------------------------------
+    # No default context set (the N=1 / cleanup-client case): payload has
+    # no "context" key at all, same as before D14 existed.
+    # ------------------------------------------------------------------
+    try:
+        def create_responder(url, payload):
+            assert "context" not in payload, payload
+            return _FakeResponse(200, json_data=[1])
+
+        client, sent = _make_client_with_fake_post(create_responder)
+        client.create('res.partner', {"name": "A"})
+        results.append(("create: no default context -> no context key sent", True, ""))
+    except AssertionError as e:
+        results.append(("create: no default context -> no context key sent", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # Default context set -> merged into create/create_batch/write/call_method.
+    # ------------------------------------------------------------------
+    for method_name, invoke in [
+        ("create", lambda c: c.create('res.partner', {"name": "A"})),
+        ("create_batch", lambda c: c.create_batch('res.partner', [{"name": "A"}])),
+        ("write", lambda c: c.write('res.partner', [1], {"name": "B"})),
+        ("call_method", lambda c: c.call_method('res.partner', 'some_method', ids=[1])),
+    ]:
+        try:
+            def responder(url, payload):
+                assert payload.get("context") == {"allowed_company_ids": [7], "company_id": 7}, payload
+                return _FakeResponse(200, json_data=[1] if method_name != "write" else True)
+
+            client, sent = _make_client_with_fake_post(responder)
+            client._default_context = {"allowed_company_ids": [7], "company_id": 7}
+            invoke(client)
+            results.append((f"{method_name}: default context merged into payload", True, ""))
+        except AssertionError as e:
+            results.append((f"{method_name}: default context merged into payload", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # Explicit caller context wins on key conflict (key-level merge, not
+    # whole-dict replacement) — the accounting.py invoicing-wizard call site
+    # is exactly this shape: its own context must survive a default being set.
+    # ------------------------------------------------------------------
+    try:
+        def responder(url, payload):
+            assert payload.get("context") == {
+                "allowed_company_ids": [7], "company_id": 7,
+                "active_model": "sale.order", "active_ids": [42],
+            }, payload
+            return _FakeResponse(200, json_data={"result": True})
+
+        client, sent = _make_client_with_fake_post(responder)
+        client._default_context = {"allowed_company_ids": [7], "company_id": 7}
+        client.call_method('sale.advance.payment.inv', 'create_invoices', ids=[1],
+                           context={"active_model": "sale.order", "active_ids": [42]})
+        results.append(("call_method: explicit context merges over default (key-level, not replaced)", True, ""))
+    except AssertionError as e:
+        results.append(("call_method: explicit context merges over default (key-level, not replaced)", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # Explicit context on a conflicting key overrides the default (caller wins).
+    # ------------------------------------------------------------------
+    try:
+        def responder(url, payload):
+            assert payload.get("context") == {"allowed_company_ids": [7], "company_id": 99}, payload
+            return _FakeResponse(200, json_data=[1])
+
+        client, sent = _make_client_with_fake_post(responder)
+        client._default_context = {"allowed_company_ids": [7], "company_id": 7}
+        client.create('res.partner', {"name": "A"}, context={"company_id": 99})
+        results.append(("create: explicit context key overrides default on conflict", True, ""))
+    except AssertionError as e:
+        results.append(("create: explicit context key overrides default on conflict", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # search/search_read (model_method) are NOT scoped by the default
+    # context — D14 deliberately excludes them (get_main_company_id's own
+    # lookups and the D8b reuse-fetch both need unfiltered access).
+    # ------------------------------------------------------------------
+    try:
+        def responder(url, payload):
+            assert "context" not in payload, payload
+            return _FakeResponse(200, json_data=[])
+
+        client, sent = _make_client_with_fake_post(responder)
+        client._default_context = {"allowed_company_ids": [7], "company_id": 7}
+        client.search_read('res.partner', [], fields=['id'])
+        results.append(("search_read: default context NOT applied (deliberately unscoped)", True, ""))
+    except AssertionError as e:
+        results.append(("search_read: default context NOT applied (deliberately unscoped)", False, str(e)))
+
+    # ------------------------------------------------------------------
+    # A client with no default context ever set (the cleanup-client shape)
+    # must not crash on the {**None, ...} merge — this is the exact bug the
+    # None-guard exists to prevent.
+    # ------------------------------------------------------------------
+    try:
+        def responder(url, payload):
+            assert "context" not in payload, payload
+            return _FakeResponse(200, json_data=True)
+
+        client, sent = _make_client_with_fake_post(responder)
+        assert client._default_context is None
+        client.write('res.partner', [1], {"active": False})  # must not raise TypeError
+        results.append(("write: no default context ever set -> no crash on merge", True, ""))
+    except Exception as e:
+        results.append(("write: no default context ever set -> no crash on merge", False, str(e)))
+
     all_ok = all(ok for _, ok, _ in results)
     return all_ok, results
 

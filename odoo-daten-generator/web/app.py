@@ -32,7 +32,7 @@ from odoo_client import OdooJson2Client
 from run_journal import (RunJournal, delete_run, journal_dir_writable,
                          prune_journals, retention_days)
 from web import feedback, security
-from web.jobs import AdmissionRefused, JobQueue
+from web.jobs import AdmissionRefused, JobQueue, _bare_module_key
 from web.session import CSRF_HEADER, SESSION_COOKIE, SessionStore, check_access_code
 from web.sse import EventBroker
 
@@ -350,7 +350,27 @@ async def api_connect(request: Request, session=Depends(get_session_csrf)) -> Di
 async def api_create_run(request: Request, session=Depends(get_session_csrf)) -> JSONResponse:
     _connected(session)
     body = await request.json()
-    if body.get("skip_master_data") and not body.get("use_existing"):
+    if "companies" in body:
+        # S16/B4 (pre-merge cold review): the check below reads TOP-LEVEL
+        # skip_master_data/use_existing — meaningless for this shape, where
+        # both live per company block, and use_existing itself is superseded
+        # by target.reuse_master_data (D11/D8b; build_context_list never
+        # wires the old existing_company_ids/existing_product_ids kwargs).
+        # Without this, a block combining skip_master_data=True with a
+        # target that isn't an existing company with reuse requested got
+        # NO guard at all — silently ran with an empty pool instead of 400ing.
+        for index, block in enumerate(body.get("companies") or []):
+            if not isinstance(block, dict) or not block.get("skip_master_data"):
+                continue
+            target = block.get("target") or {}
+            if not (isinstance(target, dict) and target.get("mode") == "existing"
+                    and target.get("reuse_master_data")):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"companies[{index}]: 'skip_master_data' ohne bestehende Firma "
+                           "mit 'Vorhandene Stammdaten wiederverwenden' ergibt einen Lauf "
+                           "ohne Stammdaten — jedes Modul würde übersprungen.")
+    elif body.get("skip_master_data") and not body.get("use_existing"):
         # The browser forces use_existing on when skip_master_data is ticked; a
         # direct API call could ask for neither new master data nor existing IDs,
         # which leaves every module with an empty pool and Pattern-5-skips the
@@ -379,31 +399,56 @@ async def api_preflight(request: Request, session=Depends(get_session_csrf)) -> 
     _connected(session)
     body = await request.json()
     connect = session.connect
+    # S16: mirrors JobQueue.submit()'s own dual-path bridge — "companies" in
+    # the body means the new multi-company shape (D9/D11), its absence means
+    # the legacy single-company shape, unchanged since before S16 existed.
     try:
-        ctx, selected = run_config.build_context(
-            body,
-            language_name=connect.language_name,
-            language_code=connect.language_code,
-            llm_model_name=session.llm_model or "",
-            installed_modules=connect.installed_modules,
-            feature_flags=connect.feature_flags,
-            model_access=connect.model_access,
-            existing_company_ids=connect.existing_company_ids,
-            existing_product_ids=connect.existing_product_ids,
-        )
+        if "companies" in body:
+            contexts_and_selected = run_config.build_context_list(
+                body,
+                language_name=connect.language_name,
+                language_code=connect.language_code,
+                llm_model_name=session.llm_model or "",
+                installed_modules=connect.installed_modules,
+                feature_flags=connect.feature_flags,
+                model_access=connect.model_access,
+            )
+            labels = [
+                (block.get("target") or {}).get("name") or f"Firma {i + 1}"
+                for i, block in enumerate(body["companies"])
+            ]
+        else:
+            ctx, selected = run_config.build_context(
+                body,
+                language_name=connect.language_name,
+                language_code=connect.language_code,
+                llm_model_name=session.llm_model or "",
+                installed_modules=connect.installed_modules,
+                feature_flags=connect.feature_flags,
+                model_access=connect.model_access,
+                existing_company_ids=connect.existing_company_ids,
+                existing_product_ids=connect.existing_product_ids,
+            )
+            contexts_and_selected = [(ctx, selected)]
+            labels = None
     except run_config.ConfigError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-    keys = run_config.active_progress_keys(ctx, selected)
-    counts = run_config.estimate_record_counts(ctx, selected)
+    keys, counts = run_config.multi_company_preview(contexts_and_selected, labels)
+    first_ctx = contexts_and_selected[0][0]
     return {
         "target": session.base_url,
         "database": session.database,
-        "mode": ctx.criteria.mode,
-        "industry": ctx.industry,
-        "skip_master_data": ctx.skip_master_data,
-        "modules": [{"key": k, "label": run_config.MODULE_LABELS.get(k, k)} for k in keys],
+        "mode": first_ctx.criteria.mode,
+        "industry": first_ctx.industry,
+        "skip_master_data": first_ctx.skip_master_data,
+        # S16: a multi-company key is "{index}:{module_code}" — MODULE_LABELS
+        # only knows the bare module_code, so the prefix must come off
+        # before the lookup (same fix as web/jobs.py's RunRecord.public_dict).
+        "modules": [{"key": k, "label": run_config.MODULE_LABELS.get(_bare_module_key(k), k)}
+                    for k in keys],
         "record_estimate": counts,
         "record_total": sum(counts.values()),
+        "company_count": len(contexts_and_selected),
     }
 
 

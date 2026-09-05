@@ -137,6 +137,52 @@ def create_second_warehouse(client, company_id) -> Optional[Dict[str, int]]:
     return {"warehouse_id": wh_id, "stock_location_id": stock_location_id}
 
 
+def resolve_target_company(client, target: Dict[str, Any]) -> Tuple[int, bool]:
+    """S16/D10-Korrektur: resolves one company block's `target` (D9/D11,
+    already shape-validated by run_config._validate_target) to a real
+    res.company id. Returns (company_id, was_created) — was_created tells
+    the caller whether this company needs D15's warehouse (only newly
+    created companies do; an existing one presumably already has one).
+
+    `client` should be a JournalingClient (web/jobs.py's per-company loop)
+    so a newly created company gets journaled for D13's cleanup fallback —
+    the "existing" branch below never calls create(), so an existing
+    company is never journaled by this function, which is the intended
+    safety property: existing companies must never become deletable by
+    this tool, only ones it created itself.
+
+    S16/B2 (pre-merge cold review): loads a full chart of accounts for every
+    newly-created company. Setting `country_id` IN create()'s vals is what
+    triggers Odoo's own res.company.create() override to auto-provision one
+    — live-confirmed for all three target countries on demo-test5:
+    de_skr03/at/ch templates, 1312/245/246 accounts, and the full default
+    journal set (sale/purchase/bank/general x5) including a per-company bank
+    journal. This reverses the original R17 finding ("cosmetic-only benefit,
+    real cleanup cost — drop it") that WP4 initially carried forward: S16-NEU
+    requirement 7 ("die komplette bestehende Pipeline läuft pro Firma
+    erneut") needs a working chart of accounts for accounting/invoicing to
+    function at all against a new company, so the cleanup-residue cost is
+    accepted instead — same accepted-residue shape as D13's archive fallback
+    for res.company/stock.warehouse, just one step earlier.
+
+    country_id must be in the create() vals themselves (not a follow-up
+    write(), which was WP4's original approach specifically to AVOID this
+    side effect) — a write() after create() triggers nothing.
+    """
+    if target.get("mode") == "existing":
+        return int(target["company_id"]), False
+
+    vals = {"name": target["name"]}
+    country_code = (target.get("country") or "").upper()
+    if country_code:
+        country_map = resolve_country_ids(client, [country_code])
+        country_id = country_map.get(country_code)
+        if country_id:
+            vals["country_id"] = country_id
+    company_id = client.create('res.company', vals)
+    return company_id, True
+
+
 def get_installed_modules(client, wanted_modules: List[str]) -> Set[str]:
     """Returns a set of installed module technical names from wanted_modules."""
     records = client.search_read(
@@ -319,9 +365,15 @@ def probe_model_access(client, installed_modules) -> Dict[str, bool]:
     return {model: client.has_create_access(model) for model in sorted(wanted)}
 
 
-def get_main_company_id(client) -> Optional[int]:
-    """Returns the id of the main res.company (tries id=1 first, falls back
-    to the first company found), or None.
+def get_main_company_id(client, company_id: Optional[int] = None) -> Optional[int]:
+    """Returns the id of the target res.company, or None.
+
+    S16/D3: if `company_id` is given, it's returned directly — no lookup —
+    since the caller already knows its target company (the per-company loop
+    in web/jobs.py passes ctx.res_company_ids[0]). Omitted (the default):
+    falls back to the original single-company behavior, id=1 first, else
+    the first company found — used at connect time, before any RunContext
+    exists, where there is no target company to pass yet.
 
     NOT the same as RunContext.company_ids, which despite its name holds
     res.partner ids (customer/company contacts created by master_data.py,
@@ -329,6 +381,8 @@ def get_main_company_id(client) -> Optional[int]:
     a real res.company id. Use this helper wherever an actual res.company id
     is needed (e.g. stock.warehouse/purchase.order/stock.quant company_id).
     """
+    if company_id is not None:
+        return company_id
     try:
         companies = client.search_read('res.company', [["id", "=", 1]], fields=["id"], limit=1)
         if companies:
@@ -424,10 +478,14 @@ def get_main_company_name(client) -> Optional[str]:
     return None
 
 
-def get_main_company_info(client) -> Dict[str, Any]:
-    """Address/VAT snapshot of the main res.company, for documents that need
-    to print a "bill to" block — the vendor-bill PDF's recipient is this
-    run's own company (see modules/documents.py).
+def get_main_company_info(client, company_id: Optional[int] = None) -> Dict[str, Any]:
+    """Address/VAT snapshot of the target res.company, for documents that
+    need to print a "bill to" block — the vendor-bill PDF's recipient is
+    this run's own company (see modules/documents.py).
+
+    S16/D3: `company_id`, if given, is looked up directly instead of id=1 —
+    the per-company loop in web/jobs.py passes ctx.res_company_ids[0].
+    Omitted (the default): original single-company behavior, id=1 first.
 
     Best-effort: returns {} on total failure. Callers must degrade
     gracefully rather than assume street/zip/city are populated — on a
@@ -435,8 +493,9 @@ def get_main_company_info(client) -> Dict[str, Any]:
     (live-confirmed on demo-test5's id=1 company), not missing keys.
     """
     fields = ["name", "street", "street2", "zip", "city", "country_id", "vat"]
+    target_id = company_id if company_id is not None else 1
     try:
-        companies = client.search_read('res.company', [["id", "=", 1]], fields=fields, limit=1)
+        companies = client.search_read('res.company', [["id", "=", target_id]], fields=fields, limit=1)
         if not companies:
             companies = client.search_read('res.company', [], fields=fields, limit=1)
         if not companies:

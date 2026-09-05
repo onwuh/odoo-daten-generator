@@ -122,14 +122,42 @@
         </div>
 
         <div class="panel">
-          <h2>Modus</h2>
-          <div class="segmented" id="mode-segmented">
-            <button type="button" class="active" data-mode="master">Nur Stammdaten</button>
-            <button type="button" data-mode="both">Stammdaten + Bewegungsdaten</button>
+          <h2>Firmen</h2>
+          <p class="field-hint">Jede Firma bekommt ihre eigene Konfiguration unten — Reiter wechseln speichert
+             die aktuelle Firma automatisch und lädt die gewählte. Der komplette Ablauf (CRM, Verkauf, Personal,
+             Buchhaltung, …) läuft für jede Firma einzeln.</p>
+          <div class="company-tabs" id="company-tabs"></div>
+          <div class="btn-row mt-14">
+            <button type="button" class="btn ghost" id="btn-add-company">+ Firma</button>
+            <button type="button" class="btn ghost" id="btn-remove-company">Firma entfernen</button>
           </div>
 
-          <div class="mt-14">
-            <label class="check-line"><input type="checkbox" id="chk-use-existing"> Vorhandene Daten einbeziehen <span class="sub" id="existing-sub">(noch nicht geprüft)</span></label>
+          <div class="segmented mt-14" id="target-mode-segmented">
+            <button type="button" class="active" data-mode="new">Neue Firma</button>
+            <button type="button" data-mode="existing">Bestehende Firma</button>
+          </div>
+
+          <div id="target-new-fields" class="mt-14">
+            <div class="field-row">
+              <label for="f-target-name">Firmenname</label>
+              <input id="f-target-name" type="text" class="wide-input" autocomplete="off">
+            </div>
+            <div class="field-row">
+              <label for="f-target-country">Land</label>
+              <select id="f-target-country">
+                <option value="DE">Deutschland</option>
+                <option value="AT">Österreich</option>
+                <option value="CH">Schweiz</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="target-existing-fields" class="mt-14 is-hidden">
+            <div class="field-row">
+              <label for="f-target-existing">Firma</label>
+              <select id="f-target-existing"></select>
+            </div>
+            <label class="check-line"><input type="checkbox" id="chk-target-reuse"> Vorhandene Stammdaten dieser Firma wiederverwenden</label>
 
             <div class="note consent is-hidden" id="consent-block">
               <div>
@@ -142,6 +170,17 @@
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Modus</h2>
+          <div class="segmented" id="mode-segmented">
+            <button type="button" class="active" data-mode="master">Nur Stammdaten</button>
+            <button type="button" data-mode="both">Stammdaten + Bewegungsdaten</button>
+          </div>
+
+          <div class="mt-14">
 
             <label class="check-line"><input type="checkbox" id="chk-skip-master"> Keine neuen Stammdaten anlegen <span class="sub">(nur vorhandene verwenden)</span></label>
           </div>
@@ -220,6 +259,8 @@
 
         <div class="summary-bar">
           <div class="stat"><div class="k">Status</div><div class="v" id="stat-status">–</div></div>
+          <div class="stat"><div class="k">Laufzeit</div><div class="v" id="stat-elapsed">–</div></div>
+          <div class="stat"><div class="k">Verbleibend (ca.)</div><div class="v" id="stat-remaining">–</div></div>
           <div class="stat"><div class="k">LLM-Anfragen</div><div class="v" id="stat-calls">0</div></div>
           <div class="stat"><div class="k">Token</div><div class="v" id="stat-tokens">0</div></div>
           <div class="stat"><div class="k">API-Fehler</div><div class="v" id="stat-errors">0</div></div>

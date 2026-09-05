@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "odoo-demo-generator-web",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd odoo-daten-generator && source ../.venv/bin/activate && ODOO_GENERATOR_ACCESS_CODE=spike-test python3 -m uvicorn web.app:app --host localhost --port 8000"],
+      "port": 8000
+    }
+  ]
+}

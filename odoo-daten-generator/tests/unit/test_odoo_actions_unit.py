@@ -10,7 +10,8 @@ if _ROOT not in sys.path:
 from odoo_actions import (get_enabled_features, get_server_version, check_field_compatibility,
                           probe_model_access, MODEL_ACCESS_PROBES, classify_version_status,
                           LAST_VERIFIED_VERSION, KNOWN_BROKEN_VERSIONS, create_second_warehouse,
-                          get_or_create_analytic_accounts, _ANALYTIC_COST_CENTER_NAMES)
+                          get_or_create_analytic_accounts, _ANALYTIC_COST_CENTER_NAMES,
+                          get_main_company_id, get_main_company_info)
 from config import DemoCriteria, ModuleSelections, RunContext
 
 
@@ -542,6 +543,59 @@ def run():
         results.append(("get_or_create_analytic_accounts: empty model_access defaults open (B1 guard)", True, ""))
     except AssertionError as e:
         results.append(("get_or_create_analytic_accounts: empty model_access defaults open (B1 guard)", False, str(e)))
+
+    # ==================================================================
+    # S16/D3 — get_main_company_id/get_main_company_info become
+    # company_id-parameter-aware
+    # ==================================================================
+
+    try:
+        # company_id given -> returned directly, no search_read at all.
+        mock_client = MagicMock()
+        result = get_main_company_id(mock_client, company_id=42)
+        assert result == 42, result
+        mock_client.search_read.assert_not_called()
+        results.append(("get_main_company_id: company_id given -> returned directly, no lookup", True, ""))
+    except AssertionError as e:
+        results.append(("get_main_company_id: company_id given -> returned directly, no lookup", False, str(e)))
+
+    try:
+        # company_id omitted -> original id=1-first behavior unchanged.
+        mock_client = MagicMock()
+        mock_client.search_read.return_value = [{"id": 1}]
+        result = get_main_company_id(mock_client)
+        assert result == 1, result
+        results.append(("get_main_company_id: company_id omitted -> original id=1 lookup unchanged", True, ""))
+    except AssertionError as e:
+        results.append(("get_main_company_id: company_id omitted -> original id=1 lookup unchanged", False, str(e)))
+
+    try:
+        # company_id given -> searches for THAT id, not id=1.
+        mock_client = MagicMock()
+        mock_client.search_read.return_value = [{
+            "name": "Firma 2", "street": "", "street2": "", "zip": "", "city": "",
+            "country_id": False, "vat": False,
+        }]
+        get_main_company_info(mock_client, company_id=7)
+        domain = mock_client.search_read.call_args_list[0].args[1]
+        assert domain == [["id", "=", 7]], domain
+        results.append(("get_main_company_info: company_id given -> searches for that id, not id=1", True, ""))
+    except AssertionError as e:
+        results.append(("get_main_company_info: company_id given -> searches for that id, not id=1", False, str(e)))
+
+    try:
+        # company_id omitted -> original id=1 lookup unchanged.
+        mock_client = MagicMock()
+        mock_client.search_read.return_value = [{
+            "name": "Firma 1", "street": "", "street2": "", "zip": "", "city": "",
+            "country_id": False, "vat": False,
+        }]
+        get_main_company_info(mock_client)
+        domain = mock_client.search_read.call_args_list[0].args[1]
+        assert domain == [["id", "=", 1]], domain
+        results.append(("get_main_company_info: company_id omitted -> original id=1 lookup unchanged", True, ""))
+    except AssertionError as e:
+        results.append(("get_main_company_info: company_id omitted -> original id=1 lookup unchanged", False, str(e)))
 
     all_passed = all(ok for _, ok, _ in results)
     return all_passed, results

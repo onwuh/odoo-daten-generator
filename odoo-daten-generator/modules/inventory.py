@@ -52,7 +52,8 @@ def create_inventory_data(client, gemini, ctx: RunContext) -> None:
 
     # NOT ctx.company_ids[0] — despite the name, RunContext.company_ids holds
     # res.partner ids (customer/company contacts), never a real res.company id.
-    company_id = odoo_actions.get_main_company_id(client)
+    company_id = odoo_actions.get_main_company_id(
+        client, company_id=(ctx.res_company_ids[0] if ctx.res_company_ids else None))
     if not company_id:
         logger.warning("⚠️  Keine Firma (res.company) gefunden — Inventory übersprungen.")
         return

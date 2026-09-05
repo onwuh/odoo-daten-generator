@@ -20,6 +20,17 @@
     runId: null,
     source: null,
     moduleRows: {},
+    // S16: per-company config blocks. Each entry is a collectConfigBlock()
+    // shape ({target, mode, industry, skip_master_data, master_data,
+    // modules}). The Konfiguration screen stays a single set of
+    // DOM controls — switching tabs saves the active block's current DOM
+    // state here, then writes the newly active block back into the same DOM.
+    companies: [],
+    activeCompanyIndex: 0,
+    realCompanies: [],    // res.company id+name (D8a), for the "existing" picker
+    runStartedAt: null,   // seconds (server clock, from RunRecord.started_at)
+    runModules: [],       // last known [{key,status},...], read by the timer tick
+    timerHandle: null,
     feedbackRunId: null,
     feedbackPromptedRunId: null,
     // S10/R10 (F3): a LATCH, not a live mirror of state.connect.ok — set once
@@ -68,6 +79,45 @@
   function checked(id) {
     var node = $(id);
     return !!(node && node.checked);
+  }
+
+  // ------------------------------------------------------ field restore (S16)
+  // Inverse of the intVal/checked readers above — writes a saved company
+  // block's values back into the shared DOM controls when a tab is
+  // activated. No event dispatch: restoreCompanyBlock() calls
+  // onConfigChanged() itself, once, after every field is set.
+  function setVal(id, value) {
+    var node = $(id);
+    if (node) node.value = String(value);
+  }
+
+  function setChecked(id, value) {
+    var node = $(id);
+    if (node) node.checked = !!value;
+  }
+
+  function setStepperValue(id, value) {
+    setVal(id, value);
+  }
+
+  // Sliders render their value with a unit suffix ("%", "" for hr-avglen)
+  // baked into the paired -val span's text at render time — reused here
+  // instead of duplicating the per-slider suffix table.
+  function setSliderValue(id, value) {
+    var input = $(id);
+    if (!input) return;
+    input.value = String(value);
+    var out = $(id + "-val");
+    if (out) {
+      var suffix = (out.textContent || "").replace(/^-?\d+/, "");
+      out.textContent = String(value) + suffix;
+    }
+    if (id === "crm-past" || id === "crm-today") updateFuture();
+  }
+
+  function setRadioValue(name, value) {
+    var nodes = document.querySelectorAll('input[name="' + name + '"]');
+    Array.prototype.forEach.call(nodes, function (n) { n.checked = (n.value === value); });
   }
 
   // ------------------------------------------------------------------- API
@@ -364,6 +414,25 @@
         }
         return block;
       },
+      restore: function (vals) {
+        vals = vals || {};
+        setStepperValue("crm-opp", vals.count !== undefined ? vals.count : 10);
+        setStepperValue("crm-leads", vals.leads !== undefined ? vals.leads : 0);
+        setChecked("crm-chatter-toggle", !!(vals.chatter && vals.chatter.enabled));
+        if (vals.chatter) {
+          setRadioValue("crm-style", vals.chatter.style || "mixed");
+          setStepperValue("crm-msgcount", vals.chatter.messages_per_opp !== undefined ? vals.chatter.messages_per_opp : 4);
+        }
+        setChecked("crm-act-toggle", !!(vals.activities && vals.activities.enabled));
+        if (vals.activities) {
+          setSliderValue("crm-past", vals.activities.past_pct !== undefined ? vals.activities.past_pct : 30);
+          setSliderValue("crm-today", vals.activities.today_pct !== undefined ? vals.activities.today_pct : 20);
+        }
+        setChecked("crm-lost-toggle", !!(vals.lost && vals.lost.enabled));
+        if (vals.lost) {
+          setSliderValue("crm-lost-pct", vals.lost.pct !== undefined ? vals.lost.pct : 20);
+        }
+      },
     },
     {
       key: "sale", icon: "sale", title: "Verkauf",
@@ -373,6 +442,11 @@
       },
       collect: function () {
         return { enabled: true, count: intVal("sale-count", 0), confirm_pct: intVal("sale-confirm", 65) };
+      },
+      restore: function (vals) {
+        vals = vals || {};
+        setStepperValue("sale-count", vals.count !== undefined ? vals.count : 10);
+        setSliderValue("sale-confirm", vals.confirm_pct !== undefined ? vals.confirm_pct : 65);
       },
     },
     {
@@ -391,6 +465,12 @@
           bills: intVal("acc-bills", 0),
           bank_transactions: checked("acc-bank"),
         };
+      },
+      restore: function (vals) {
+        vals = vals || {};
+        setStepperValue("acc-count", vals.count !== undefined ? vals.count : 10);
+        setStepperValue("acc-bills", vals.bills !== undefined ? vals.bills : 5);
+        setChecked("acc-bank", vals.bank_transactions !== undefined ? vals.bank_transactions : true);
       },
     },
     {
@@ -420,6 +500,18 @@
         }
         return block;
       },
+      restore: function (vals) {
+        vals = vals || {};
+        setStepperValue("hr-count", vals.count !== undefined ? vals.count : 10);
+        setChecked("hr-to-toggle", !!(vals.timeoff && vals.timeoff.enabled));
+        if (vals.timeoff) {
+          setStepperValue("hr-to-entries", vals.timeoff.entries_per_employee !== undefined ? vals.timeoff.entries_per_employee : 2);
+          setSliderValue("hr-avglen", vals.timeoff.avg_length_days !== undefined ? vals.timeoff.avg_length_days : 5);
+          setSliderValue("hr-pf", vals.timeoff.past_future_pct !== undefined ? vals.timeoff.past_future_pct : 30);
+          setStepperValue("hr-timescale", vals.timeoff.timescale_days !== undefined ? vals.timeoff.timescale_days : 180);
+          setSliderValue("hr-validate", vals.timeoff.validate_pct !== undefined ? vals.timeoff.validate_pct : 100);
+        }
+      },
     },
     {
       key: "project", icon: "project", title: "Projekte",
@@ -432,6 +524,11 @@
       collect: function () {
         return { enabled: true, count: intVal("proj-count", 0), tasks_per_project: intVal("proj-tasks", 10) };
       },
+      restore: function (vals) {
+        vals = vals || {};
+        setStepperValue("proj-count", vals.count !== undefined ? vals.count : 5);
+        setStepperValue("proj-tasks", vals.tasks_per_project !== undefined ? vals.tasks_per_project : 10);
+      },
     },
     {
       key: "hr_timesheet", icon: "timesheet", title: "Zeiterfassung",
@@ -439,6 +536,10 @@
         body.appendChild(grid([stepper("ts-count", "Anzahl Zeiteinträge", "", 30, 0, 500)]));
       },
       collect: function () { return { enabled: true, count: intVal("ts-count", 0) }; },
+      restore: function (vals) {
+        vals = vals || {};
+        setStepperValue("ts-count", vals.count !== undefined ? vals.count : 30);
+      },
     },
     {
       key: "mrp", icon: "mrp", title: "Fertigung",
@@ -467,6 +568,16 @@
           quality_fail_pct: intVal("mrp-quality-fail-pct", 0),
         };
       },
+      restore: function (vals) {
+        vals = vals || {};
+        setStepperValue("mrp-products", vals.num_products !== undefined ? vals.num_products : 3);
+        setStepperValue("mrp-comp", vals.components_per_bom !== undefined ? vals.components_per_bom : 4);
+        setStepperValue("mrp-subbom", vals.sub_boms_per_product !== undefined ? vals.sub_boms_per_product : 2);
+        setStepperValue("mrp-work", vals.num_workcenters !== undefined ? vals.num_workcenters : 3);
+        setStepperValue("mrp-orders", vals.num_manufacturing_orders !== undefined ? vals.num_manufacturing_orders : 5);
+        setChecked("mrp-quality", !!vals.create_quality_points);
+        setSliderValue("mrp-quality-fail-pct", vals.quality_fail_pct !== undefined ? vals.quality_fail_pct : 0);
+      },
     },
     {
       key: "hr_recruitment", icon: "recruit", title: "Recruiting",
@@ -493,6 +604,14 @@
           skills_per_type: intVal("rec-skillsper", 4),
         };
       },
+      restore: function (vals) {
+        vals = vals || {};
+        setStepperValue("rec-jobs", vals.num_jobs !== undefined ? vals.num_jobs : 5);
+        setStepperValue("rec-cand", vals.num_candidates !== undefined ? vals.num_candidates : 15);
+        setChecked("rec-skills", vals.create_skills !== undefined ? vals.create_skills : true);
+        setStepperValue("rec-skilltypes", vals.num_skill_types !== undefined ? vals.num_skill_types : 3);
+        setStepperValue("rec-skillsper", vals.skills_per_type !== undefined ? vals.skills_per_type : 4);
+      },
     },
     {
       key: "purchase", icon: "purchase", title: "Einkauf",
@@ -504,6 +623,11 @@
       },
       collect: function () {
         return { enabled: true, count: intVal("pur-count", 0), confirm_pct: intVal("pur-confirm", 70) };
+      },
+      restore: function (vals) {
+        vals = vals || {};
+        setStepperValue("pur-count", vals.count !== undefined ? vals.count : 8);
+        setSliderValue("pur-confirm", vals.confirm_pct !== undefined ? vals.confirm_pct : 70);
       },
     },
     {
@@ -548,6 +672,18 @@
           orderpoint_max_qty: intVal("stock-orderpoint-max", 20),
         };
       },
+      restore: function (vals) {
+        vals = vals || {};
+        setStepperValue("stock-qty", vals.avg_qty !== undefined ? vals.avg_qty : 50);
+        setStepperValue("stock-sublocs", vals.sub_locations !== undefined ? vals.sub_locations : 0);
+        setChecked("stock-wh2", !!vals.second_warehouse);
+        setSliderValue("stock-lot-pct", vals.tracking_lot_pct !== undefined ? vals.tracking_lot_pct : 0);
+        setSliderValue("stock-serial-pct", vals.tracking_serial_pct !== undefined ? vals.tracking_serial_pct : 0);
+        setStepperValue("stock-serial-max", vals.tracking_serial_max !== undefined ? vals.tracking_serial_max : 10);
+        setSliderValue("stock-orderpoints-pct", vals.orderpoints_pct !== undefined ? vals.orderpoints_pct : 0);
+        setStepperValue("stock-orderpoint-min", vals.orderpoint_min_qty !== undefined ? vals.orderpoint_min_qty : 5);
+        setStepperValue("stock-orderpoint-max", vals.orderpoint_max_qty !== undefined ? vals.orderpoint_max_qty : 20);
+      },
     },
     {
       key: "hr_expense", icon: "expense", title: "Spesen",
@@ -559,6 +695,11 @@
       },
       collect: function () {
         return { enabled: true, count_per_employee: intVal("exp-count", 3), approved_pct: intVal("exp-approved", 70) };
+      },
+      restore: function (vals) {
+        vals = vals || {};
+        setStepperValue("exp-count", vals.count_per_employee !== undefined ? vals.count_per_employee : 3);
+        setSliderValue("exp-approved", vals.approved_pct !== undefined ? vals.approved_pct : 70);
       },
     },
     {
@@ -578,6 +719,12 @@
           expense_pct: intVal("an-expense", 0),
         };
       },
+      restore: function (vals) {
+        vals = vals || {};
+        setSliderValue("an-sale", vals.sale_pct !== undefined ? vals.sale_pct : 0);
+        setSliderValue("an-purchase", vals.purchase_pct !== undefined ? vals.purchase_pct : 0);
+        setSliderValue("an-expense", vals.expense_pct !== undefined ? vals.expense_pct : 0);
+      },
     },
     {
       key: "documents", icon: "docs", title: "Dokumente (PDFs)", badge: "Beta · kein Odoo-Modul", span2: true,
@@ -595,8 +742,29 @@
       collect: function () {
         return { enabled: true, bill_pdfs: checked("doc-bills"), cv_pdfs: checked("doc-cvs") };
       },
+      restore: function (vals) {
+        vals = vals || {};
+        setChecked("doc-bills", vals.bill_pdfs !== undefined ? vals.bill_pdfs : true);
+        setChecked("doc-cvs", vals.cv_pdfs !== undefined ? vals.cv_pdfs : true);
+      },
     },
   ];
+
+  // S16/S4 (pre-merge cold review): buildCard() pre-checks each module's own
+  // sensible default (installed + not blocked + defaultOn !== false) — but
+  // every company block starts from defaultCompanyBlock()'s modules:{},
+  // which restoreCompanyBlock() then applies by unchecking everything.
+  // Snapshotting the grid's own just-rendered defaults right here, once per
+  // connect, is what defaultCompanyBlock() hands back instead of a bare {}.
+  var defaultModuleSnapshot = {};
+
+  function captureDefaultModuleSnapshot() {
+    defaultModuleSnapshot = {};
+    MODULE_DEFS.forEach(function (def) {
+      var box = $("mod-" + def.key);
+      if (box && box.checked) defaultModuleSnapshot[def.key] = def.collect();
+    });
+  }
 
   function renderModuleGrid(installed, blocked) {
     var gridEl = $("module-grid");
@@ -604,6 +772,7 @@
     MODULE_DEFS.forEach(function (def) {
       gridEl.appendChild(buildCard(def, installed, blocked || []));
     });
+    captureDefaultModuleSnapshot();
     updateFuture();
     onConfigChanged();
   }
@@ -642,25 +811,33 @@
   });
 
   // ------------------------------------------------- existing-data consent
-  // Including existing records is the one setting that lets a value read out of
-  // the target database reach an LLM prompt: modules/crm.py's chatter prompt
-  // carries the customer's name and the salesperson's name. Everything else the
-  // pipeline sends is LLM-invented or was created by this run, and existing
-  // products are used as IDs only, never as text.
+  // S16/B4 (pre-merge cold review): this used to be driven by a top-level
+  // "Vorhandene Daten einbeziehen" checkbox (build_context's DB-wide
+  // is_company+customer_rank fetch). D11 superseded that mechanism with
+  // target.reuse_master_data (D8b, scoped to one specific existing
+  // res.company) — build_context_list deliberately never wires the old
+  // existing_company_ids/existing_product_ids kwargs, so the old checkbox
+  // had gone silently inert while its own consent trigger stayed wired to
+  // it. Consent now triggers off chk-target-reuse, the control that
+  // actually reaches the server (run_config.build_context_list's
+  // `reuse_requested = any(t.get("reuse_master_data") ...)`).
   //
-  // Declining is not just a UI state — it is passed to the server, which then
-  // sends "Kunde"/"Verkäufer" instead of the real names.
+  // Same privacy shape as before: modules/crm.py's chatter prompt carries
+  // the reused company's customer/salesperson name to the LLM provider.
+  // Declining is not just a UI state — it is passed to the server, which
+  // then sends "Kunde"/"Verkäufer" instead of the real names.
   var CONSENT_TEXT =
-    "„Vorhandene Daten einbeziehen“ verwendet Kontakte und Produkte, die bereits in der "
-    + "Zieldatenbank stehen. Für die Chatter-Konversationen wird dabei der Name des "
-    + "Kunden und der des zuständigen Benutzers an den LLM-Anbieter übermittelt, damit "
-    + "die Nachrichten die richtigen Personen ansprechen. Produkte, Beträge und alle "
-    + "übrigen Felder werden ausschließlich im Code verarbeitet und nie gesendet.\n\n"
-    + "Bei Ablehnung wird die Option abgewählt: der Lauf legt eigene Stammdaten an und "
-    + "die Konversationen sprechen neutral von „Kunde“ und „Verkäufer“.";
+    "„Vorhandene Stammdaten dieser Firma wiederverwenden“ verwendet Kontakte und Produkte, "
+    + "die für die gewählte bestehende Firma bereits in der Zieldatenbank stehen. Für die "
+    + "Chatter-Konversationen wird dabei der Name des Kunden und der des zuständigen "
+    + "Benutzers an den LLM-Anbieter übermittelt, damit die Nachrichten die richtigen "
+    + "Personen ansprechen. Produkte, Beträge und alle übrigen Felder werden ausschließlich "
+    + "im Code verarbeitet und nie gesendet.\n\n"
+    + "Bei Ablehnung wird die Option abgewählt: der Lauf legt eigene Stammdaten an und die "
+    + "Konversationen sprechen neutral von „Kunde“ und „Verkäufer“.";
 
   function updateConsentUi() {
-    var wanted = checked("chk-use-existing");
+    var wanted = checked("chk-target-reuse");
     setHidden("consent-block", !wanted || state.consent === "granted");
     setText("consent-detail", CONSENT_TEXT);
     var label = $("consent-state");
@@ -676,11 +853,10 @@
     }
   }
 
-  $("chk-use-existing").addEventListener("change", function () {
+  $("chk-target-reuse").addEventListener("change", function () {
     // Any change re-opens the question; a stale yes must not survive a toggle.
     state.consent = null;
     updateConsentUi();
-    onConfigChanged();
   });
 
   $("btn-consent-yes").addEventListener("click", function () {
@@ -690,7 +866,7 @@
 
   $("btn-consent-no").addEventListener("click", function () {
     state.consent = "denied";
-    $("chk-use-existing").checked = false;
+    $("chk-target-reuse").checked = false;
     // Declining also releases "keine neuen Stammdaten", which forces the option
     // back on — otherwise the two settings would fight each other.
     $("chk-skip-master").checked = false;
@@ -703,10 +879,12 @@
     var skip = checked("chk-skip-master");
     setHidden("master-data-block", skip);
     if (skip) {
-      // Skipping master data is only meaningful with existing records, so it
-      // implies the option — and therefore the same question.
-      if (!checked("chk-use-existing")) state.consent = null;
-      $("chk-use-existing").checked = true;
+      // Skipping master data only makes sense against an existing company's
+      // reused data — it implies the option, and therefore the same question.
+      // (If the active tab's target isn't "existing", this combination still
+      // reaches the server and gets a clear 400 rather than an empty run.)
+      if (!checked("chk-target-reuse")) state.consent = null;
+      $("chk-target-reuse").checked = true;
     }
     updateConsentUi();
     onConfigChanged();
@@ -721,18 +899,134 @@
     }).map(function (def) { return def.key; });
   }
 
+  function collectModules() {
+    var out = {};
+    if (currentMode() === "both") {
+      MODULE_DEFS.forEach(function (def) {
+        if (checked("mod-" + def.key)) out[def.key] = def.collect();
+      });
+    }
+    return out;
+  }
+
+  // Module cards themselves (installed/blocked/disabled) don't change across
+  // companies — one Odoo instance, one connect() result — only which modules
+  // are turned ON and their field values differ per saved block.
+  function restoreModules(modulesObj) {
+    modulesObj = modulesObj || {};
+    MODULE_DEFS.forEach(function (def) {
+      var box = $("mod-" + def.key);
+      if (!box) return;
+      var present = Object.prototype.hasOwnProperty.call(modulesObj, def.key);
+      box.checked = present && !box.disabled;
+      def.restore(present ? modulesObj[def.key] : null);
+    });
+  }
+
   function updateConfigSummary() {
     var count = activeModuleKeys().length;
     var modeLabel = currentMode() === "both" ? "Stammdaten + Bewegungsdaten" : "Nur Stammdaten";
     setText("config-summary", count + " Module aktiv · Modus: " + modeLabel);
   }
 
-  function buildPayload() {
-    var payload = {
+  // ---------------------------------------------------- Firmenauswahl (S16)
+  // The Konfiguration screen stays ONE set of DOM controls (no cloning): a
+  // tab strip on top saves the active tab's current values into
+  // state.companies[i] and writes the newly selected tab's saved values back
+  // into the same controls. Full pipeline repeats per company server-side
+  // (S16-NEU); this is just which company each screenful of settings belongs to.
+  var targetModeSeg = $("target-mode-segmented");
+
+  function targetMode() {
+    var active = targetModeSeg.querySelector("button.active");
+    return active ? active.dataset.mode : "new";
+  }
+
+  function collectTarget() {
+    if (targetMode() === "existing") {
+      var sel = $("f-target-existing");
+      var companyId = sel && sel.value ? parseInt(sel.value, 10) : null;
+      return { mode: "existing", company_id: companyId, reuse_master_data: checked("chk-target-reuse") };
+    }
+    return {
+      mode: "new",
+      name: ($("f-target-name").value || "").trim(),
+      country: $("f-target-country").value || "DE",
+    };
+  }
+
+  function restoreTarget(target) {
+    target = target || { mode: "new", name: "", country: "DE" };
+    var mode = target.mode === "existing" ? "existing" : "new";
+    Array.prototype.forEach.call(targetModeSeg.children, function (c) {
+      c.classList.toggle("active", c.dataset.mode === mode);
+    });
+    setHidden("target-new-fields", mode !== "new");
+    setHidden("target-existing-fields", mode !== "existing");
+    setVal("f-target-name", target.name || "");
+    setVal("f-target-country", target.country || "DE");
+    if (target.company_id !== undefined && target.company_id !== null) {
+      setVal("f-target-existing", String(target.company_id));
+    }
+    setChecked("chk-target-reuse", !!target.reuse_master_data);
+  }
+
+  targetModeSeg.addEventListener("click", function (e) {
+    var b = e.target.closest("button");
+    if (!b) return;
+    Array.prototype.forEach.call(targetModeSeg.children, function (c) {
+      c.classList.toggle("active", c === b);
+    });
+    setHidden("target-new-fields", b.dataset.mode !== "new");
+    setHidden("target-existing-fields", b.dataset.mode !== "existing");
+    onConfigChanged();
+  });
+
+  // Target fields don't change the record estimate itself, but they do
+  // change payload VALIDITY (a blank "new company" name 400s /api/preflight)
+  // — without this, the live summary only catches up on the next unrelated
+  // field edit instead of the moment a name is typed.
+  $("f-target-name").addEventListener("input", onConfigChanged);
+  $("f-target-country").addEventListener("change", onConfigChanged);
+  $("f-target-existing").addEventListener("change", onConfigChanged);
+  $("chk-target-reuse").addEventListener("change", onConfigChanged);
+
+  function populateExistingCompanySelect() {
+    var sel = $("f-target-existing");
+    clear(sel);
+    state.realCompanies.forEach(function (c) {
+      var opt = document.createElement("option");
+      opt.value = String(c.id);
+      opt.textContent = c.name;
+      sel.appendChild(opt);
+    });
+  }
+
+  function companyNameById(id) {
+    if (id === null || id === undefined) return null;
+    var found = state.realCompanies.filter(function (c) { return c.id === id; })[0];
+    return found ? found.name : null;
+  }
+
+  function defaultCompanyBlock() {
+    return {
+      target: { mode: "new", name: "", country: "DE" },
+      mode: "master",
+      industry: "IT-Dienstleistung",
+      skip_master_data: false,
+      master_data: {
+        num_companies: 3, num_delivery_contacts: 1, num_invoice_contacts: 1,
+        num_other_contacts: 1, num_services: 5, num_consumables: 3, num_storables: 3,
+      },
+      modules: JSON.parse(JSON.stringify(defaultModuleSnapshot)),
+    };
+  }
+
+  function collectConfigBlock() {
+    return {
+      target: collectTarget(),
       mode: currentMode(),
       industry: ($("f-industry").value || "").trim(),
-      use_existing: checked("chk-use-existing"),
-      existing_data_consent: state.consent,
       skip_master_data: checked("chk-skip-master"),
       master_data: {
         num_companies: intVal("s-unternehmen", 3),
@@ -743,14 +1037,93 @@
         num_consumables: intVal("s-verbrauch", 3),
         num_storables: intVal("s-lager", 3),
       },
-      modules: {},
+      modules: collectModules(),
     };
-    if (currentMode() === "both") {
-      MODULE_DEFS.forEach(function (def) {
-        if (checked("mod-" + def.key)) payload.modules[def.key] = def.collect();
-      });
-    }
-    return payload;
+  }
+
+  function restoreCompanyBlock(block) {
+    block = block || defaultCompanyBlock();
+    restoreTarget(block.target);
+    Array.prototype.forEach.call(modeSeg.children, function (c) {
+      c.classList.toggle("active", c.dataset.mode === block.mode);
+    });
+    setHidden("module-section", block.mode !== "both");
+    setVal("f-industry", block.industry || "");
+    updateConsentUi();
+    setChecked("chk-skip-master", !!block.skip_master_data);
+    setHidden("master-data-block", !!block.skip_master_data);
+    var md = block.master_data || {};
+    setStepperValue("s-unternehmen", md.num_companies !== undefined ? md.num_companies : 3);
+    setStepperValue("s-liefer", md.num_delivery_contacts !== undefined ? md.num_delivery_contacts : 1);
+    setStepperValue("s-rechnung", md.num_invoice_contacts !== undefined ? md.num_invoice_contacts : 1);
+    setStepperValue("s-kontakte", md.num_other_contacts !== undefined ? md.num_other_contacts : 1);
+    setStepperValue("s-dienst", md.num_services !== undefined ? md.num_services : 5);
+    setStepperValue("s-verbrauch", md.num_consumables !== undefined ? md.num_consumables : 3);
+    setStepperValue("s-lager", md.num_storables !== undefined ? md.num_storables : 3);
+    restoreModules(block.modules || {});
+    updateFuture();
+    updateConfigSummary();
+  }
+
+  function saveActiveCompanyBlock() {
+    if (!state.companies.length) return;
+    state.companies[state.activeCompanyIndex] = collectConfigBlock();
+  }
+
+  function renderCompanyTabs() {
+    var wrap = $("company-tabs");
+    clear(wrap);
+    state.companies.forEach(function (block, i) {
+      var label;
+      if (block.target && block.target.mode === "existing") {
+        label = companyNameById(block.target.company_id) || ("Firma " + (i + 1));
+      } else {
+        label = (block.target && block.target.name) || ("Firma " + (i + 1));
+      }
+      var btn = el("button", "company-tab" + (i === state.activeCompanyIndex ? " active" : ""), label);
+      btn.type = "button";
+      btn.dataset.index = String(i);
+      wrap.appendChild(btn);
+    });
+    $("btn-remove-company").disabled = state.companies.length <= 1;
+  }
+
+  function switchToCompany(index) {
+    if (index === state.activeCompanyIndex) return;
+    saveActiveCompanyBlock();
+    state.activeCompanyIndex = index;
+    restoreCompanyBlock(state.companies[index]);
+    renderCompanyTabs();
+    onConfigChanged();
+  }
+
+  $("company-tabs").addEventListener("click", function (e) {
+    var b = e.target.closest(".company-tab");
+    if (!b) return;
+    switchToCompany(parseInt(b.dataset.index, 10));
+  });
+
+  $("btn-add-company").addEventListener("click", function () {
+    state.companies.push(defaultCompanyBlock());
+    switchToCompany(state.companies.length - 1);
+  });
+
+  $("btn-remove-company").addEventListener("click", function () {
+    if (state.companies.length <= 1) return;
+    var removed = state.activeCompanyIndex;
+    state.companies.splice(removed, 1);
+    state.activeCompanyIndex = Math.min(removed, state.companies.length - 1);
+    restoreCompanyBlock(state.companies[state.activeCompanyIndex]);
+    renderCompanyTabs();
+    onConfigChanged();
+  });
+
+  function buildPayload() {
+    saveActiveCompanyBlock();
+    return {
+      existing_data_consent: state.consent,
+      companies: state.companies,
+    };
   }
 
   // ------------------------------------------------------------------ auth
@@ -1067,16 +1440,43 @@
     setText("server-tag", (urlField.value || "").replace(/^https:\/\//, ""));
     setText("foot-odoo-text", "Odoo: " + (data.ok ? "verbunden" : "Fehler"));
     setText("foot-llm-text", "LLM: " + (data.llm_provider || "nicht verbunden"));
-    setText("existing-sub",
-      "(" + (data.existing_companies || 0) + " Kunden, " + (data.existing_products || 0) + " Produkte gefunden)");
     state.consent = null;
     updateConsentUi();
     renderModuleGrid(data.installed_modules || [], data.blocked_modules || []);
+
+    // S16/D8a: reconnecting resets the company list to a single fresh block —
+    // consistent with renderModuleGrid/updateConsentUi above also resetting.
+    state.realCompanies = data.real_companies || [];
+    populateExistingCompanySelect();
+    state.companies = [defaultCompanyBlock()];
+    state.activeCompanyIndex = 0;
+    restoreCompanyBlock(state.companies[0]);
+    renderCompanyTabs();
   }
 
   // -------------------------------------------------------------- preflight
+  // S16/B4: checked at submit time, across ALL saved companies, not just the
+  // active tab — reuse_master_data can be set on a company you're not
+  // currently looking at, and the server's consent gate
+  // (run_config.validate_consent's reuse_requested) is a run-wide OR, same
+  // as this must be.
+  function reuseRequestingCompanyIndex() {
+    saveActiveCompanyBlock();
+    for (var i = 0; i < state.companies.length; i++) {
+      if (state.companies[i].target && state.companies[i].target.reuse_master_data) return i;
+    }
+    return -1;
+  }
+
   function consentSatisfied() {
-    if (!checked("chk-use-existing") || state.consent === "granted") return true;
+    var offender = reuseRequestingCompanyIndex();
+    if (offender === -1 || state.consent === "granted") return true;
+    // The consent block lives inside the Firmen panel's "existing" target
+    // fields — if the offending company isn't the tab on screen, its own
+    // target-existing-fields (and therefore consent-block) is display:none
+    // via #target-existing-fields.is-hidden, so switch to it first or the
+    // unhide below has nothing visible to unhide.
+    if (offender !== state.activeCompanyIndex) switchToCompany(offender);
     setHidden("consent-block", false);
     $("consent-block").scrollIntoView({ block: "center" });
     var label = $("consent-state");
@@ -1137,7 +1537,18 @@
     var list = $("progress-list");
     clear(list);
     state.moduleRows = {};
+    // S16: qualified keys ("0:crm") carry a company_index — group the flat
+    // module list under a "Firma N" header per company. Index is server-
+    // assigned per target position, not a stored name, so the header always
+    // matches jobs.py's own "Firma {i+1}" fallback label.
+    var lastGroup;
     modules.forEach(function (m) {
+      if (m.company_index !== lastGroup) {
+        lastGroup = m.company_index;
+        if (lastGroup !== null && lastGroup !== undefined) {
+          list.appendChild(el("div", "progress-group-head", "Firma " + (lastGroup + 1)));
+        }
+      }
       var row = el("div", "progress-row");
       row.appendChild(el("span", "p-label", m.label));
       var status = el("span", "p-status " + m.status, statusLabel(m.status));
@@ -1145,6 +1556,61 @@
       list.appendChild(row);
       state.moduleRows[m.key] = status;
     });
+  }
+
+  // ---- runtime timer ("Laufzeit" / "Verbleibend (ca.)") -------------------
+  // Elapsed is exact (server started_at vs. wall clock). Remaining is a
+  // self-correcting estimate from the fraction of modules finished so far
+  // (elapsed / done * pending) — no per-module weighting data exists, and a
+  // finished-module-count ratio is the same approach the rest of this app
+  // uses for "(ca.)" estimates (see run_config.estimate_record_counts).
+  // Absent before the first module completes; shown as "wird berechnet…".
+  function formatDuration(totalSeconds) {
+    var s = Math.max(0, Math.round(totalSeconds));
+    var m = Math.floor(s / 60);
+    var rem = s % 60;
+    return m + ":" + (rem < 10 ? "0" : "") + rem;
+  }
+
+  function stopRunTimer() {
+    if (state.timerHandle) {
+      window.clearInterval(state.timerHandle);
+      state.timerHandle = null;
+    }
+  }
+
+  function tickRunTimer() {
+    if (!state.runStartedAt) return;
+    var elapsed = (Date.now() / 1000) - state.runStartedAt;
+    setText("stat-elapsed", formatDuration(elapsed));
+
+    var total = state.runModules.length;
+    var done = state.runModules.filter(function (m) {
+      return m.status === "done" || m.status === "failed" || m.status === "skipped";
+    }).length;
+    if (!total || !done) {
+      setText("stat-remaining", "wird berechnet…");
+    } else if (done >= total) {
+      setText("stat-remaining", "0:00");
+    } else {
+      var remaining = (elapsed / done) * (total - done);
+      setText("stat-remaining", "~" + formatDuration(remaining));
+    }
+  }
+
+  function startRunTimer(startedAt) {
+    stopRunTimer();
+    state.runStartedAt = startedAt;
+    tickRunTimer();
+    state.timerHandle = window.setInterval(tickRunTimer, 1000);
+  }
+
+  function resetRunTimer() {
+    stopRunTimer();
+    state.runStartedAt = null;
+    state.runModules = [];
+    setText("stat-elapsed", "–");
+    setText("stat-remaining", "–");
   }
 
   function statusLabel(status) {
@@ -1155,6 +1621,9 @@
     // and ctx.skipped_modules says a module did nothing despite on_done(ok=true) —
     // e.g. "documents" with no write access on ir.attachment.
     if (status === "skipped") return "Übersprungen (keine Rechte)";
+    // Run-level (RunRecord.status), not a module status — some companies
+    // succeeded, some failed outright (S16/STATUS_PARTIAL).
+    if (status === "partial") return "Teilweise erfolgreich";
     return "Ausstehend";
   }
 
@@ -1178,6 +1647,7 @@
         state.runId = data.run_id;
         clear($("console"));
         renderProgressList(data.modules || []);
+        resetRunTimer();
         setText("stat-status", "in Warteschlange");
         setHidden("panel-run-errors", true);
         setHidden("btn-cleanup", true);
@@ -1207,6 +1677,8 @@
         node.className = "p-status " + payload.status;
         node.textContent = statusLabel(payload.status);
       }
+      var row = state.runModules.filter(function (m) { return m.key === payload.key; })[0];
+      if (row) row.status = payload.status;
     });
     source.addEventListener("status", function (e) {
       applyRunStatus(JSON.parse(e.data));
@@ -1229,11 +1701,23 @@
   }
 
   function applyRunStatus(data) {
-    setText("stat-status", data.status);
+    setText("stat-status", statusLabel(data.status));
     setText("stat-calls", data.llm_calls);
     setText("stat-tokens", data.llm_tokens);
     setText("stat-errors", (data.api_errors || []).length);
     setText("stat-records", data.journal_records);
+
+    state.runModules = (data.modules || []).map(function (m) {
+      return { key: m.key, status: m.status };
+    });
+    if (data.started_at && state.runStartedAt !== data.started_at) {
+      startRunTimer(data.started_at);
+    }
+    if (data.status === "done" || data.status === "failed" || data.status === "partial") {
+      stopRunTimer();
+      tickRunTimer();  // one final render at the frozen elapsed time
+      setText("stat-remaining", "0:00");
+    }
 
     (data.modules || []).forEach(function (m) {
       var node = state.moduleRows[m.key];
@@ -1257,7 +1741,7 @@
       setHidden("panel-run-errors", false);
     }
 
-    if (data.status === "done" || data.status === "failed") {
+    if (data.status === "done" || data.status === "failed" || data.status === "partial") {
       setHidden("btn-cleanup", !data.journal_records);
     }
   }

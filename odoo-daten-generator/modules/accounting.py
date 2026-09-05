@@ -159,10 +159,20 @@ def create_vendor_bill(client, supplier_id, product_ids, description_prefix="Ven
     return bill_id
 
 
-def get_or_create_bank_journal(client):
-    """Get or create a bank journal for bank transactions."""
+def get_or_create_bank_journal(client, company_id=None):
+    """Get or create a bank journal for bank transactions.
+
+    S16/B3: search_read is deliberately excluded from D14's context injection
+    (odoo_client._merge_context), so an unscoped domain here would find
+    whichever company's bank journal has the lowest id — not necessarily the
+    one this run is currently writing to. company_id makes the domain itself
+    company-aware instead of relying on context scoping.
+    """
+    domain = [["type", "=", "bank"]]
+    if company_id is not None:
+        domain.append(["company_id", "=", company_id])
     journals = client.search_read(
-        'account.journal', [["type", "=", "bank"]], fields=["id", "name"], limit=1,
+        'account.journal', domain, fields=["id", "name"], limit=1,
     )
     if journals:
         journal_id = journals[0].get("id")
@@ -184,7 +194,7 @@ def _introduce_typo(label: str) -> str:
     return "".join(chars)
 
 
-def create_bank_transactions_for_all_invoices(client, invoice_ids, bill_ids):
+def create_bank_transactions_for_all_invoices(client, invoice_ids, bill_ids, company_id=None):
     """Create bank transactions for this run's vendor bills and customer invoices.
 
     Scoped to invoice_ids/bill_ids (created this run) rather than scanning every
@@ -200,7 +210,7 @@ def create_bank_transactions_for_all_invoices(client, invoice_ids, bill_ids):
     if not invoice_ids and not bill_ids:
         logger.info("-> Keine Rechnungen aus diesem Lauf — keine Banktransaktionen")
         return []
-    journal_id = get_or_create_bank_journal(client)
+    journal_id = get_or_create_bank_journal(client, company_id=company_id)
 
     vendor_bills = client.search_read(
         'account.move',
@@ -396,4 +406,6 @@ def create_accounting_data(client, gemini, ctx: RunContext) -> None:
 
     # Bank transactions (if requested)
     if ctx.module_selections.create_bank_transactions:
-        create_bank_transactions_for_all_invoices(client, ctx.invoice_ids, ctx.bill_ids)
+        target_company_id = ctx.res_company_ids[0] if ctx.res_company_ids else None
+        create_bank_transactions_for_all_invoices(
+            client, ctx.invoice_ids, ctx.bill_ids, company_id=target_company_id)

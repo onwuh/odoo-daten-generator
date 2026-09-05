@@ -170,3 +170,16 @@ class RunContext:
     # and would retry (and duplicate the plan) on every subsequent call,
     # same reasoning as mrp.py's _get_company_id() wrapper-list memoization.
     analytic_account_ids: Optional[List[int]] = None
+    # S16/D2: the real res.company id this ctx is scoped to — disambiguated
+    # from company_ids above, which despite its name holds res.partner ids
+    # (customer/company contacts from master_data.py), never a real
+    # res.company id. Under D10 each RunContext is scoped to exactly one
+    # company, populated by exactly one caller (web/jobs.py's per-company
+    # loop, once, right after resolving that iteration's target company) —
+    # a flat list, not a bare int, only because a future N-companies-per-ctx
+    # scope wouldn't need another schema change; NOT a signal that more than
+    # one entry is expected today. A second caller populating this MUST
+    # switch to an Optional[List[int]]/None-sentinel first (same reasoning
+    # as analytic_account_ids above) — a plain list default can't
+    # distinguish "not yet resolved" from "resolved to nothing".
+    res_company_ids: List[int] = field(default_factory=list)

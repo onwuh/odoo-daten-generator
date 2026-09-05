@@ -17,11 +17,12 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
+import odoo_actions
 import orchestrator
 import run_config
-from connect_service import detect_provider
+from connect_service import detect_provider, fetch_existing_company_data
 from llm_service import LLMService
 from logging_setup import run_log_capture
 from run_journal import JournalingClient, RunJournal, default_journal_dir, run_log_path
@@ -33,6 +34,11 @@ STATUS_QUEUED = "queued"
 STATUS_RUNNING = "running"
 STATUS_DONE = "done"
 STATUS_FAILED = "failed"
+# S16: at least one company succeeded and at least one failed entirely
+# (company-level failure — a module failing within an otherwise-successful
+# company does NOT cause this; that's still STATUS_DONE, same as today,
+# since orchestrator._run_module already swallows per-module exceptions).
+STATUS_PARTIAL = "partial"
 
 MODULE_PENDING = "pending"
 MODULE_RUNNING = "running"
@@ -46,6 +52,22 @@ MODULE_FAILED = "failed"
 # created. Set from ctx.skipped_modules AFTER orchestrator.run() returns —
 # module code has no channel back to on_done() to say "I skipped", only to ctx.
 MODULE_SKIPPED = "skipped"
+
+
+def _bare_module_key(key: str) -> str:
+    """S16: strips a multi-company "{index}:{module_code}" prefix, if
+    present, so MODULE_LABELS (keyed by bare module_code) can find it.
+    Single-company keys have no prefix and pass through unchanged."""
+    idx, _, rest = key.partition(":")
+    return rest if idx.isdigit() and rest else key
+
+
+def _company_index(key: str) -> Optional[int]:
+    """S16: the company-loop index a qualified module key belongs to, or
+    None for a single-company (unqualified) key — lets a frontend group
+    rows by company without re-deriving the qualification scheme itself."""
+    idx, sep, rest = key.partition(":")
+    return int(idx) if sep and idx.isdigit() and rest else None
 
 
 def _int_env(name: str, default: int) -> int:
@@ -116,9 +138,14 @@ class RunRecord:
             "finished_at": self.finished_at,
             "modules": [
                 {"key": key,
-                 "label": run_config.MODULE_LABELS.get(key, key),
+                 # S16: a multi-company key is "{index}:{module_code}" —
+                 # MODULE_LABELS only knows the bare module_code, so the
+                 # prefix must come off before the lookup, or every row
+                 # falls back to showing its own raw key instead of a label.
+                 "label": run_config.MODULE_LABELS.get(_bare_module_key(key), key),
                  "status": self.modules.get(key, MODULE_PENDING),
-                 "error": self.module_errors.get(key)}
+                 "error": self.module_errors.get(key),
+                 "company_index": _company_index(key)}
                 for key in self.module_order
             ],
             "llm_calls": self.llm_calls,
@@ -182,32 +209,62 @@ class JobQueue:
             )
 
         connect = session.connect
-        ctx, selected = run_config.build_context(
-            payload,
-            language_name=connect.language_name,
-            language_code=connect.language_code,
-            llm_model_name=session.llm_model or "",
-            installed_modules=connect.installed_modules,
-            feature_flags=connect.feature_flags,
-            model_access=connect.model_access,
-            existing_company_ids=connect.existing_company_ids,
-            existing_product_ids=connect.existing_product_ids,
-        )
+
+        # S16: `"companies" in payload` is the multi-company path (D9/D11) —
+        # `targets` is None for the legacy single-company shape, a signal
+        # _execute() uses to skip the whole per-company resolution loop
+        # (D10-Korrektur/D14/D15/D8b/D12) entirely and run exactly as before
+        # S16 existed. This dual path is a deliberate bridge, not a
+        # permanent fork: kept only until the frontend (WP5) always sends
+        # the new shape, at which point the legacy branch becomes dead code
+        # worth deleting, not extending further.
+        if "companies" in payload:
+            contexts_and_selected = run_config.build_context_list(
+                payload,
+                language_name=connect.language_name,
+                language_code=connect.language_code,
+                llm_model_name=session.llm_model or "",
+                installed_modules=connect.installed_modules,
+                feature_flags=connect.feature_flags,
+                model_access=connect.model_access,
+            )
+            targets = [block.get("target") or {} for block in payload["companies"]]
+        else:
+            ctx, selected = run_config.build_context(
+                payload,
+                language_name=connect.language_name,
+                language_code=connect.language_code,
+                llm_model_name=session.llm_model or "",
+                installed_modules=connect.installed_modules,
+                feature_flags=connect.feature_flags,
+                model_access=connect.model_access,
+                existing_company_ids=connect.existing_company_ids,
+                existing_product_ids=connect.existing_product_ids,
+            )
+            contexts_and_selected = [(ctx, selected)]
+            targets = None
 
         run_id = self._next_run_id()
-        keys = run_config.active_progress_keys(ctx, selected)
+        labels = (
+            [t.get("name") or f"Firma {i + 1}" for i, t in enumerate(targets)]
+            if targets is not None else None
+        )
+        module_order, record_estimate = run_config.multi_company_preview(contexts_and_selected, labels)
+        modules: Dict[str, str] = {k: MODULE_PENDING for k in module_order}
+
         record = RunRecord(
             run_id=run_id,
             session_id=session.id,
             target=session.base_url,
-            module_order=keys,
-            modules={k: MODULE_PENDING for k in keys},
-            record_estimate=run_config.estimate_record_counts(ctx, selected),
+            module_order=module_order,
+            modules=modules,
+            record_estimate=record_estimate,
         )
         with self._lock:
             self._runs[run_id] = record
             self._jobs[run_id] = {
-                "ctx": ctx,
+                "contexts": contexts_and_selected,
+                "targets": targets,
                 "base_url": session.base_url,
                 "database": session.database,
                 "odoo_key": session.odoo_key,
@@ -241,7 +298,7 @@ class JobQueue:
         cutoff = time.time() - max_age_seconds
         with self._lock:
             stale = [rid for rid, rec in self._runs.items()
-                     if rec.status in (STATUS_DONE, STATUS_FAILED)
+                     if rec.status in (STATUS_DONE, STATUS_FAILED, STATUS_PARTIAL)
                      and (rec.finished_at or rec.created_at) < cutoff]
             for run_id in stale:
                 self._runs.pop(run_id, None)
@@ -305,6 +362,13 @@ class JobQueue:
         journal.set_target(job["base_url"])
         client = None
         llm = None
+        targets = job["targets"]
+        # S16: which company-loop iterations failed entirely (target
+        # resolution, or anything inside that company's orchestrator.run()
+        # call raising past its own internal per-module handling). Declared
+        # outside the try so the outer `finally` below can use it too, for
+        # both the legacy (always empty) and multi-company paths.
+        failed_indices: Set[int] = set()
 
         # run_log_capture binds the run id in THIS thread's context — a fresh
         # thread starts with an empty context rather than inheriting one, and
@@ -316,39 +380,154 @@ class JobQueue:
                 provider = detect_provider(job["llm_key"], job["llm_provider"])
                 llm = LLMService(job["llm_key"], job["llm_model"], provider)
 
-                def on_start(name: str) -> None:
-                    key = run_config.PROGRESS_KEY_MAP.get(name, name)
-                    if key in record.modules:
-                        record.modules[key] = MODULE_RUNNING
-                    self._publish(run_id, "module", {"key": key, "status": MODULE_RUNNING})
+                if targets is None:
+                    # Legacy single-company path — unchanged from before S16
+                    # existed. Kept only as a bridge until the frontend (WP5)
+                    # always sends the "companies" payload shape.
+                    ctx, _selected = job["contexts"][0]
 
-                def on_done(name: str, ok: bool = True) -> None:
-                    key = run_config.PROGRESS_KEY_MAP.get(name, name)
-                    status = MODULE_DONE if ok else MODULE_FAILED
-                    if key in record.modules:
-                        record.modules[key] = status
-                    if not ok:
-                        # orchestrator._run_module swallows the exception into a
-                        # log line. In the desktop app that scrolled past; here
-                        # the module row has to show it.
-                        record.module_errors[key] = "Modul fehlgeschlagen — Details im Protokoll"
-                    self._publish(run_id, "module",
-                                  {"key": key, "status": status,
-                                   "error": record.module_errors.get(key)})
+                    def on_start(name: str) -> None:
+                        key = run_config.PROGRESS_KEY_MAP.get(name, name)
+                        if key in record.modules:
+                            record.modules[key] = MODULE_RUNNING
+                        self._publish(run_id, "module", {"key": key, "status": MODULE_RUNNING})
 
-                orchestrator.run(client, llm, job["ctx"],
-                                 on_module_start=on_start, on_module_done=on_done)
-                # A module can return normally (on_done(ok=True) already fired)
-                # yet have done nothing, because a write-access probe blocked
-                # it partway through. ctx.skipped_modules is the only channel
-                # for that — module code has no way to tell on_done() apart
-                # from a genuine success, and orchestrator.py's on_done
-                # signature (name, ok) is locked.
-                for key in job["ctx"].skipped_modules:
-                    if record.modules.get(key) == MODULE_DONE:
-                        record.modules[key] = MODULE_SKIPPED
-                        self._publish(run_id, "module", {"key": key, "status": MODULE_SKIPPED})
-                record.status = STATUS_DONE
+                    def on_done(name: str, ok: bool = True) -> None:
+                        key = run_config.PROGRESS_KEY_MAP.get(name, name)
+                        status = MODULE_DONE if ok else MODULE_FAILED
+                        if key in record.modules:
+                            record.modules[key] = status
+                        if not ok:
+                            # orchestrator._run_module swallows the exception into a
+                            # log line. In the desktop app that scrolled past; here
+                            # the module row has to show it.
+                            record.module_errors[key] = "Modul fehlgeschlagen — Details im Protokoll"
+                        self._publish(run_id, "module",
+                                      {"key": key, "status": status,
+                                       "error": record.module_errors.get(key)})
+
+                    orchestrator.run(client, llm, ctx,
+                                     on_module_start=on_start, on_module_done=on_done)
+                    # A module can return normally (on_done(ok=True) already fired)
+                    # yet have done nothing, because a write-access probe blocked
+                    # it partway through. ctx.skipped_modules is the only channel
+                    # for that — module code has no way to tell on_done() apart
+                    # from a genuine success, and orchestrator.py's on_done
+                    # signature (name, ok) is locked.
+                    for key in ctx.skipped_modules:
+                        if record.modules.get(key) == MODULE_DONE:
+                            record.modules[key] = MODULE_SKIPPED
+                            self._publish(run_id, "module", {"key": key, "status": MODULE_SKIPPED})
+                    record.status = STATUS_DONE
+                else:
+                    # S16 multi-company path — the full per-company loop
+                    # (D10-Korrektur/D14/D15/D8b/D12), see ROADMAP.md's
+                    # S16-NEU spike for the numbered step-by-step design.
+                    contexts_and_selected = job["contexts"]
+                    shared_analytic_cache: Optional[List[int]] = None
+
+                    for index, (ctx, _selected) in enumerate(contexts_and_selected):
+                        target = targets[index]
+
+                        # D6: per-iteration closures, built fresh each time so
+                        # every published/stored key is qualified with which
+                        # company it belongs to — orchestrator.py's on_start/
+                        # on_done(name, ok) signature itself stays untouched
+                        # (documented locked, see below).
+                        def on_start(name: str, _idx: int = index) -> None:
+                            key = run_config.PROGRESS_KEY_MAP.get(name, name)
+                            qualified = f"{_idx}:{key}"
+                            if qualified in record.modules:
+                                record.modules[qualified] = MODULE_RUNNING
+                            self._publish(run_id, "module", {"key": qualified, "status": MODULE_RUNNING})
+
+                        def on_done(name: str, ok: bool = True, _idx: int = index) -> None:
+                            key = run_config.PROGRESS_KEY_MAP.get(name, name)
+                            qualified = f"{_idx}:{key}"
+                            status = MODULE_DONE if ok else MODULE_FAILED
+                            if qualified in record.modules:
+                                record.modules[qualified] = status
+                            if not ok:
+                                record.module_errors[qualified] = "Modul fehlgeschlagen — Details im Protokoll"
+                            self._publish(run_id, "module",
+                                          {"key": qualified, "status": status,
+                                           "error": record.module_errors.get(qualified)})
+
+                        try:
+                            # Step 1 (D14): reset the shared client's default
+                            # context — this iteration's own company create()
+                            # below must never run under the PREVIOUS
+                            # iteration's company scope.
+                            client._default_context = None
+                            # Step 2 (D10-Korrektur): resolve this iteration's
+                            # target company — covers both "create new" and
+                            # "use existing" branches.
+                            company_id, was_created = odoo_actions.resolve_target_company(client, target)
+                            ctx.res_company_ids = [company_id]
+                            # Step 3 (D14): scope every subsequent write this
+                            # iteration makes to the resolved company.
+                            client._default_context = {
+                                "allowed_company_ids": [company_id], "company_id": company_id,
+                            }
+                            # Step 4 (D15): a brand-new company has no
+                            # warehouse yet (R17 finding) — purchase.py/
+                            # inventory.py/mrp.py would otherwise silently
+                            # no-op for it. An existing company presumably
+                            # already has one. Gated on at least one of
+                            # those three modules actually being installed
+                            # for this connection — otherwise this company
+                            # never touches stock at all, and creating one
+                            # would just be a wasted call plus an orphan
+                            # empty warehouse.
+                            if was_created and ctx.installed_modules & {"purchase", "stock", "mrp"}:
+                                odoo_actions.create_second_warehouse(client, company_id)
+                            # Step 5 (D8b): reuse this company's own existing
+                            # partners/products, if the block asked for it —
+                            # harmless no-op for a brand-new company (nothing
+                            # exists yet to find).
+                            if target.get("reuse_master_data"):
+                                partner_ids, product_ids = fetch_existing_company_data(client, company_id)
+                                ctx.company_ids.extend(partner_ids)
+                                ctx.product_ids.extend(product_ids)
+                            # Step 6 (D12): seed this iteration's analytic-
+                            # accounts cache from the run-wide shared cache.
+                            # None on the first company that ever needs it —
+                            # get_or_create_analytic_accounts treats that
+                            # exactly like "never attempted", same as today.
+                            ctx.analytic_account_ids = shared_analytic_cache
+                            # Step 7: run this company's full pipeline.
+                            orchestrator.run(client, llm, ctx,
+                                             on_module_start=on_start, on_module_done=on_done)
+                            for key in ctx.skipped_modules:
+                                qualified = f"{index}:{key}"
+                                if record.modules.get(qualified) == MODULE_DONE:
+                                    record.modules[qualified] = MODULE_SKIPPED
+                                    self._publish(run_id, "module",
+                                                  {"key": qualified, "status": MODULE_SKIPPED})
+                        except Exception as exc:
+                            failed_indices.add(index)
+                            logger.warning(f"⚠️  Firma {index + 1} fehlgeschlagen: {exc}")
+                        finally:
+                            # Step 8 (D12), None-guarded: an exception before
+                            # step 6 ever ran (e.g. target-company resolution
+                            # itself failed) leaves ctx.analytic_account_ids
+                            # at its dataclass default None — an unconditional
+                            # harvest would overwrite a real cache from an
+                            # earlier company with None, and the next company
+                            # would create a duplicate "Kostenstellen" plan,
+                            # exactly what D12 exists to prevent.
+                            if ctx.analytic_account_ids is not None:
+                                shared_analytic_cache = ctx.analytic_account_ids
+
+                    if not failed_indices:
+                        record.status = STATUS_DONE
+                    elif len(failed_indices) == len(contexts_and_selected):
+                        record.status = STATUS_FAILED
+                        record.error = (
+                            f"{len(failed_indices)} von {len(contexts_and_selected)} "
+                            f"Firmen fehlgeschlagen.")
+                    else:
+                        record.status = STATUS_PARTIAL
             except Exception as exc:
                 record.status = STATUS_FAILED
                 record.error = str(exc)[:500]
@@ -361,10 +540,22 @@ class JobQueue:
                 if client is not None:
                     record.api_errors = client.get_errors()
                 record.journal_records = len(journal.entries)
-                for key, status in record.modules.items():
-                    if status in (MODULE_PENDING, MODULE_RUNNING):
-                        record.modules[key] = (MODULE_FAILED if record.status == STATUS_FAILED
-                                               else MODULE_DONE)
+                if targets is None:
+                    for key, status in record.modules.items():
+                        if status in (MODULE_PENDING, MODULE_RUNNING):
+                            record.modules[key] = (MODULE_FAILED if record.status == STATUS_FAILED
+                                                   else MODULE_DONE)
+                else:
+                    # S16: a company in failed_indices gets its never-run
+                    # rows marked FAILED, not DONE — this is exactly the
+                    # per-company tracking STATUS_PARTIAL needs; without it
+                    # every pending row of a failed company would silently
+                    # read "fertig" once the run as a whole isn't STATUS_FAILED.
+                    for key, status in record.modules.items():
+                        if status in (MODULE_PENDING, MODULE_RUNNING):
+                            idx_str = key.split(":", 1)[0]
+                            company_failed = idx_str.isdigit() and int(idx_str) in failed_indices
+                            record.modules[key] = MODULE_FAILED if company_failed else MODULE_DONE
 
         self._publish(run_id, "status", record.public_dict())
         self._publish(run_id, "end", {"run_id": run_id, "status": record.status})
