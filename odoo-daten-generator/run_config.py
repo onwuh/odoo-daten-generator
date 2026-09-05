@@ -11,7 +11,7 @@ enters `ctx.installed_modules`, so `orchestrator.py` skips it forever with no
 error. Same silent-disable class as the historical B1 bug.
 """
 import logging
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from config import DemoCriteria, ModuleSelections, RunContext
 from odoo_actions import PRIMARY_MODEL_PER_MODULE
