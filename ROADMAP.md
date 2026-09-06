@@ -51,6 +51,44 @@ Parameter heißt in allen Modulsignaturen `gemini`, Provider ist primär Groq; `
 - ⚪ **Offen:** Provider-Erkennung ist weiterhin Prefix-Sniffing — `connect_service.py:126`: `"groq" if llm_key.startswith("gsk_") else "gemini"`. Kein explizites Dropdown/Feld für die Provider-Wahl im Web-Frontend.
 - ⚪ **Offen:** `orchestrator.py:54` — `gemini.fetch_name_suggestions(...)` läuft weiterhin unconditional bei jedem Lauf, außerhalb des `skip_master_data`-Gates (Zeile 46). Lädt Namensbänke auch dann, wenn kein Modul sie braucht.
 
+### D21 🟠 `field_manifest.json`-Drift wird nirgends erzwungen — Manifest war vier Sprints blind
+
+**Neu 2026-09-06, live gefunden beim S17-Abschluss.** Das Manifest existiert laut R5/WP1 zur
+Drift-Erkennung („optional per CI gegen den committed Stand geprüft", §4/R5/WP1). Der
+Vergleich wurde nie gebaut — und die Datei wurde nach ihrer Entstehung **genau einmal**
+geschrieben: `6ac7f9c` (S11/WP1), ihr einziger Commit bis S17.
+
+Der erste Capture-Lauf danach (S17, `12682cc`) brachte **71 Zusätze, null Streichungen**:
+`account.analytic.account`/`.plan` (S15/R20), `hr.expense` mit 9 Feldern (S12/R19),
+`quality.point`/`quality.check` (S14/R18), `crm.lead.active`/`lost_reason_id`/`probability`
+(S12/R11), `stock.location`/`.lot`/`.warehouse`/`.warehouse.orderpoint` und
+`stock.quant.lot_id` (S13/R13–R15), `mrp.production.company_id` (S10).
+
+**Warum das zählt:** vier Sprints lang hätte ein echter Feld-Rename in einem Odoo-Update in
+genau diesen Modellen unbemerkt bleiben können — sie standen im Manifest nicht drin. Das
+Instrument, das R5 gegen Versions-Drift gebaut hat, war gegen die Hälfte des Codes blind,
+ohne dass irgendetwas darauf hingewiesen hätte. Ein stiller Ausfall einer
+Sicherungsmaßnahme ist schlimmer als ihr Fehlen, weil er Vertrauen erzeugt.
+
+**Warum es passiert ist:** `scripts/check_compat.sh` setzt `ODOO_GENERATOR_CAPTURE_FIELDS=1`
+und schreibt das Manifest damit bei jedem Lauf neu — aber es **vergleicht nicht** gegen den
+committeten Stand, und sein PASS-Text nennt den Diff nur als manuellen Schritt („1. Diff
+field_manifest.json against odoo_actions.FIELD_COMPAT_WHITELIST"). Ein manueller Schritt in
+einem Skript, das man selten und unter Zeitdruck ausführt, ist kein Mechanismus.
+
+**Fix (Reihenfolge nach Kosten):**
+1. `scripts/check_compat.sh` bricht mit eigenem Exit-Code ab, wenn `git diff --quiet
+   field_manifest.json` nach dem Lauf fehlschlägt — Drift wird sichtbar, statt still ins
+   Arbeitsverzeichnis geschrieben zu werden. Billig, sofort wirksam.
+2. Denselben Vergleich in CI, gegen eine Referenzinstanz. Braucht eine Entscheidung, wo die
+   Zugangsdaten liegen — siehe die Einschränkung „keine Firmen-IT" — deshalb nicht Teil von 1.
+3. Erwägen, ob `FIELD_COMPAT_WHITELIST` (`odoo_actions.py`) noch eigenständig gepflegt werden
+   muss, wenn das Manifest verlässlich aktuell ist. R5/WP1 nannte die Whitelist bereits als
+   „von Hand kuratiert und nachweislich unvollständig".
+
+**Komplexität:** Punkt 1 klein · **Benefit:** Hoch — stellt eine Sicherungsmaßnahme wieder
+her, die es nominell schon gab.
+
 ### D20 ⚪ `ModuleSelections.get` strikt machen
 
 **Neu 2026-09-06, aus S17 ausgegliedert.** `ModuleSelections.get(key)` ist
@@ -476,6 +514,7 @@ Kein Sprint festgelegt. Nach Priorität:
 
 | Prio | Item | Kurz |
 |---|---|---|
+| 🟠 | **D21** | `field_manifest.json`-Drift erzwingen (Manifest war seit S11 blind) |
 | 🟠 | **R1** | PDF P3/P4 |
 | 🟠 | **R5** | Übersetzungs-Registry (WP3, in S11 zurückgestellt) |
 | 🟠 | **R14** | Wareneingangs-Anteil (Quant-Anteil erledigt) |
@@ -486,7 +525,12 @@ Kein Sprint festgelegt. Nach Priorität:
 | ⚪ | **D18** | Paketstruktur — bewusst zurückgestellt, eigenes WP |
 | ⚪ | **D20** 🔒 | Striktes `ModuleSelections.get` (aus S17 ausgegliedert) |
 
-**Empfehlung: D6 als Nächstes.** Es ist derselbe Typ mechanischer Rename wie S17s D16, und
+**Empfehlung: D21 zuerst, dann D6.** D21 ist Punkt 1 seines Fix-Blocks — wenige Zeilen in
+`scripts/check_compat.sh` — und stellt eine Sicherungsmaßnahme wieder her, die nominell seit
+S11 existiert und tatsächlich nie gegriffen hat. Solange sie fehlt, arbeitet jeder
+Versions-Check mit einem Instrument, dessen Blindheit niemand bemerkt.
+
+Danach D6. Es ist derselbe Typ mechanischer Rename wie S17s D16, und
 S17 hat dafür ein wiederverwendbares Verfahren hinterlassen — Sicherungsnetz auf `main` vor
 der ersten Refactor-Zeile, dann Regel-plus-Suchbefehl statt Fundstellenliste. `D6` berührt
 `RunContext.gemini_model_name`, also erneut `config.py` 🔒.
