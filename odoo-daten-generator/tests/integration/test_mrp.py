@@ -154,7 +154,7 @@ def run(client, ctx):
         results.append(("mrp: confirm manufacturing order", False, str(e)))
 
     # Step 7 — D3: create_mrp_data end-to-end (batched products/components/BOMs
-    # with bom_line_ids inlined), gemini=None to prove it needs no LLM call.
+    # with bom_line_ids inlined), llm=None to prove it needs no LLM call.
     # mrp_routings disabled to keep this test scoped to D3 (products/BOMs),
     # independent of the still-open B15 workcenter default.
     #

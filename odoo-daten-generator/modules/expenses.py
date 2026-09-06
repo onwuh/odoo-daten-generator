@@ -26,7 +26,7 @@ def _unwrap(val):
     return val
 
 
-def create_expense_data(client, gemini, ctx: RunContext) -> None:
+def create_expense_data(client, llm, ctx: RunContext) -> None:
     """Creates hr.expense records for every employee in ctx.employee_ids,
     then submits+approves a configurable share (write(approval_state=...) —
     live-verified S12/WP3, no action method needed)."""

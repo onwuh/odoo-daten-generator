@@ -193,7 +193,7 @@ def _create_bill_pdfs(client, ctx: RunContext) -> None:
         logger.info(f"✅ {len(attachment_vals_list)} PDF-Rechnungen angehängt.")
 
 
-def _create_cv_pdfs(client, gemini, ctx: RunContext) -> None:
+def _create_cv_pdfs(client, llm, ctx: RunContext) -> None:
     doc_config = ctx.module_selections.documents
     if doc_config is None or not doc_config.cv_pdfs_enabled:
         return
@@ -244,8 +244,8 @@ def _create_cv_pdfs(client, gemini, ctx: RunContext) -> None:
         applicants_for_llm.append({"id": a["id"], "name": name, "skills": skills})
 
     bullets_by_id = {}
-    if gemini:
-        bullets_by_id = gemini.fetch_cv_bullet_points_batch(
+    if llm:
+        bullets_by_id = llm.fetch_cv_bullet_points_batch(
             applicants_for_llm, ctx.industry, ctx.language_name
         ) or {}
 
@@ -270,7 +270,7 @@ def _create_cv_pdfs(client, gemini, ctx: RunContext) -> None:
         logger.info(f"✅ {len(attachment_vals_list)} CV-PDFs angehängt.")
 
 
-def create_documents(client, gemini, ctx: RunContext) -> None:
+def create_documents(client, llm, ctx: RunContext) -> None:
     """Creates PDF attachments for vendor bills (P1) and applicant CVs (P2).
 
     Each stage is independently guarded and wrapped so a failure in one
@@ -296,6 +296,6 @@ def create_documents(client, gemini, ctx: RunContext) -> None:
         logger.warning(f"⚠️  PDF-Rechnungen fehlgeschlagen: {e} — CV-PDFs werden trotzdem versucht.")
 
     try:
-        _create_cv_pdfs(client, gemini, ctx)
+        _create_cv_pdfs(client, llm, ctx)
     except Exception as e:
         logger.warning(f"⚠️  CV-PDFs fehlgeschlagen: {e}")

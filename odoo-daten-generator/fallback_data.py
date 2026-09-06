@@ -1,4 +1,4 @@
-# Single source of truth for all hardcoded fallback names used when Gemini is
+# Single source of truth for all hardcoded fallback names used when the LLM is
 # unavailable or returns insufficient data.
 
 FALLBACK_COMPANIES = [

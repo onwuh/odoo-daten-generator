@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 _MAX_SERIAL_RECORDS_PER_RUN = 500
 
 
-def create_inventory_data(client, gemini, ctx: RunContext) -> None:
+def create_inventory_data(client, llm, ctx: RunContext) -> None:
     """Seeds stock.quant on-hand quantities for storable products/components,
     plus S13's optional second warehouse, sub-locations, and lot/serial
     tracking, and S14's optional replenishment rules (orderpoints)."""

@@ -85,7 +85,7 @@ def run():
         ))
         ctx.feature_flags = {"mrp_routings": False}
         with patch("modules.mrp.odoo_actions.create_product") as mock_create_product:
-            mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+            mrp.create_mrp_data(client, llm=None, ctx=ctx)
             mock_create_product.assert_not_called()
         assert client.create_batch.call_count == 4, client.create_batch.call_count
         individually_created_models = [call.args[0] for call in client.create.call_args_list]
@@ -114,7 +114,7 @@ def run():
                                   create_quality_points=False))
         ctx.feature_flags = {"mrp_routings": False}
         with patch("modules.mrp.odoo_actions.create_product"):
-            mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+            mrp.create_mrp_data(client, llm=None, ctx=ctx)
         component_vals = client.create_batch.call_args_list[1].args[1]
         assert component_vals and all(v.get("is_storable") is True for v in component_vals), component_vals
         raw_vals = client.create_batch.call_args_list[2].args[1]
@@ -137,7 +137,7 @@ def run():
                                   num_workcenters=0, num_manufacturing_orders=0,
                                   create_quality_points=False))
         with patch("modules.mrp.odoo_actions.create_product"):
-            mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+            mrp.create_mrp_data(client, llm=None, ctx=ctx)
         assert client.create_batch.call_count == 4, client.create_batch.call_count
         assert len(ctx.component_ids) == 6, ctx.component_ids  # 2 products x 3 components, no raw materials
         # raw_vals_list is empty here (sub_boms_per_product=0) — only check the
@@ -157,7 +157,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(MrpConfig(num_products=0))
-        mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+        mrp.create_mrp_data(client, llm=None, ctx=ctx)
         client.create_batch.assert_not_called()
         assert ctx.product_ids == []
         results.append(("create_mrp_data: num_products=0 -> no create_batch calls (Pattern 5)", True, ""))
@@ -175,7 +175,7 @@ def run():
                                   create_quality_points=False))
         ctx.feature_flags = {"mrp_routings": True}  # routings ON, but 0 workcenters requested
         with patch("modules.mrp.odoo_actions.create_product"):
-            mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+            mrp.create_mrp_data(client, llm=None, ctx=ctx)
         workcenter_creates = _workcenter_vals(client)
         assert workcenter_creates == [], f"B15 regressed: created workcenters despite num_workcenters=0: {workcenter_creates}"
         results.append(("create_mrp_data: num_workcenters=0 -> no workcenters created (B15)", True, ""))
@@ -194,7 +194,7 @@ def run():
                                   create_quality_points=False))
         ctx.feature_flags = {}  # mrp_routings key absent entirely
         with patch("modules.mrp.odoo_actions.create_product"):
-            mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+            mrp.create_mrp_data(client, llm=None, ctx=ctx)
         workcenter_creates = _workcenter_vals(client)
         assert workcenter_creates == [], (
             f"B15 default asymmetry: missing mrp_routings key created workcenters "
@@ -218,7 +218,7 @@ def run():
         ctx.feature_flags = {"mrp_routings": True}
         ctx.model_access = {"mrp.workcenter": False}
         with patch("modules.mrp.odoo_actions.create_product"):
-            mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+            mrp.create_mrp_data(client, llm=None, ctx=ctx)
         workcenter_creates = _workcenter_vals(client)
         assert workcenter_creates == [], (
             f"model_access blocking mrp.workcenter must prevent workcenter creation: {workcenter_creates}"
@@ -240,7 +240,7 @@ def run():
         ctx.feature_flags = {"mrp_routings": True}
         ctx.model_access = {}
         with patch("modules.mrp.odoo_actions.create_product"):
-            mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+            mrp.create_mrp_data(client, llm=None, ctx=ctx)
         workcenter_creates = _workcenter_vals(client)
         assert len(workcenter_creates) == 2, workcenter_creates
         results.append(("create_mrp_data: empty model_access defaults open, does not block (B1 guard)", True, ""))
@@ -273,7 +273,7 @@ def run():
         # above — if the bug regressed, this is what would leak through.
         ctx.partner_company_ids = [42]
         with patch("modules.mrp.odoo_actions.create_product"):
-            mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+            mrp.create_mrp_data(client, llm=None, ctx=ctx)
         workcenter_creates = _workcenter_vals(client)
         assert workcenter_creates, "expected at least one workcenter create call"
         sent_company_id = workcenter_creates[0].get("company_id")
@@ -299,7 +299,7 @@ def run():
                                   create_quality_points=False))
         ctx.feature_flags = {"mrp_routings": False}
         with patch("modules.mrp.odoo_actions.create_product"):
-            mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+            mrp.create_mrp_data(client, llm=None, ctx=ctx)
         tmpl_lookups = [c for c in client.search_read.call_args_list if c.args[0] == 'product.product']
         assert len(tmpl_lookups) == 2, tmpl_lookups
         results.append((
@@ -358,7 +358,7 @@ def run():
                                       create_quality_points=False))
             ctx.feature_flags = {"mrp_routings": False, "quality": True}
             with patch("modules.mrp.odoo_actions.create_product"):
-                mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+                mrp.create_mrp_data(client, llm=None, ctx=ctx)
         assert _batches(client, 'quality.point') == [], _batches(client, 'quality.point')
         assert _batches(client, 'quality.check') == [], _batches(client, 'quality.check')
         results.append(("create_mrp_data: create_quality_points=False -> no quality calls (Pattern 3)", True, ""))
@@ -375,7 +375,7 @@ def run():
                                   create_quality_points=True))
         ctx.feature_flags = {"mrp_routings": False, "quality": True}
         with patch("modules.mrp.odoo_actions.create_product"):
-            mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+            mrp.create_mrp_data(client, llm=None, ctx=ctx)
         qp_batches = _batches(client, 'quality.point')
         assert len(qp_batches) == 1 and len(qp_batches[0].args[1]) == 1, qp_batches
         # No MOs at all -> nothing to link a quality.check to.
@@ -396,7 +396,7 @@ def run():
                                       create_quality_points=True))
             ctx.feature_flags = {"mrp_routings": False, "quality": True}
             with patch("modules.mrp.odoo_actions.create_product"):
-                mrp.create_mrp_data(client, gemini=None, ctx=ctx)  # must not raise
+                mrp.create_mrp_data(client, llm=None, ctx=ctx)  # must not raise
         assert len(_batches(client, 'quality.point')) == 1, _batches(client, 'quality.point')
         assert _batches(client, 'quality.check') == [], _batches(client, 'quality.check')
         results.append(("create_mrp_data: no MO ever confirmed -> no UnboundLocalError, quality.point still created", True, ""))
@@ -417,7 +417,7 @@ def run():
                                       create_quality_points=True, quality_fail_pct=100))
             ctx.feature_flags = {"mrp_routings": False, "quality": True}
             with patch("modules.mrp.odoo_actions.create_product"):
-                mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+                mrp.create_mrp_data(client, llm=None, ctx=ctx)
         qp_batches = _batches(client, 'quality.point')
         assert len(qp_batches) == 1, qp_batches  # Pattern 8
         qp_vals = qp_batches[0].args[1][0]
@@ -461,7 +461,7 @@ def run():
             ctx.feature_flags = {"mrp_routings": False, "quality": True}
             ctx.model_access = {"quality.check": False}
             with patch("modules.mrp.odoo_actions.create_product"):
-                mrp.create_mrp_data(client, gemini=None, ctx=ctx)
+                mrp.create_mrp_data(client, llm=None, ctx=ctx)
         assert len(_batches(client, 'quality.point')) == 1, _batches(client, 'quality.point')
         assert _batches(client, 'quality.check') == [], _batches(client, 'quality.check')
         results.append(("create_mrp_data: model_access blocks quality.check without blocking quality.point (Pattern 3)",

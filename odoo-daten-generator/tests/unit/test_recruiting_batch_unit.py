@@ -58,7 +58,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(num_jobs=3, num_candidates=5)
-        recruiting.create_recruiting_data(client, gemini=None, ctx=ctx)
+        recruiting.create_recruiting_data(client, llm=None, ctx=ctx)
         assert client.create_batch.call_count == 2, client.create_batch.call_count
         batched_models = [call.args[0] for call in client.create_batch.call_args_list]
         assert batched_models == ['hr.job', 'hr.applicant'], batched_models
@@ -78,7 +78,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(num_jobs=0, num_candidates=0)
-        recruiting.create_recruiting_data(client, gemini=None, ctx=ctx)
+        recruiting.create_recruiting_data(client, llm=None, ctx=ctx)
         client.create_batch.assert_not_called()
         results.append(("create_recruiting_data: num_jobs=0/num_candidates=0 -> no create_batch call (Pattern 5)", True, ""))
     except AssertionError as e:

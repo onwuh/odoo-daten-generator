@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 _TARGET_COUNTRIES = ["DE", "AT", "CH"]
 
 
-def create_master_data(client, gemini, ctx: RunContext, atoms: Dict[str, Any]) -> None:
+def create_master_data(client, llm, ctx: RunContext, atoms: Dict[str, Any]) -> None:
     """Creates products (from atoms + fallback) and companies/contacts (from
     ctx.name_banks + fallback). Writes ctx.product_ids and ctx.partner_company_ids.
 

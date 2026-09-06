@@ -102,7 +102,7 @@ def run(client, ctx):
         results.append(("project: stage deduplication skips create", False, str(e)))
 
     # Step 5 — D3: create_project_data end-to-end (batch projects + batch tasks),
-    # gemini=None to prove stage assignment falls back without an LLM call.
+    # llm=None to prove stage assignment falls back without an LLM call.
     rctx = None
     try:
         rctx = _make_rctx(num_projects=2, tasks_per_project=3)

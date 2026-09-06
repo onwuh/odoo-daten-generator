@@ -86,7 +86,7 @@ def run(client, ctx):
         results.append(("master_data: create customer + read-back email", False, str(e)))
 
     # Step 4 — A1: create_master_data end-to-end (data_factory assembly), LLM-independent.
-    # gemini=None proves company/contact structure no longer needs the LLM call to succeed.
+    # llm=None proves company/contact structure no longer needs the LLM call to succeed.
     try:
         rctx = _make_rctx()
         rctx.name_banks = {

@@ -74,7 +74,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(num_purchase=0)
-        purchase.create_purchase_data(client, gemini=None, ctx=ctx)
+        purchase.create_purchase_data(client, llm=None, ctx=ctx)
         client.create_batch.assert_not_called()
         client.search_read.assert_not_called()
         results.append(("create_purchase_data: purchase=0 -> no calls (Pattern 3)", True, ""))
@@ -87,7 +87,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(component_ids=[])
-        purchase.create_purchase_data(client, gemini=None, ctx=ctx)
+        purchase.create_purchase_data(client, llm=None, ctx=ctx)
         client.create_batch.assert_not_called()
         results.append(("create_purchase_data: empty component_ids -> no calls (Pattern 1/5)", True, ""))
     except AssertionError as e:
@@ -99,7 +99,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(company_ids=[])
-        purchase.create_purchase_data(client, gemini=None, ctx=ctx)
+        purchase.create_purchase_data(client, llm=None, ctx=ctx)
         client.create_batch.assert_not_called()
         results.append(("create_purchase_data: empty company_ids -> no calls (Pattern 5)", True, ""))
     except AssertionError as e:
@@ -111,7 +111,7 @@ def run():
     try:
         client = _mock_client(warehouse=False)
         ctx = _make_ctx()
-        purchase.create_purchase_data(client, gemini=None, ctx=ctx)
+        purchase.create_purchase_data(client, llm=None, ctx=ctx)
         client.create_batch.assert_not_called()
         results.append(("create_purchase_data: no warehouse -> no calls, graceful skip", True, ""))
     except AssertionError as e:
@@ -125,7 +125,7 @@ def run():
         client = _mock_client()
         ctx = _make_ctx()
         with patch("modules.purchase.odoo_actions.create_suppliers", return_value=[]):
-            purchase.create_purchase_data(client, gemini=None, ctx=ctx)
+            purchase.create_purchase_data(client, llm=None, ctx=ctx)
         po_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'purchase.order']
         assert po_batches == [], f"expected no purchase.order create_batch, got {po_batches}"
         results.append(("create_purchase_data: empty supplier pool -> no PO create_batch (Pattern 1)", True, ""))
@@ -140,7 +140,7 @@ def run():
         client = _mock_client()
         ctx = _make_ctx(supplier_ids=[555])
         with patch("modules.purchase.odoo_actions.create_suppliers") as mock_create_suppliers:
-            purchase.create_purchase_data(client, gemini=None, ctx=ctx)
+            purchase.create_purchase_data(client, llm=None, ctx=ctx)
             mock_create_suppliers.assert_not_called()
         po_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'purchase.order']
         assert len(po_batches) == 1, po_batches
@@ -163,7 +163,7 @@ def run():
             return True
         client.call_method.side_effect = _call_method
 
-        purchase.create_purchase_data(client, gemini=None, ctx=ctx)
+        purchase.create_purchase_data(client, llm=None, ctx=ctx)
         methods_tried = [c.args[1] for c in client.call_method.call_args_list if c.args[0] == 'purchase.order']
         assert 'button_confirm' in methods_tried and 'action_confirm' in methods_tried, methods_tried
         results.append(("create_purchase_data: button_confirm fails -> action_confirm dual-try", True, f"{methods_tried}"))
@@ -261,7 +261,7 @@ def run():
         client = _mock_client()
         ctx = _make_ctx(num_purchase=2, supplier_ids=[555])
         with patch("modules.purchase.odoo_actions.get_or_create_analytic_accounts") as mock_helper:
-            purchase.create_purchase_data(client, gemini=None, ctx=ctx)
+            purchase.create_purchase_data(client, llm=None, ctx=ctx)
             mock_helper.assert_not_called()
         po_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'purchase.order']
         for po_vals in po_batches[0].args[1]:
@@ -277,7 +277,7 @@ def run():
         ctx = _make_ctx(num_purchase=2, supplier_ids=[555],
                         analytic=AnalyticConfig(sale_pct=50, purchase_pct=0, expense_pct=50))
         with patch("modules.purchase.odoo_actions.get_or_create_analytic_accounts") as mock_helper:
-            purchase.create_purchase_data(client, gemini=None, ctx=ctx)
+            purchase.create_purchase_data(client, llm=None, ctx=ctx)
             mock_helper.assert_not_called()
         results.append(("create_purchase_data: purchase_pct=0 -> no helper call (Pattern 3)", True, ""))
     except AssertionError as e:
@@ -292,7 +292,7 @@ def run():
                         analytic=AnalyticConfig(sale_pct=0, purchase_pct=100, expense_pct=0))
         with patch("modules.purchase.odoo_actions.get_or_create_analytic_accounts",
                   return_value=[801, 802]) as mock_helper:
-            purchase.create_purchase_data(client, gemini=None, ctx=ctx)
+            purchase.create_purchase_data(client, llm=None, ctx=ctx)
             mock_helper.assert_called_once()
         po_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'purchase.order']
         assert len(po_batches) == 1, po_batches

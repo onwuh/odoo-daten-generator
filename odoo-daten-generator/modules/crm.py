@@ -122,7 +122,7 @@ def _get_activity_types(client):
 # Module entry point
 # ---------------------------------------------------------------------------
 
-def create_crm_data(client, gemini, ctx: RunContext) -> None:
+def create_crm_data(client, llm, ctx: RunContext) -> None:
     """Creates CRM opportunities (and optionally leads), distributes across stages,
     posts chatter messages, and creates follow-up activities."""
     num_opps = ctx.module_selections.crm
@@ -188,7 +188,7 @@ def create_crm_data(client, gemini, ctx: RunContext) -> None:
             for o in opp_data:
                 info = partner_info.get(o['partner_id'], {})
                 o['partner_name'] = info.get('name', '')
-            _post_chatter_messages(client, gemini, ctx, opp_data)
+            _post_chatter_messages(client, llm, ctx, opp_data)
 
         # --- Activities ---
         if ctx.module_selections.crm_activities is not None:
@@ -213,7 +213,7 @@ def create_crm_data(client, gemini, ctx: RunContext) -> None:
         logger.info(f"✅ {len(ctx.lead_ids)} Leads erstellt.")
 
 
-def mark_lost_opportunities(client, gemini, ctx: RunContext) -> None:
+def mark_lost_opportunities(client, llm, ctx: RunContext) -> None:
     """R11: marks a configurable share of opportunities as lost.
 
     Must run after sale.py — operates only on opportunities sale.py did NOT
@@ -336,7 +336,7 @@ def _normalize_message(raw) -> dict:
     return {'type': 'note', 'speaker': 'salesperson', 'body': str(raw)}
 
 
-def _post_chatter_messages(client, gemini, ctx: RunContext, opp_data):
+def _post_chatter_messages(client, llm, ctx: RunContext, opp_data):
     """Post LLM-generated chatter messages per opportunity.
 
     Args:
@@ -377,7 +377,7 @@ def _post_chatter_messages(client, gemini, ctx: RunContext, opp_data):
     ]
 
     try:
-        messages_by_title = gemini.fetch_crm_chatter_messages(
+        messages_by_title = llm.fetch_crm_chatter_messages(
             opportunities, ctx.industry, ctx.language_name,
             style=style, messages_per_opp=messages_per_opp,
         )

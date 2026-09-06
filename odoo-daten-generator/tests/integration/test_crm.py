@@ -151,8 +151,8 @@ def run(client, ctx):
         from modules.crm import _post_chatter_messages
 
         mock_client = MagicMock()
-        mock_gemini = MagicMock()
-        mock_gemini.fetch_crm_chatter_messages.return_value = {"Test Opp": [
+        mock_llm = MagicMock()
+        mock_llm.fetch_crm_chatter_messages.return_value = {"Test Opp": [
             {"type": "note", "speaker": "salesperson", "body": "msg1"}
         ]}
 
@@ -170,7 +170,7 @@ def run(client, ctx):
 
         opp_data = [{"id": 1, "name": "Test Opp", "partner_id": 10,
                      "partner_name": "Test GmbH", "salesperson": None}]
-        _post_chatter_messages(mock_client, mock_gemini, mock_ctx, opp_data)
+        _post_chatter_messages(mock_client, mock_llm, mock_ctx, opp_data)
 
         mock_client.call_method.assert_not_called()
         results.append(("crm: chatter disabled (crm_chatter=None) → no message_post", True, "call_method not called"))

@@ -42,7 +42,7 @@ def confirm_sale_orders(client, order_ids):
 # Module entry point
 # ---------------------------------------------------------------------------
 
-def create_sale_data(client, gemini, ctx: RunContext) -> None:
+def create_sale_data(client, llm, ctx: RunContext) -> None:
     """Creates sale orders, confirms a subset, and moves linked opportunities to Won."""
     num_orders = ctx.module_selections.sale
     if num_orders <= 0 or not ctx.partner_company_ids:

@@ -66,7 +66,7 @@ def run():
         ctx = _make_ctx(num_invoices=6)  # standalone path: 'sale' not installed
         ctx.partner_company_ids = [1, 2]
         ctx.product_ids = [1]
-        accounting.create_accounting_data(client, gemini=None, ctx=ctx)
+        accounting.create_accounting_data(client, llm=None, ctx=ctx)
 
         assert client.create_batch.call_count == 2, client.create_batch.call_count
         batched_models = [call.args[0] for call in client.create_batch.call_args_list]
@@ -192,7 +192,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(num_invoices=0)
-        accounting.create_accounting_data(client, gemini=None, ctx=ctx)
+        accounting.create_accounting_data(client, llm=None, ctx=ctx)
         client.create_batch.assert_not_called()
         results.append(("create_accounting_data: num_invoices=0 -> no create_batch calls (Pattern 5)", True, ""))
     except AssertionError as e:
@@ -206,7 +206,7 @@ def run():
         ctx = _make_ctx(num_invoices=1)
         ctx.partner_company_ids = [1]
         ctx.product_ids = [1]
-        accounting.create_accounting_data(client, gemini=None, ctx=ctx)
+        accounting.create_accounting_data(client, llm=None, ctx=ctx)
         assert len(ctx.bill_ids) == 1, f"B7: expected 1 vendor bill for num_invoices=1, got {len(ctx.bill_ids)}"
         results.append(("B7: num_invoices=1 -> exactly 1 vendor bill, not forced 10", True, f"bills={len(ctx.bill_ids)}"))
     except AssertionError as e:
@@ -222,7 +222,7 @@ def run():
         ctx.module_selections.account_bills = 25
         ctx.partner_company_ids = [1]
         ctx.product_ids = [1]
-        accounting.create_accounting_data(client, gemini=None, ctx=ctx)
+        accounting.create_accounting_data(client, llm=None, ctx=ctx)
         assert len(ctx.bill_ids) == 25, f"B7: expected 25 vendor bills (override), got {len(ctx.bill_ids)}"
         results.append(("B7: account_bills=25 -> exactly 25 vendor bills (decoupled from num_invoices)", True, f"bills={len(ctx.bill_ids)}"))
     except AssertionError as e:
@@ -240,7 +240,7 @@ def run():
         ctx.module_selections.account_bills = 0
         ctx.partner_company_ids = [1]
         ctx.product_ids = [1]
-        accounting.create_accounting_data(client, gemini=None, ctx=ctx)
+        accounting.create_accounting_data(client, llm=None, ctx=ctx)
         assert ctx.bill_ids == [], f"B7: expected no vendor bills, got {ctx.bill_ids}"
         assert client.create_batch.call_count == 1, (
             f"expected exactly 1 create_batch call (invoices only), got {client.create_batch.call_count}"
@@ -266,7 +266,7 @@ def run():
         ctx.module_selections.create_bank_transactions = True
         ctx.partner_company_ids = [1]
         ctx.product_ids = [1]
-        accounting.create_accounting_data(client, gemini=None, ctx=ctx)
+        accounting.create_accounting_data(client, llm=None, ctx=ctx)
         assert ctx.bill_ids == [], ctx.bill_ids
         assert len(ctx.invoice_ids) == 3, ctx.invoice_ids
         results.append((
@@ -291,7 +291,7 @@ def run():
         ctx.partner_company_ids = [1]
         ctx.product_ids = [1]
         ctx.confirmed_order_ids = []  # sale module didn't run -> nothing confirmed
-        accounting.create_accounting_data(client, gemini=None, ctx=ctx)
+        accounting.create_accounting_data(client, llm=None, ctx=ctx)
         assert len(ctx.invoice_ids) == 3, (
             f"B10: 'sale' installed-but-unselected should still take the standalone "
             f"invoice path, expected 3 invoices, got {len(ctx.invoice_ids)}"

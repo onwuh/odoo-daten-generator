@@ -1,4 +1,4 @@
-"""Project module: creates projects, tasks, stages (batch Gemini call), and timesheets."""
+"""Project module: creates projects, tasks, stages (batch LLM call), and timesheets."""
 
 import logging
 import datetime
@@ -69,8 +69,8 @@ def create_timesheet(client, employee_id, project_id, hours, description, date_s
     return client.create('account.analytic.line', values)
 
 
-def create_project_data(client, gemini, ctx: RunContext) -> None:
-    """Creates projects, tasks, and stages. Uses a single Gemini call for all stage names."""
+def create_project_data(client, llm, ctx: RunContext) -> None:
+    """Creates projects, tasks, and stages. Uses a single LLM call for all stage names."""
     num_projects = ctx.module_selections.project
     tasks_per_project = ctx.module_selections.tasks_per_project
     if num_projects <= 0:
@@ -114,11 +114,11 @@ def create_project_data(client, gemini, ctx: RunContext) -> None:
         project_task_map[pid] = all_task_ids[idx:idx + count]
         idx += count
 
-    # Batch Gemini call for all project stages
+    # Batch LLM call for all project stages
     all_project_names = list(project_names_map.values())
-    gemini_stages_map = {}
-    if gemini and all_project_names:
-        gemini_stages_map = gemini.fetch_all_project_stages(
+    llm_stages_map = {}
+    if llm and all_project_names:
+        llm_stages_map = llm.fetch_all_project_stages(
             all_project_names, industry, ctx.language_name
         )
 
@@ -133,7 +133,7 @@ def create_project_data(client, gemini, ctx: RunContext) -> None:
     logger.info("--- PROJECT: Erstelle Phasen und verteile Aufgaben ---")
     for pid in ctx.project_ids:
         project_name = project_names_map[pid]
-        stages = gemini_stages_map.get(project_name, [])
+        stages = llm_stages_map.get(project_name, [])
         if not stages or len(stages) < 4:
             stages = fallback_stages
 
@@ -160,7 +160,7 @@ def create_project_data(client, gemini, ctx: RunContext) -> None:
     logger.info(f"✅ {len(ctx.project_ids)} Projekte mit Aufgaben und Phasen erstellt.")
 
 
-def create_timesheet_data(client, gemini, ctx: RunContext) -> None:
+def create_timesheet_data(client, llm, ctx: RunContext) -> None:
     """Creates timesheet entries. Needs at least one employee and either a
     bulk project or a real order-linked billable task (R8)."""
     num_timesheets = ctx.module_selections.hr_timesheet

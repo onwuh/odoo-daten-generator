@@ -163,10 +163,10 @@ def run():
     # None response → no crash, no call_method
     try:
         mock_client = MagicMock()
-        mock_gemini = MagicMock()
-        mock_gemini.fetch_crm_chatter_messages.return_value = None
+        mock_llm = MagicMock()
+        mock_llm.fetch_crm_chatter_messages.return_value = None
         ctx = _make_ctx()
-        _post_chatter_messages(mock_client, mock_gemini, ctx, _make_opp_data())
+        _post_chatter_messages(mock_client, mock_llm, ctx, _make_opp_data())
         mock_client.call_method.assert_not_called()
         results.append(("_post_chatter_messages: None response → no call_method", True, ""))
     except Exception as e:
@@ -175,10 +175,10 @@ def run():
     # {} response → no call_method
     try:
         mock_client = MagicMock()
-        mock_gemini = MagicMock()
-        mock_gemini.fetch_crm_chatter_messages.return_value = {}
+        mock_llm = MagicMock()
+        mock_llm.fetch_crm_chatter_messages.return_value = {}
         ctx = _make_ctx()
-        _post_chatter_messages(mock_client, mock_gemini, ctx, _make_opp_data())
+        _post_chatter_messages(mock_client, mock_llm, ctx, _make_opp_data())
         mock_client.call_method.assert_not_called()
         results.append(("_post_chatter_messages: {} response → no call_method", True, ""))
     except Exception as e:
@@ -187,12 +187,12 @@ def run():
     # New dict format → call_method called
     try:
         mock_client = MagicMock()
-        mock_gemini = MagicMock()
-        mock_gemini.fetch_crm_chatter_messages.return_value = {
+        mock_llm = MagicMock()
+        mock_llm.fetch_crm_chatter_messages.return_value = {
             "Test Opp": [{"type": "note", "speaker": "salesperson", "body": "hello"}]
         }
         ctx = _make_ctx()
-        _post_chatter_messages(mock_client, mock_gemini, ctx, _make_opp_data())
+        _post_chatter_messages(mock_client, mock_llm, ctx, _make_opp_data())
         mock_client.call_method.assert_called_once()
         results.append(("_post_chatter_messages: dict format → call_method called once", True, ""))
     except Exception as e:
@@ -201,10 +201,10 @@ def run():
     # Legacy string format (old cache) → backward compat, no crash
     try:
         mock_client = MagicMock()
-        mock_gemini = MagicMock()
-        mock_gemini.fetch_crm_chatter_messages.return_value = {"Test Opp": ["legacy string note"]}
+        mock_llm = MagicMock()
+        mock_llm.fetch_crm_chatter_messages.return_value = {"Test Opp": ["legacy string note"]}
         ctx = _make_ctx()
-        _post_chatter_messages(mock_client, mock_gemini, ctx, _make_opp_data())
+        _post_chatter_messages(mock_client, mock_llm, ctx, _make_opp_data())
         mock_client.call_method.assert_called_once()
         results.append(("_post_chatter_messages: legacy string format → backward compat", True, ""))
     except Exception as e:
@@ -213,9 +213,9 @@ def run():
     # Empty opp_data pool → graceful skip
     try:
         mock_client = MagicMock()
-        mock_gemini = MagicMock()
+        mock_llm = MagicMock()
         ctx = _make_ctx()
-        _post_chatter_messages(mock_client, mock_gemini, ctx, [])
+        _post_chatter_messages(mock_client, mock_llm, ctx, [])
         mock_client.call_method.assert_not_called()
         results.append(("_post_chatter_messages: empty opp_data → no call_method", True, ""))
     except Exception as e:
@@ -224,10 +224,10 @@ def run():
     # Disabled chatter (crm_chatter=None) → no LLM call, no message_post
     try:
         mock_client = MagicMock()
-        mock_gemini = MagicMock()
+        mock_llm = MagicMock()
         ctx = _make_ctx(sel={"crm_chatter": None})
-        _post_chatter_messages(mock_client, mock_gemini, ctx, _make_opp_data())
-        mock_gemini.fetch_crm_chatter_messages.assert_not_called()
+        _post_chatter_messages(mock_client, mock_llm, ctx, _make_opp_data())
+        mock_llm.fetch_crm_chatter_messages.assert_not_called()
         mock_client.call_method.assert_not_called()
         results.append(("_post_chatter_messages: crm_chatter=None → disabled, no LLM call", True, ""))
     except Exception as e:
