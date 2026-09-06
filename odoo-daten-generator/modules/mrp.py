@@ -1,6 +1,6 @@
 """Manufacturing module: creates products, BOMs, and BOM lines.
 
-Uses a single Gemini call for all BOM component names (batch) instead of one per product.
+Uses a single LLM call for all BOM component names (batch) instead of one per product.
 """
 
 import logging
@@ -120,7 +120,7 @@ def get_manufacturing_picking_type_id(client, company_id: int):
     return results[0]["id"] if results else None
 
 
-def create_mrp_data(client, gemini, ctx: RunContext) -> None:
+def create_mrp_data(client, llm, ctx: RunContext) -> None:
     """Creates manufacturing products with BOMs and component lines."""
     mrp_config = ctx.module_selections.mrp
     if mrp_config is None:
@@ -167,11 +167,11 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
             base_name = f"{industry} Baugruppe {idx + 1}"
         main_products.append(base_name)
 
-    # Single Gemini call for all component names
+    # Single LLM call for all component names
     bom_components_map = {}
-    if gemini and main_products:
+    if llm and main_products:
         products_request = {name: component_count for name in main_products}
-        bom_components_map = gemini.fetch_all_bom_components(
+        bom_components_map = llm.fetch_all_bom_components(
             products_request, industry, ctx.language_name
         )
 
@@ -318,8 +318,8 @@ def create_mrp_data(client, gemini, ctx: RunContext) -> None:
     if mrp_routings_ok and num_workcenters > 0:
         try:
             logger.info("\n--- MANUFACTURING: Erstelle Arbeitszentren ---")
-            if gemini:
-                wc_data = gemini.fetch_workcenter_data(industry, ctx.language_name, num_workcenters)
+            if llm:
+                wc_data = llm.fetch_workcenter_data(industry, ctx.language_name, num_workcenters)
             if not wc_data:
                 wc_data = {
                     f"{industry} Station {i+1}": {

@@ -21,7 +21,6 @@ def _make_ctx(installed_modules, module_selections=None, skip_master_data=False)
         criteria=criteria,
         module_selections=module_selections or ModuleSelections(),
         industry="IT", language_name="German", language_code="de",
-        gemini_model_name="test-model",
         installed_modules=installed_modules,
         skip_master_data=skip_master_data,
     )
@@ -37,7 +36,7 @@ def run():
         events = []
         handler = MagicMock()
         orchestrator._run_module(
-            "TestModule", handler, client=MagicMock(), gemini=MagicMock(), ctx=MagicMock(),
+            "TestModule", handler, client=MagicMock(), llm=MagicMock(), ctx=MagicMock(),
             on_start=lambda name: events.append(("start", name)),
             on_done=lambda name, ok=True: events.append(("done", name, ok)),
         )
@@ -54,7 +53,7 @@ def run():
         events = []
         handler = MagicMock(side_effect=RuntimeError("boom"))
         orchestrator._run_module(
-            "FailingModule", handler, client=MagicMock(), gemini=MagicMock(), ctx=MagicMock(),
+            "FailingModule", handler, client=MagicMock(), llm=MagicMock(), ctx=MagicMock(),
             on_start=lambda name: events.append(("start", name)),
             on_done=lambda name, ok=True: events.append(("done", name, ok)),
         )
@@ -70,7 +69,7 @@ def run():
     # ------------------------------------------------------------------
     try:
         handler = MagicMock()
-        orchestrator._run_module("NoCallbacks", handler, client=MagicMock(), gemini=MagicMock(), ctx=MagicMock())
+        orchestrator._run_module("NoCallbacks", handler, client=MagicMock(), llm=MagicMock(), ctx=MagicMock())
         handler.assert_called_once()
         results.append(("_run_module: no callbacks supplied → no crash", True, ""))
     except Exception as e:
@@ -84,17 +83,17 @@ def run():
     # ------------------------------------------------------------------
     try:
         events = []
-        gemini = MagicMock()
-        gemini.fetch_creative_atoms.return_value = {}
-        gemini.fetch_name_suggestions.return_value = {}
-        gemini.total_calls = 0
-        gemini.total_tokens = 0
+        llm = MagicMock()
+        llm.fetch_creative_atoms.return_value = {}
+        llm.fetch_name_suggestions.return_value = {}
+        llm.total_calls = 0
+        llm.total_tokens = 0
         ctx = _make_ctx(installed_modules={"mrp"}, module_selections=ModuleSelections(mrp=MrpConfig(num_products=1)))
 
         with patch("modules.master_data.create_master_data") as mock_master, \
              patch("modules.mrp.create_mrp_data") as mock_mrp:
             orchestrator.run(
-                client=MagicMock(), gemini=gemini, ctx=ctx,
+                client=MagicMock(), llm=llm, ctx=ctx,
                 on_module_start=lambda name: events.append(("start", name)),
                 on_module_done=lambda name, ok=True: events.append(("done", name, ok)),
             )
@@ -115,13 +114,13 @@ def run():
     # D1e: run() with no callbacks supplied at all (GUI removed, direct call) → no crash
     # ------------------------------------------------------------------
     try:
-        gemini = MagicMock()
-        gemini.fetch_creative_atoms.return_value = {}
-        gemini.fetch_name_suggestions.return_value = {}
-        gemini.total_calls = 0
-        gemini.total_tokens = 0
+        llm = MagicMock()
+        llm.fetch_creative_atoms.return_value = {}
+        llm.fetch_name_suggestions.return_value = {}
+        llm.total_calls = 0
+        llm.total_tokens = 0
         ctx = _make_ctx(installed_modules=set(), skip_master_data=True)
-        orchestrator.run(client=MagicMock(), gemini=gemini, ctx=ctx)
+        orchestrator.run(client=MagicMock(), llm=llm, ctx=ctx)
         results.append(("run(): no callbacks supplied → no crash", True, ""))
     except Exception as e:
         results.append(("run(): no callbacks supplied → no crash", False, str(e)))
@@ -135,11 +134,11 @@ def run():
     # ------------------------------------------------------------------
     try:
         events = []
-        gemini = MagicMock()
-        gemini.fetch_creative_atoms.return_value = {}
-        gemini.fetch_name_suggestions.return_value = {}
-        gemini.total_calls = 0
-        gemini.total_tokens = 0
+        llm = MagicMock()
+        llm.fetch_creative_atoms.return_value = {}
+        llm.fetch_name_suggestions.return_value = {}
+        llm.total_calls = 0
+        llm.total_tokens = 0
         # installed: mrp, crm, sale (true Odoo state) — selected: only sale
         ctx = _make_ctx(
             installed_modules={"mrp", "crm", "sale"},
@@ -150,7 +149,7 @@ def run():
              patch("modules.crm.create_crm_data") as mock_crm, \
              patch("modules.sale.create_sale_data") as mock_sale:
             orchestrator.run(
-                client=MagicMock(), gemini=gemini, ctx=ctx,
+                client=MagicMock(), llm=llm, ctx=ctx,
                 on_module_start=lambda name: events.append(name),
             )
             mock_mrp.assert_not_called()
@@ -173,11 +172,11 @@ def run():
     # ------------------------------------------------------------------
     try:
         events = []
-        gemini = MagicMock()
-        gemini.fetch_creative_atoms.return_value = {}
-        gemini.fetch_name_suggestions.return_value = {}
-        gemini.total_calls = 0
-        gemini.total_tokens = 0
+        llm = MagicMock()
+        llm.fetch_creative_atoms.return_value = {}
+        llm.fetch_name_suggestions.return_value = {}
+        llm.total_calls = 0
+        llm.total_tokens = 0
         ctx = _make_ctx(
             installed_modules={"mrp", "crm", "sale", "hr", "project", "hr_timesheet",
                                 "account", "hr_recruitment"},
@@ -193,7 +192,7 @@ def run():
              patch("modules.accounting.create_accounting_data"), \
              patch("modules.recruiting.create_recruiting_data"):
             orchestrator.run(
-                client=MagicMock(), gemini=gemini, ctx=ctx,
+                client=MagicMock(), llm=llm, ctx=ctx,
                 on_module_start=lambda name: events.append(name),
             )
         assert events.index("account") > events.index("hr_timesheet") > events.index("project") > events.index("hr"), events

@@ -27,7 +27,7 @@ def _make_ctx(num_employees=0, hr_timeoff=None, employee_ids=None):
         sel.hr_timeoff = hr_timeoff
     ctx = RunContext(
         criteria=criteria, module_selections=sel, industry="IT",
-        language_name="German", language_code="de", gemini_model_name="test",
+        language_name="German", language_code="de",
         installed_modules={"hr_holidays", "hr_work_entry"},
     )
     if employee_ids is not None:
@@ -67,7 +67,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(num_employees=6)
-        hr.create_hr_data(client, gemini=None, ctx=ctx)
+        hr.create_hr_data(client, llm=None, ctx=ctx)
         assert client.create_batch.call_count == 1, client.create_batch.call_count
         assert client.create.call_count == 0, "fell back to per-record create()"
         assert len(ctx.employee_ids) == 6, ctx.employee_ids
@@ -81,7 +81,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(num_employees=0)
-        hr.create_hr_data(client, gemini=None, ctx=ctx)
+        hr.create_hr_data(client, llm=None, ctx=ctx)
         client.create_batch.assert_not_called()
         assert ctx.employee_ids == []
         results.append(("create_hr_data: num_employees=0 -> no create_batch call (Pattern 5)", True, ""))

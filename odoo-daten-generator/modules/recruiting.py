@@ -1,7 +1,7 @@
 """Recruiting module: creates skill types/levels, jobs, and applicants.
 
 Key improvements:
-- Single Gemini call for all job summaries (batch)
+- Single LLM call for all job summaries (batch)
 - Pre-fetched skill levels map to avoid N+1 queries in create_job / create_applicant
 """
 
@@ -219,7 +219,7 @@ def create_applicant(client, job_id, name, email, phone, skill_ids=None, stage_i
     return applicant_id
 
 
-def create_recruiting_data(client, gemini, ctx: RunContext) -> None:
+def create_recruiting_data(client, llm, ctx: RunContext) -> None:
     """Creates skill taxonomy, jobs (with descriptions), and applicants."""
     rec_config = ctx.module_selections.hr_recruitment
     if rec_config is None:
@@ -236,10 +236,10 @@ def create_recruiting_data(client, gemini, ctx: RunContext) -> None:
     logger.info("\n--- RECRUITING: Erstelle Recruiting-Daten ---")
     industry = ctx.industry
 
-    # Fetch all recruiting data in one Gemini call
+    # Fetch all recruiting data in one LLM call
     recruiting_data = {}
-    if gemini:
-        recruiting_data = gemini.fetch_recruiting_data(
+    if llm:
+        recruiting_data = llm.fetch_recruiting_data(
             industry, num_jobs, num_candidates, num_skill_types, skills_per_type,
             ctx.language_name
         ) or {}
@@ -265,7 +265,7 @@ def create_recruiting_data(client, gemini, ctx: RunContext) -> None:
 
     # Create jobs
     job_ids = _create_jobs(
-        client, gemini, ctx, recruiting_data, num_jobs, departments, all_skill_ids, skill_levels_map
+        client, llm, ctx, recruiting_data, num_jobs, departments, all_skill_ids, skill_levels_map
     )
 
     # Create applicants
@@ -360,7 +360,7 @@ def _create_skills(client, recruiting_data: dict, num_skill_types: int, skills_p
 # Jobs
 # ------------------------------------------------------------------
 
-def _create_jobs(client, gemini, ctx, recruiting_data, num_jobs, departments, all_skill_ids, skill_levels_map):
+def _create_jobs(client, llm, ctx, recruiting_data, num_jobs, departments, all_skill_ids, skill_levels_map):
     if not departments:
         logger.warning("⚠️  Keine Abteilungen — Jobs übersprungen.")
         return []
@@ -368,10 +368,10 @@ def _create_jobs(client, gemini, ctx, recruiting_data, num_jobs, departments, al
     if not job_titles:
         job_titles = [f"Stelle {i + 1}" for i in range(num_jobs)]
 
-    # Batch-fetch all job summaries in one Gemini call
+    # Batch-fetch all job summaries in one LLM call
     job_summaries = {}
-    if gemini and job_titles:
-        job_summaries = gemini.fetch_job_summaries_batch(job_titles, ctx.industry, ctx.language_name)
+    if llm and job_titles:
+        job_summaries = llm.fetch_job_summaries_batch(job_titles, ctx.industry, ctx.language_name)
 
     existing_dept_job_names = get_existing_job_names_per_department(client)
     dept_job_names = {k: v.copy() for k, v in existing_dept_job_names.items()}

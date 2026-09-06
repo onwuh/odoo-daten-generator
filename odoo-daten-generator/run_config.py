@@ -489,7 +489,7 @@ def effective_installed_modules(installed: Set[str],
 
 
 def build_context(payload: Dict[str, Any], *, language_name: str, language_code: str,
-                  llm_model_name: str, installed_modules: Set[str],
+                  installed_modules: Set[str],
                   feature_flags: Dict[str, bool],
                   model_access: Optional[Dict[str, bool]] = None,
                   existing_partner_company_ids=None, existing_product_ids=None) -> Tuple[RunContext, Set[str]]:
@@ -524,7 +524,6 @@ def build_context(payload: Dict[str, Any], *, language_name: str, language_code:
         industry=criteria.industry,
         language_name=language_name,
         language_code=language_code,
-        gemini_model_name=llm_model_name,
         installed_modules=usable_modules,
         feature_flags=dict(feature_flags or {}),
         model_access=access,
@@ -539,7 +538,7 @@ def build_context(payload: Dict[str, Any], *, language_name: str, language_code:
 
 
 def build_context_list(payload: Dict[str, Any], *, language_name: str, language_code: str,
-                       llm_model_name: str, installed_modules: Set[str],
+                       installed_modules: Set[str],
                        feature_flags: Dict[str, bool],
                        model_access: Optional[Dict[str, bool]] = None,
                        ) -> List[Tuple[RunContext, Set[str]]]:
@@ -592,7 +591,7 @@ def build_context_list(payload: Dict[str, Any], *, language_name: str, language_
         results.append(build_context(
             block_payload,
             language_name=language_name, language_code=language_code,
-            llm_model_name=llm_model_name, installed_modules=installed_modules,
+            installed_modules=installed_modules,
             feature_flags=feature_flags, model_access=model_access,
         ))
     return results

@@ -340,7 +340,7 @@ def create_bank_transactions_for_all_invoices(client, invoice_ids, bill_ids, com
 # Module entry point
 # ---------------------------------------------------------------------------
 
-def create_accounting_data(client, gemini, ctx: RunContext) -> None:
+def create_accounting_data(client, llm, ctx: RunContext) -> None:
     """Creates customer invoices (from orders or standalone) and vendor bills."""
     num_invoices = ctx.module_selections.account
     if num_invoices <= 0:

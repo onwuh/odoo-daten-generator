@@ -159,7 +159,7 @@ def validate_leave_request(client, leave_id: int) -> bool:
 # Module entry point
 # ---------------------------------------------------------------------------
 
-def create_hr_data(client, gemini, ctx: RunContext) -> None:
+def create_hr_data(client, llm, ctx: RunContext) -> None:
     """Creates employees and stores their IDs in ctx.employee_ids."""
     num_employees = ctx.module_selections.hr
     if num_employees <= 0:

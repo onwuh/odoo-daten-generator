@@ -24,7 +24,7 @@ def _make_rctx(num_projects=2, tasks_per_project=3, hr_timesheet=0):
         module_selections=ModuleSelections(
             project=num_projects, tasks_per_project=tasks_per_project, hr_timesheet=hr_timesheet,
         ),
-        industry="IT", language_name="German", language_code="de_DE", gemini_model_name="test",
+        industry="IT", language_name="German", language_code="de_DE",
     )
 
 
@@ -102,7 +102,7 @@ def run(client, ctx):
         results.append(("project: stage deduplication skips create", False, str(e)))
 
     # Step 5 — D3: create_project_data end-to-end (batch projects + batch tasks),
-    # gemini=None to prove stage assignment falls back without an LLM call.
+    # llm=None to prove stage assignment falls back without an LLM call.
     rctx = None
     try:
         rctx = _make_rctx(num_projects=2, tasks_per_project=3)

@@ -33,7 +33,7 @@ def _make_ctx(employee_ids=None, hr_expense=None, analytic=None):
     ctx = RunContext(
         criteria=criteria,
         module_selections=ModuleSelections(**sel_kwargs),
-        industry="IT", language_name="German", language_code="de", gemini_model_name="test",
+        industry="IT", language_name="German", language_code="de",
     )
     ctx.employee_ids = employee_ids if employee_ids is not None else [1, 2]
     return ctx
@@ -71,7 +71,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx()
-        expenses.create_expense_data(client, gemini=None, ctx=ctx)
+        expenses.create_expense_data(client, llm=None, ctx=ctx)
         client.create_batch.assert_not_called()
         client.search_read.assert_not_called()
         results.append(("create_expense_data: hr_expense=None -> no calls (Pattern 3)", True, ""))
@@ -85,7 +85,7 @@ def run():
         client = _mock_client()
         ctx = _make_ctx(employee_ids=[], hr_expense=ExpenseConfig(count_per_employee=3,
                                                                   approved_pct=70))
-        expenses.create_expense_data(client, gemini=None, ctx=ctx)
+        expenses.create_expense_data(client, llm=None, ctx=ctx)
         client.create_batch.assert_not_called()
         results.append(("create_expense_data: empty employee_ids -> no calls (Pattern 5)", True, ""))
     except AssertionError as e:
@@ -97,7 +97,7 @@ def run():
     try:
         client = _mock_client(categories=[])
         ctx = _make_ctx(hr_expense=ExpenseConfig(count_per_employee=3, approved_pct=70))
-        expenses.create_expense_data(client, gemini=None, ctx=ctx)
+        expenses.create_expense_data(client, llm=None, ctx=ctx)
         client.create_batch.assert_not_called()
         results.append(("create_expense_data: empty can_be_expensed pool -> no calls (Pattern 1)", True, ""))
     except AssertionError as e:
@@ -111,7 +111,7 @@ def run():
         client = _mock_client()
         ctx = _make_ctx(employee_ids=[1, 2, 3], hr_expense=ExpenseConfig(count_per_employee=2,
                                                                          approved_pct=0))
-        expenses.create_expense_data(client, gemini=None, ctx=ctx)
+        expenses.create_expense_data(client, llm=None, ctx=ctx)
         batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'hr.expense']
         assert len(batches) == 1, batches
         vals_list = batches[0].args[1]
@@ -129,7 +129,7 @@ def run():
         client = _mock_client()
         ctx = _make_ctx(employee_ids=[1], hr_expense=ExpenseConfig(count_per_employee=4,
                                                                    approved_pct=0))
-        expenses.create_expense_data(client, gemini=None, ctx=ctx)
+        expenses.create_expense_data(client, llm=None, ctx=ctx)
         client.write.assert_not_called()
         results.append(("create_expense_data: approved_pct=0 -> no write calls (Pattern 3-adjacent)", True, ""))
     except AssertionError as e:
@@ -143,7 +143,7 @@ def run():
         client = _mock_client()
         ctx = _make_ctx(employee_ids=[1, 2], hr_expense=ExpenseConfig(count_per_employee=3,
                                                                       approved_pct=100))
-        expenses.create_expense_data(client, gemini=None, ctx=ctx)
+        expenses.create_expense_data(client, llm=None, ctx=ctx)
         write_calls = client.write.call_args_list
         assert len(write_calls) == 2, f"expected exactly 2 batched writes, got {len(write_calls)}"
         assert write_calls[0].args[2] == {"approval_state": "submitted"}, write_calls[0]
@@ -161,7 +161,7 @@ def run():
         client = _mock_client()
         ctx = _make_ctx(employee_ids=list(range(100)), hr_expense=ExpenseConfig(count_per_employee=1,
                                                                                 approved_pct=40))
-        expenses.create_expense_data(client, gemini=None, ctx=ctx)
+        expenses.create_expense_data(client, llm=None, ctx=ctx)
         write_calls = client.write.call_args_list
         assert len(write_calls) == 2, write_calls
         approved_count = len(write_calls[0].args[1])
@@ -181,7 +181,7 @@ def run():
         ctx = _make_ctx(employee_ids=[1, 2], hr_expense=ExpenseConfig(count_per_employee=2,
                                                                       approved_pct=0))
         with patch("modules.expenses.odoo_actions.get_or_create_analytic_accounts") as mock_helper:
-            expenses.create_expense_data(client, gemini=None, ctx=ctx)
+            expenses.create_expense_data(client, llm=None, ctx=ctx)
             mock_helper.assert_not_called()
         batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'hr.expense']
         vals_list = batches[0].args[1]
@@ -198,7 +198,7 @@ def run():
                                                                       approved_pct=0),
                         analytic=AnalyticConfig(sale_pct=50, purchase_pct=50, expense_pct=0))
         with patch("modules.expenses.odoo_actions.get_or_create_analytic_accounts") as mock_helper:
-            expenses.create_expense_data(client, gemini=None, ctx=ctx)
+            expenses.create_expense_data(client, llm=None, ctx=ctx)
             mock_helper.assert_not_called()
         results.append(("create_expense_data: expense_pct=0 -> no helper call (Pattern 3)", True, ""))
     except AssertionError as e:
@@ -213,7 +213,7 @@ def run():
                         analytic=AnalyticConfig(sale_pct=0, purchase_pct=0, expense_pct=100))
         with patch("modules.expenses.odoo_actions.get_or_create_analytic_accounts",
                   return_value=[701, 702]) as mock_helper:
-            expenses.create_expense_data(client, gemini=None, ctx=ctx)
+            expenses.create_expense_data(client, llm=None, ctx=ctx)
             mock_helper.assert_called_once()
         batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'hr.expense']
         vals_list = batches[0].args[1]

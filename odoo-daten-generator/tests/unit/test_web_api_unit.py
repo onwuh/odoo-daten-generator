@@ -234,6 +234,38 @@ def run():
         results.append(("Connect: fehlendes db wird aus der URL abgeleitet", False, str(e)))
 
     # ------------------------------------------------------------------
+    # S18/WP3 (D8) — explicit LLM provider from the frontend. Pattern 3:
+    # with the control left on "Automatisch" the field is omitted entirely
+    # and detect_provider falls back to prefix sniffing, byte-identical to
+    # the behaviour before the control existed.
+    # ------------------------------------------------------------------
+    try:
+        with TestClient(web_app.app) as client:
+            csrf = _login(client)
+            with patch.object(connect_service, "probe",
+                              return_value=(_fake_connect_result(), MagicMock(), MagicMock())) as probe:
+                # A gsk_ key would sniff as groq — the explicit choice must win.
+                client.post("/api/connect", headers=_auth_headers(csrf), json={
+                    "url": "https://demo-provider-test.odoo.com", "db": "d",
+                    "odoo_key": "k", "llm_key": "gsk_key", "llm_model": "m",
+                    "llm_provider": "gemini",
+                })
+                assert probe.call_args.kwargs["llm_provider"] == "gemini", probe.call_args.kwargs
+                assert connect_service.detect_provider("gsk_key", "gemini") == "gemini"
+
+                # No provider sent -> probe gets None -> sniffing unchanged.
+                client.post("/api/connect", headers=_auth_headers(csrf), json={
+                    "url": "https://demo-provider-test.odoo.com", "db": "d",
+                    "odoo_key": "k", "llm_key": "gsk_key", "llm_model": "m",
+                })
+                assert probe.call_args.kwargs["llm_provider"] is None, probe.call_args.kwargs
+                assert connect_service.detect_provider("gsk_key", None) == "groq"
+                assert connect_service.detect_provider("other-key", None) == "gemini"
+        results.append(("Connect: expliziter LLM-Anbieter gewinnt, ohne Angabe bleibt das Sniffing (Pattern 3)", True, ""))
+    except Exception as e:
+        results.append(("Connect: expliziter LLM-Anbieter gewinnt, ohne Angabe bleibt das Sniffing (Pattern 3)", False, str(e)))
+
+    # ------------------------------------------------------------------
     # A supplied "db" still wins over the derivation — the self-hoster escape
     # hatch WP4 explicitly keeps.
     # ------------------------------------------------------------------

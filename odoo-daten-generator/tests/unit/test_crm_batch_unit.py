@@ -21,7 +21,7 @@ def _make_ctx(num_opps=0, num_leads=0, company_ids=None):
     ctx = RunContext(
         criteria=criteria,
         module_selections=ModuleSelections(crm=num_opps, leads=num_leads),
-        industry="IT", language_name="German", language_code="de", gemini_model_name="test",
+        industry="IT", language_name="German", language_code="de",
     )
     ctx.partner_company_ids = company_ids if company_ids is not None else [1, 2, 3]
     return ctx
@@ -54,7 +54,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(num_opps=7)
-        crm.create_crm_data(client, gemini=MagicMock(), ctx=ctx)
+        crm.create_crm_data(client, llm=MagicMock(), ctx=ctx)
         assert client.create_batch.call_count == 1, client.create_batch.call_count
         assert client.create.call_count == 0, "fell back to per-record create()"
         assert len(ctx.opportunity_ids) == 7, ctx.opportunity_ids
@@ -71,7 +71,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(num_opps=0, num_leads=4)
-        crm.create_crm_data(client, gemini=MagicMock(), ctx=ctx)
+        crm.create_crm_data(client, llm=MagicMock(), ctx=ctx)
         assert client.create_batch.call_count == 1, client.create_batch.call_count
         assert len(ctx.lead_ids) == 4, ctx.lead_ids
         results.append((
@@ -87,7 +87,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(num_opps=5, company_ids=[])
-        crm.create_crm_data(client, gemini=MagicMock(), ctx=ctx)
+        crm.create_crm_data(client, llm=MagicMock(), ctx=ctx)
         client.create_batch.assert_not_called()
         assert ctx.opportunity_ids == []
         results.append(("create_crm_data: empty company_ids -> no create_batch call (Pattern 5)", True, ""))
@@ -144,7 +144,7 @@ def run():
         client = MagicMock()
         ctx = _make_ctx()
         ctx.opportunity_ids = [1, 2, 3]
-        crm.mark_lost_opportunities(client, gemini=None, ctx=ctx)
+        crm.mark_lost_opportunities(client, llm=None, ctx=ctx)
         client.search_read.assert_not_called()
         client.write.assert_not_called()
         results.append(("mark_lost_opportunities: crm_lost=None -> no calls (Pattern 3)", True, ""))
@@ -159,7 +159,7 @@ def run():
         ctx = _make_ctx()
         ctx.opportunity_ids = [1, 2, 3]
         ctx.module_selections.crm_lost = LostConfig(pct=0)
-        crm.mark_lost_opportunities(client, gemini=None, ctx=ctx)
+        crm.mark_lost_opportunities(client, llm=None, ctx=ctx)
         client.search_read.assert_not_called()
         results.append(("mark_lost_opportunities: pct=0 -> no calls", True, ""))
     except AssertionError as e:
@@ -175,7 +175,7 @@ def run():
         ctx = _make_ctx()
         ctx.opportunity_ids = []
         ctx.module_selections.crm_lost = LostConfig(pct=50)
-        crm.mark_lost_opportunities(client, gemini=None, ctx=ctx)
+        crm.mark_lost_opportunities(client, llm=None, ctx=ctx)
         client.search_read.assert_not_called()
         results.append(("mark_lost_opportunities: empty opportunity_ids -> no calls (Pattern 5)", True, ""))
     except AssertionError as e:
@@ -194,7 +194,7 @@ def run():
         ctx.opportunity_ids = [1, 2, 3, 4]
         ctx.linked_opportunity_ids = [1, 2]
         ctx.module_selections.crm_lost = LostConfig(pct=100)
-        crm.mark_lost_opportunities(client, gemini=None, ctx=ctx)
+        crm.mark_lost_opportunities(client, llm=None, ctx=ctx)
         written_ids = set()
         for call in client.write.call_args_list:
             written_ids.update(call.args[1])
@@ -212,7 +212,7 @@ def run():
         ctx = _make_ctx()
         ctx.opportunity_ids = [1, 2, 3]
         ctx.module_selections.crm_lost = LostConfig(pct=100)
-        crm.mark_lost_opportunities(client, gemini=None, ctx=ctx)
+        crm.mark_lost_opportunities(client, llm=None, ctx=ctx)
         client.write.assert_not_called()
         results.append(("mark_lost_opportunities: empty crm.lost.reason pool -> no writes (Pattern 1)", True, ""))
     except AssertionError as e:
@@ -231,7 +231,7 @@ def run():
         ctx = _make_ctx()
         ctx.opportunity_ids = [1, 2]
         ctx.module_selections.crm_lost = LostConfig(pct=100)
-        crm.mark_lost_opportunities(client, gemini=None, ctx=ctx)
+        crm.mark_lost_opportunities(client, llm=None, ctx=ctx)
         assert client.write.call_count >= 1
         for call in client.write.call_args_list:
             vals = call.args[2]
@@ -253,7 +253,7 @@ def run():
         ctx = _make_ctx()
         ctx.opportunity_ids = list(range(200))
         ctx.module_selections.crm_lost = LostConfig(pct=30)
-        crm.mark_lost_opportunities(client, gemini=None, ctx=ctx)
+        crm.mark_lost_opportunities(client, llm=None, ctx=ctx)
         written_ids = set()
         for call in client.write.call_args_list:
             written_ids.update(call.args[1])

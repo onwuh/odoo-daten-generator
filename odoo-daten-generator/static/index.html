@@ -89,6 +89,7 @@
           <div class="field-row"><label for="f-key">Odoo API-Schlüssel</label><input id="f-key" type="password" autocomplete="off"></div>
 
           <div class="divider-label">LLM-Verbindung</div>
+          <div class="field-row"><label for="f-llmprovider">LLM Anbieter</label><select id="f-llmprovider"><option value="">Automatisch (aus Schlüssel erkannt)</option><option value="groq">Groq</option><option value="gemini">Gemini</option></select></div>
           <div class="field-row"><label for="f-llmkey">LLM API-Schlüssel</label><input id="f-llmkey" type="password" autocomplete="off"></div>
           <div class="field-row"><label for="f-llmmodel">LLM Modell</label><input id="f-llmmodel" type="text" value="qwen/qwen3.8-27b" autocomplete="off"></div>
 
@@ -302,7 +303,7 @@
       </li>
       <li>Instanz-URL hier eintragen (<code class="f">https://demo-….odoo.com</code>) — die Datenbank wird
         automatisch daraus abgeleitet, kein eigenes Feld nötig.</li>
-      <li>LLM-Schlüssel (Groq <code class="f">gsk_…</code> oder Gemini) und Modell eintragen.</li>
+      <li>LLM-Schlüssel (Groq <code class="f">gsk_…</code> oder Gemini) und Modell eintragen. Der Anbieter wird am Schlüssel erkannt; „LLM Anbieter" überschreibt das, falls nötig.</li>
       <li>„Verbinden“ klicken — die Prüfliste muss vollständig grün sein, bevor es zur Konfiguration
         weitergeht.</li>
       <li>Zur Konfiguration wechseln, Umfang und Module festlegen, „Lauf starten“.</li>

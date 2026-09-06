@@ -25,7 +25,7 @@ def _make_rctx(num_invoices):
     )
     return RunContext(
         criteria=crit, module_selections=ModuleSelections(account=num_invoices), industry="IT",
-        language_name="German", language_code="de_DE", gemini_model_name="test",
+        language_name="German", language_code="de_DE",
     )
 
 

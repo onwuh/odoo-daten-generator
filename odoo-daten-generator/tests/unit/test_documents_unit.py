@@ -1,6 +1,6 @@
 """Unit tests for modules/documents.py and pdf_factory.py (S6/R1 P1+P2).
 
-Patterns covered: 1 (empty-pool guard in pdf_factory), 2 (LLM None/gemini=None
+Patterns covered: 1 (empty-pool guard in pdf_factory), 2 (LLM None/llm=None
 guard -> fallback bullets), 3 (empty documents dict -> no ir.attachment
 create_batch call), 6 (Many2one [id, name] tuple unpacking for partner_id/
 product_id/skill_id), 8 (fetch_cv_bullet_points_batch called exactly once,
@@ -30,7 +30,7 @@ def _make_ctx(documents_sel=None, bill_ids=None, applicant_ids=None, model_acces
     ctx = RunContext(
         criteria=criteria,
         module_selections=ModuleSelections(documents=documents_sel),
-        industry="IT", language_name="German", language_code="de", gemini_model_name="test",
+        industry="IT", language_name="German", language_code="de",
         model_access=model_access if model_access is not None else {},
     )
     ctx.bill_ids = bill_ids or []
@@ -78,7 +78,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(documents_sel=None, bill_ids=[1], applicant_ids=[2])
-        documents.create_documents(client, gemini=None, ctx=ctx)
+        documents.create_documents(client, llm=None, ctx=ctx)
         client.create_batch.assert_not_called()
         client.search_read.assert_not_called()
         results.append(("create_documents: empty documents dict -> no calls at all (Pattern 3)", True, ""))
@@ -115,7 +115,7 @@ def run():
 
         with patch.object(pdf_factory, "build_vendor_bill_pdf", return_value=b"%PDF-fake") as mock_build:
             ctx = _make_ctx(documents_sel=DocumentsConfig(bill_pdfs_enabled=True), bill_ids=[501])
-            documents.create_documents(client, gemini=None, ctx=ctx)
+            documents.create_documents(client, llm=None, ctx=ctx)
 
         assert mock_build.call_count == 1, mock_build.call_count
         call_kwargs = mock_build.call_args
@@ -185,7 +185,7 @@ def run():
 
         with patch.object(pdf_factory, "build_vendor_bill_pdf", return_value=b"%PDF-fake") as mock_build:
             ctx = _make_ctx(documents_sel=DocumentsConfig(bill_pdfs_enabled=True), bill_ids=[501])
-            documents.create_documents(client, gemini=None, ctx=ctx)
+            documents.create_documents(client, llm=None, ctx=ctx)
 
         assert mock_build.call_count == 1, mock_build.call_count
         kwargs = mock_build.call_args.kwargs
@@ -237,7 +237,7 @@ def run():
 
         with patch.object(pdf_factory, "build_vendor_bill_pdf", return_value=b"%PDF-fake") as mock_build:
             ctx = _make_ctx(documents_sel=DocumentsConfig(bill_pdfs_enabled=True), bill_ids=[502])
-            documents.create_documents(client, gemini=None, ctx=ctx)
+            documents.create_documents(client, llm=None, ctx=ctx)
 
         kwargs = mock_build.call_args.kwargs
         assert kwargs.get("buyer_name") == "Meine Firma GmbH", kwargs.get("buyer_name")
@@ -275,17 +275,17 @@ def run():
             return []
         client.search_read.side_effect = _search_read
 
-        gemini = MagicMock()
-        gemini.fetch_cv_bullet_points_batch.return_value = {
+        llm = MagicMock()
+        llm.fetch_cv_bullet_points_batch.return_value = {
             601: ["Bullet A", "Bullet B"], 602: ["Bullet C"],
         }
 
         with patch.object(pdf_factory, "build_cv_pdf", return_value=b"%PDF-fake") as mock_build_cv:
             ctx = _make_ctx(documents_sel=DocumentsConfig(cv_pdfs_enabled=True), applicant_ids=[601, 602])
-            documents.create_documents(client, gemini=gemini, ctx=ctx)
+            documents.create_documents(client, llm=llm, ctx=ctx)
 
-        assert gemini.fetch_cv_bullet_points_batch.call_count == 1, (
-            f"expected exactly 1 batched LLM call for 2 applicants, got {gemini.fetch_cv_bullet_points_batch.call_count}"
+        assert llm.fetch_cv_bullet_points_batch.call_count == 1, (
+            f"expected exactly 1 batched LLM call for 2 applicants, got {llm.fetch_cv_bullet_points_batch.call_count}"
         )
         assert mock_build_cv.call_count == 2, mock_build_cv.call_count
         skills_arg_601 = mock_build_cv.call_args_list[0].args[2]
@@ -302,7 +302,7 @@ def run():
         results.append(("_create_cv_pdfs: skill_id tuples unpacked + fetch_cv_bullet_points_batch called once (Pattern 6+8)", False, str(e)))
 
     # ------------------------------------------------------------------
-    # Pattern 2: gemini=None and gemini returning None/{} must not crash —
+    # Pattern 2: llm=None and llm returning None/{} must not crash —
     # fallback bullets from fallback_data.FALLBACK_CV_BULLETS are used.
     # ------------------------------------------------------------------
     try:
@@ -323,23 +323,23 @@ def run():
 
         with patch.object(pdf_factory, "build_cv_pdf", side_effect=_fake_build_cv):
             ctx = _make_ctx(documents_sel=DocumentsConfig(cv_pdfs_enabled=True), applicant_ids=[701])
-            # gemini=None entirely (unconfigured LLM service)
-            documents.create_documents(client, gemini=None, ctx=ctx)
+            # llm=None entirely (unconfigured LLM service)
+            documents.create_documents(client, llm=None, ctx=ctx)
         assert captured["bullets"] == FALLBACK_CV_BULLETS, captured["bullets"]
 
-        gemini_empty = MagicMock()
-        gemini_empty.fetch_cv_bullet_points_batch.return_value = None
+        llm_empty = MagicMock()
+        llm_empty.fetch_cv_bullet_points_batch.return_value = None
         with patch.object(pdf_factory, "build_cv_pdf", side_effect=_fake_build_cv):
             ctx2 = _make_ctx(documents_sel=DocumentsConfig(cv_pdfs_enabled=True), applicant_ids=[701])
-            documents.create_documents(client, gemini=gemini_empty, ctx=ctx2)
+            documents.create_documents(client, llm=llm_empty, ctx=ctx2)
         assert captured["bullets"] == FALLBACK_CV_BULLETS, captured["bullets"]
 
         results.append((
-            "_create_cv_pdfs: gemini=None and gemini returning None -> fallback bullets, no crash (Pattern 2)",
+            "_create_cv_pdfs: llm=None and llm returning None -> fallback bullets, no crash (Pattern 2)",
             True, "",
         ))
     except (AssertionError, Exception) as e:
-        results.append(("_create_cv_pdfs: gemini=None and gemini returning None -> fallback bullets, no crash (Pattern 2)", False, str(e)))
+        results.append(("_create_cv_pdfs: llm=None and llm returning None -> fallback bullets, no crash (Pattern 2)", False, str(e)))
 
     # ------------------------------------------------------------------
     # S10/R10 (Pattern 3): model_access={'ir.attachment': False} must block
@@ -357,7 +357,7 @@ def run():
             bill_ids=[1], applicant_ids=[2],
             model_access={"ir.attachment": False},
         )
-        documents.create_documents(client, gemini=None, ctx=ctx)
+        documents.create_documents(client, llm=None, ctx=ctx)
         client.create_batch.assert_not_called()
         client.search_read.assert_not_called()
         assert "documents" in ctx.skipped_modules, ctx.skipped_modules
@@ -373,7 +373,7 @@ def run():
         client = _mock_client()
         ctx = _make_ctx(documents_sel=DocumentsConfig(bill_pdfs_enabled=False, cv_pdfs_enabled=False),
                         model_access={})
-        documents.create_documents(client, gemini=None, ctx=ctx)
+        documents.create_documents(client, llm=None, ctx=ctx)
         assert "documents" not in ctx.skipped_modules, ctx.skipped_modules
         results.append(("create_documents: empty model_access defaults open, not marked skipped (B1 guard)", True, ""))
     except AssertionError as e:

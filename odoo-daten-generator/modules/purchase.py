@@ -135,7 +135,7 @@ def _create_bills_from_pos(client, order_ids):
 # Module entry point
 # ---------------------------------------------------------------------------
 
-def create_purchase_data(client, gemini, ctx: RunContext) -> None:
+def create_purchase_data(client, llm, ctx: RunContext) -> None:
     """Creates purchase orders from suppliers, confirms a subset, and bills them."""
     num_orders = ctx.module_selections.purchase
     if num_orders <= 0:

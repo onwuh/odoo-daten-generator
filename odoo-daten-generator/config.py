@@ -218,10 +218,9 @@ class RunContext:
     industry: str
     language_name: str
     language_code: str
-    gemini_model_name: str
     installed_modules: Set[str] = field(default_factory=set)
     skip_master_data: bool = False
-    # Name banks from Gemini (product_names, employee_names, etc.)
+    # Name banks from the LLM (product_names, employee_names, etc.)
     name_banks: Dict[str, List[str]] = field(default_factory=dict)
     # IDs created during the run (modules write here, subsequent modules read)
     # Besitzer (4): master_data.py:196, orchestrator.py:149 (Fallback-Partner),

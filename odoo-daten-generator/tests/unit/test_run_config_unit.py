@@ -68,7 +68,7 @@ _ALL_INSTALLED = {"crm", "sale", "account", "hr", "project", "hr_timesheet",
 def _build(payload, installed=None, flags=None, model_access=None):
     return run_config.build_context(
         payload,
-        language_name="German", language_code="de_DE", llm_model_name="m",
+        language_name="German", language_code="de_DE",
         installed_modules=installed if installed is not None else _ALL_INSTALLED,
         feature_flags=flags if flags is not None else {"crm_leads": True},
         model_access=model_access,
@@ -563,7 +563,7 @@ def run():
             payload["existing_data_consent"] = existing_consent
         return run_config.build_context_list(
             payload,
-            language_name="German", language_code="de_DE", llm_model_name="m",
+            language_name="German", language_code="de_DE",
             installed_modules=_ALL_INSTALLED, feature_flags={"crm_leads": True},
         )
 

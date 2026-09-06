@@ -32,7 +32,7 @@ def _make_rctx(num_jobs, num_candidates):
             num_jobs=num_jobs, num_candidates=num_candidates,
             create_skills=False, num_skill_types=0, skills_per_type=0,
         )),
-        industry="IT", language_name="German", language_code="de_DE", gemini_model_name="test",
+        industry="IT", language_name="German", language_code="de_DE",
     )
 
 
@@ -192,7 +192,6 @@ def run(client, ctx):
         mock_ctx = RunContext(
             criteria=criteria, module_selections=ModuleSelections(),
             industry="Test", language_name="German", language_code="de_DE",
-            gemini_model_name="test",
         )
         result = _create_applicants(mock_client, mock_ctx, {}, 5, [], [], {})
         assert result == [], f"Expected [], got {result}"
@@ -253,7 +252,7 @@ def run(client, ctx):
         results.append(("recruiting: repeat run does not duplicate skills/levels (B13)", False, str(e)))
 
     # Step 7 — D3: create_recruiting_data end-to-end (batched jobs + applicants),
-    # gemini=None to prove it needs no LLM call for the batch path.
+    # llm=None to prove it needs no LLM call for the batch path.
     # create_recruiting_data does not persist job_ids on ctx (pre-existing, not
     # a D3 concern), so new jobs are identified via a before/after id diff.
     if not recruitment_installed:

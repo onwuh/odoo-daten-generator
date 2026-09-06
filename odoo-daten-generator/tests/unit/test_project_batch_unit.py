@@ -21,7 +21,7 @@ def _make_ctx(num_projects=0, tasks_per_project=3, hr_timesheet=0):
         criteria=criteria,
         module_selections=ModuleSelections(project=num_projects, tasks_per_project=tasks_per_project,
                                             hr_timesheet=hr_timesheet),
-        industry="IT", language_name="German", language_code="de", gemini_model_name="test",
+        industry="IT", language_name="German", language_code="de",
     )
 
 
@@ -51,7 +51,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(num_projects=4, tasks_per_project=3)
-        project.create_project_data(client, gemini=None, ctx=ctx)
+        project.create_project_data(client, llm=None, ctx=ctx)
         assert client.create_batch.call_count == 2, client.create_batch.call_count
         # project.project and project.task creation must go through create_batch,
         # not a per-record create() loop (stage creation/dedup legitimately still
@@ -75,7 +75,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(num_projects=0)
-        project.create_project_data(client, gemini=None, ctx=ctx)
+        project.create_project_data(client, llm=None, ctx=ctx)
         client.create_batch.assert_not_called()
         assert ctx.project_ids == []
         results.append(("create_project_data: num_projects=0 -> no create_batch call (Pattern 5)", True, ""))
@@ -90,7 +90,7 @@ def run():
         ctx = _make_ctx(hr_timesheet=6)
         ctx.project_ids = [1, 2]
         ctx.employee_ids = [10, 11]
-        project.create_timesheet_data(client, gemini=None, ctx=ctx)
+        project.create_timesheet_data(client, llm=None, ctx=ctx)
         assert client.create_batch.call_count == 1, client.create_batch.call_count
         assert client.create.call_count == 0, "fell back to per-record create()"
         results.append((
@@ -107,7 +107,7 @@ def run():
         client = _mock_client()
         ctx = _make_ctx(hr_timesheet=6)
         ctx.project_ids = []
-        project.create_timesheet_data(client, gemini=None, ctx=ctx)
+        project.create_timesheet_data(client, llm=None, ctx=ctx)
         client.create_batch.assert_not_called()
         results.append(("create_timesheet_data: no project_ids -> no create_batch call (Pattern 5)", True, ""))
     except AssertionError as e:
@@ -130,7 +130,7 @@ def run():
         ctx.project_ids = []
         ctx.employee_ids = [10, 11]
         ctx.confirmed_order_ids = [900]
-        project.create_timesheet_data(client, gemini=None, ctx=ctx)
+        project.create_timesheet_data(client, llm=None, ctx=ctx)
         assert client.create_batch.call_count == 1, client.create_batch.call_count
         vals_list = client.create_batch.call_args_list[0].args[1]
         assert len(vals_list) == 1, f"budget=1 should yield exactly 1 entry, got {vals_list}"
@@ -158,7 +158,7 @@ def run():
         ctx.project_ids = [1, 2]
         ctx.employee_ids = [10, 11]
         ctx.confirmed_order_ids = [900]
-        project.create_timesheet_data(client, gemini=None, ctx=ctx)
+        project.create_timesheet_data(client, llm=None, ctx=ctx)
         assert client.create_batch.call_count == 1, client.create_batch.call_count
         vals_list = client.create_batch.call_args_list[0].args[1]
         assert len(vals_list) == 5, f"budget=5 should yield exactly 5 entries total, got {len(vals_list)}"

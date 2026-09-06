@@ -23,7 +23,6 @@ def _make_ctx(hr_timeoff, employee_ids=None, installed_modules=None) -> RunConte
     ctx = RunContext(
         criteria=criteria, module_selections=sel,
         industry="Test", language_name="Deutsch", language_code="de",
-        gemini_model_name="",
         # S10/R10: create_leave_data now gates on hr_holidays/hr_work_entry
         # being installed (they, not hr, are where hr.leave/hr.work.entry.type
         # actually ship). Every positive case below exercises the leave logic

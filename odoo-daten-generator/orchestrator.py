@@ -47,22 +47,22 @@ configure_logging()
 logger = logging.getLogger(__name__)
 
 
-def run(client: OdooJson2Client, gemini: LLMService, ctx: RunContext,
+def run(client: OdooJson2Client, llm: LLMService, ctx: RunContext,
         on_module_start=None, on_module_done=None) -> None:
-    # --- Upfront Gemini calls (data needed before any Odoo writes) ---
+    # --- Upfront LLM calls (data needed before any Odoo writes) ---
     if not ctx.skip_master_data:
         logger.info("\n--- Generiere kreative Stammdaten ---")
-        creative_atoms = gemini.fetch_creative_atoms(vars(ctx.criteria), ctx.language_name) or {}
+        creative_atoms = llm.fetch_creative_atoms(vars(ctx.criteria), ctx.language_name) or {}
     else:
         creative_atoms = {}
         logger.info("\n-> Stammdaten-Erstellung übersprungen (vorhandene Daten werden verwendet)")
 
     logger.info("\n--- Generiere Namensvorschläge ---")
-    ctx.name_banks = gemini.fetch_name_suggestions(vars(ctx.criteria), ctx.language_name) or {}
+    ctx.name_banks = llm.fetch_name_suggestions(vars(ctx.criteria), ctx.language_name) or {}
 
     # --- Master data (no dependencies) ---
     if not ctx.skip_master_data:
-        _run_module("Stammdaten", master_data.create_master_data, client, gemini, ctx,
+        _run_module("Stammdaten", master_data.create_master_data, client, llm, ctx,
                     extra_args=(creative_atoms,),
                     on_start=on_module_start, on_done=on_module_done)
 
@@ -107,18 +107,18 @@ def run(client: OdooJson2Client, gemini: LLMService, ctx: RunContext,
                 continue
         elif not sel:
             continue
-        _run_module(module_code, handler, client, gemini, ctx,
+        _run_module(module_code, handler, client, llm, ctx,
                     on_start=on_module_start, on_done=on_module_done)
 
     # Summary
-    logger.info(f"\n[LLM] Gesamtanfragen: {gemini.total_calls}, Gesamttoken: {gemini.total_tokens}")
+    logger.info(f"\n[LLM] Gesamtanfragen: {llm.total_calls}, Gesamttoken: {llm.total_tokens}")
 
 
-def _run_module(name, handler, client, gemini, ctx, extra_args=(), on_start=None, on_done=None):
+def _run_module(name, handler, client, llm, ctx, extra_args=(), on_start=None, on_done=None):
     if on_start:
         on_start(name)
     try:
-        handler(client, gemini, ctx, *extra_args)
+        handler(client, llm, ctx, *extra_args)
         if on_done:
             on_done(name, ok=True)
     except Exception as exc:

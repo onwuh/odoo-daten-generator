@@ -42,7 +42,8 @@ _MODULES = [
     ("web_security_unit",  test_web_security_unit.run),
     ("web_api_unit",       test_web_api_unit.run),
     ("web_feedback_unit",  test_web_feedback_unit.run),
-    # S17-D9 safety net: frozen after WP1, never edited again this sprint.
+    # S17-D9 safety net: frozen in S17. Touched once in S18/WP1 (the
+    # removed RunContext field's kwarg vanished with it) — goldens untouched.
     ("selection_snapshot", test_selection_snapshot_unit.run),
 ]
 

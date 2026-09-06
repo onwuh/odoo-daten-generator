@@ -22,7 +22,7 @@ def _make_ctx(num_orders, analytic=None):
         sel_kwargs["analytic"] = analytic
     ctx = RunContext(
         criteria=criteria, module_selections=ModuleSelections(**sel_kwargs), industry="IT",
-        language_name="German", language_code="de", gemini_model_name="test",
+        language_name="German", language_code="de",
     )
     ctx.partner_company_ids = [1, 2, 3]
     ctx.product_ids = [10, 11, 12]
@@ -59,7 +59,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(num_orders=200)
-        sale.create_sale_data(client, gemini=None, ctx=ctx)
+        sale.create_sale_data(client, llm=None, ctx=ctx)
         confirm_calls = [
             c for c in client.call_method.call_args_list if c.args[1] == 'action_confirm'
         ]
@@ -85,7 +85,7 @@ def run():
         client = _mock_client()
         ctx = _make_ctx(num_orders=10)
         ctx.module_selections.sale_confirm_pct = 50
-        sale.create_sale_data(client, gemini=None, ctx=ctx)
+        sale.create_sale_data(client, llm=None, ctx=ctx)
         confirm_calls = [
             c for c in client.call_method.call_args_list if c.args[1] == 'action_confirm'
         ]
@@ -101,7 +101,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(num_orders=1)
-        sale.create_sale_data(client, gemini=None, ctx=ctx)
+        sale.create_sale_data(client, llm=None, ctx=ctx)
         confirm_calls = [
             c for c in client.call_method.call_args_list if c.args[1] == 'action_confirm'
         ]
@@ -132,7 +132,7 @@ def run():
             return []
         client.search_read.side_effect = _search_read
 
-        sale.create_sale_data(client, gemini=None, ctx=ctx)
+        sale.create_sale_data(client, llm=None, ctx=ctx)
         write_calls = [c for c in client.write.call_args_list if c.args[0] == 'sale.order']
         assert not write_calls, f"B14 regressed: linked mismatched-partner order/opportunity: {write_calls}"
         # R11: an opportunity that was NOT linked must not show up in
@@ -162,7 +162,7 @@ def run():
             return []
         client.search_read.side_effect = _search_read
 
-        sale.create_sale_data(client, gemini=None, ctx=ctx)
+        sale.create_sale_data(client, llm=None, ctx=ctx)
         write_calls = [c for c in client.write.call_args_list if c.args[0] == 'sale.order']
         assert len(write_calls) == 1, f"expected 1 link write, got {len(write_calls)}"
         assert write_calls[0].args[2] == {"opportunity_id": 500}, write_calls[0].args
@@ -216,7 +216,7 @@ def run():
         client = _mock_client_confirmed()
         ctx = _make_ctx(num_orders=5)
         with patch("modules.sale.odoo_actions.get_or_create_analytic_accounts") as mock_helper:
-            sale.create_sale_data(client, gemini=None, ctx=ctx)
+            sale.create_sale_data(client, llm=None, ctx=ctx)
             mock_helper.assert_not_called()
         sol_reads = [c for c in client.search_read.call_args_list if c.args[0] == 'sale.order.line']
         assert sol_reads == [], sol_reads
@@ -232,7 +232,7 @@ def run():
         ctx = _make_ctx(num_orders=5, analytic=AnalyticConfig(sale_pct=0, purchase_pct=50,
                                                               expense_pct=50))
         with patch("modules.sale.odoo_actions.get_or_create_analytic_accounts") as mock_helper:
-            sale.create_sale_data(client, gemini=None, ctx=ctx)
+            sale.create_sale_data(client, llm=None, ctx=ctx)
             mock_helper.assert_not_called()
         results.append(("create_sale_data: sale_pct=0 -> no helper call (Pattern 3)", True, ""))
     except AssertionError as e:
@@ -245,7 +245,7 @@ def run():
         ctx = _make_ctx(num_orders=5, analytic=AnalyticConfig(sale_pct=100, purchase_pct=0,
                                                               expense_pct=0))
         with patch("modules.sale.odoo_actions.get_or_create_analytic_accounts", return_value=[]):
-            sale.create_sale_data(client, gemini=None, ctx=ctx)
+            sale.create_sale_data(client, llm=None, ctx=ctx)
         sol_reads = [c for c in client.search_read.call_args_list if c.args[0] == 'sale.order.line']
         assert sol_reads == [], sol_reads
         results.append(("create_sale_data: no cost centers -> no eligibility read (Pattern 5)", True, ""))
@@ -258,7 +258,7 @@ def run():
         ctx = _make_ctx(num_orders=5, analytic=AnalyticConfig(sale_pct=100, purchase_pct=0,
                                                               expense_pct=0))
         with patch("modules.sale.odoo_actions.get_or_create_analytic_accounts", return_value=[901]):
-            sale.create_sale_data(client, gemini=None, ctx=ctx)
+            sale.create_sale_data(client, llm=None, ctx=ctx)
         write_calls = [c for c in client.write.call_args_list if c.args[0] == 'sale.order.line']
         assert write_calls == [], write_calls
         results.append(("create_sale_data: no eligible lines -> no write (Pattern 5)", True, ""))
@@ -275,7 +275,7 @@ def run():
                                                               expense_pct=0))
         with patch("modules.sale.odoo_actions.get_or_create_analytic_accounts",
                   return_value=[901, 902]) as mock_helper:
-            sale.create_sale_data(client, gemini=None, ctx=ctx)
+            sale.create_sale_data(client, llm=None, ctx=ctx)
             mock_helper.assert_called_once()
         sol_reads = [c for c in client.search_read.call_args_list if c.args[0] == 'sale.order.line']
         assert len(sol_reads) == 1, sol_reads

@@ -25,7 +25,7 @@ def _make_rctx():
     )
     return RunContext(
         criteria=crit, module_selections=ModuleSelections(), industry="IT",
-        language_name="German", language_code="de_DE", gemini_model_name="test",
+        language_name="German", language_code="de_DE",
     )
 
 
@@ -87,7 +87,7 @@ def run(client, ctx):
         return False, results
 
     # Step 1 — P1: bill PDFs attached to account.move, read-back (Pattern 4).
-    # gemini=None throughout: P1 needs no LLM call at all (design decision 1),
+    # llm=None throughout: P1 needs no LLM call at all (design decision 1),
     # P2 must fall back gracefully without one (Pattern 2).
     try:
         rctx.module_selections.documents = DocumentsConfig(bill_pdfs_enabled=True,
@@ -118,7 +118,7 @@ def run(client, ctx):
     # Step 2 — P2: CV PDFs attached to hr.applicant, read-back (Pattern 4).
     if not recruitment_installed:
         results.append((
-            "documents: P2 — CV PDF attachments created + read-back, gemini=None fallback (Pattern 2+4) "
+            "documents: P2 — CV PDF attachments created + read-back, llm=None fallback (Pattern 2+4) "
             "SKIP — hr_recruitment nicht installiert", True, "skipped",
         ))
     else:
@@ -140,12 +140,12 @@ def run(client, ctx):
                 decoded = base64.b64decode(raw)
                 assert decoded.startswith(b"%PDF"), "decoded attachment is not a PDF"
             results.append((
-                "documents: P2 — CV PDF attachments created + read-back, gemini=None fallback (Pattern 2+4)",
+                "documents: P2 — CV PDF attachments created + read-back, llm=None fallback (Pattern 2+4)",
                 True, f"{len(attachments)} attachments",
             ))
         except Exception as e:
             results.append((
-                "documents: P2 — CV PDF attachments created + read-back, gemini=None fallback (Pattern 2+4)",
+                "documents: P2 — CV PDF attachments created + read-back, llm=None fallback (Pattern 2+4)",
                 False, str(e),
             ))
 
