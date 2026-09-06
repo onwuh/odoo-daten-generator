@@ -1377,14 +1377,21 @@
     setHidden("btn-to-config", true);
     clear($("checklist"));
 
+    // Empty provider means "let detect_provider sniff the key prefix" — the
+    // field is omitted entirely then, so the request looks exactly like it did
+    // before this control existed.
+    var connectBody = {
+      url: urlField.value.trim(),
+      odoo_key: $("f-key").value,
+      llm_key: $("f-llmkey").value,
+      llm_model: $("f-llmmodel").value.trim(),
+    };
+    var chosenProvider = $("f-llmprovider").value;
+    if (chosenProvider) connectBody.llm_provider = chosenProvider;
+
     api("/api/connect", {
       method: "POST",
-      body: {
-        url: urlField.value.trim(),
-        odoo_key: $("f-key").value,
-        llm_key: $("f-llmkey").value,
-        llm_model: $("f-llmmodel").value.trim(),
-      },
+      body: connectBody,
     }).then(function (data) {
       state.connect = data;
       renderChecklist(data.steps || []);
