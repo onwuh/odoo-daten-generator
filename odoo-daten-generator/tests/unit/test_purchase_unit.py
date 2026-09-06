@@ -13,7 +13,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import AnalyticConfig, DemoCriteria, ModuleSelections, RunContext
 from modules import purchase
 
 
@@ -33,7 +33,7 @@ def _make_ctx(num_purchase=1, confirm_pct=70, component_ids=None, company_ids=No
         industry="IT", language_name="German", language_code="de", gemini_model_name="test",
     )
     ctx.component_ids = component_ids if component_ids is not None else [1, 2, 3]
-    ctx.company_ids = company_ids if company_ids is not None else [10]
+    ctx.partner_company_ids = company_ids if company_ids is not None else [10]
     ctx.supplier_ids = supplier_ids if supplier_ids is not None else []
     return ctx
 
@@ -275,7 +275,7 @@ def run():
         # purchase_pct=0 with analytic enabled -> its own sub-off-switch.
         client = _mock_client()
         ctx = _make_ctx(num_purchase=2, supplier_ids=[555],
-                        analytic={"enabled": True, "sale_pct": 50, "purchase_pct": 0, "expense_pct": 50})
+                        analytic=AnalyticConfig(sale_pct=50, purchase_pct=0, expense_pct=50))
         with patch("modules.purchase.odoo_actions.get_or_create_analytic_accounts") as mock_helper:
             purchase.create_purchase_data(client, gemini=None, ctx=ctx)
             mock_helper.assert_not_called()
@@ -289,7 +289,7 @@ def run():
         # each order's order_line — same dict objects by reference.
         client = _mock_client()
         ctx = _make_ctx(num_purchase=3, supplier_ids=[555], component_ids=[1, 2, 3, 4, 5],
-                        analytic={"enabled": True, "sale_pct": 0, "purchase_pct": 100, "expense_pct": 0})
+                        analytic=AnalyticConfig(sale_pct=0, purchase_pct=100, expense_pct=0))
         with patch("modules.purchase.odoo_actions.get_or_create_analytic_accounts",
                   return_value=[801, 802]) as mock_helper:
             purchase.create_purchase_data(client, gemini=None, ctx=ctx)

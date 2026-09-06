@@ -355,7 +355,7 @@ async def api_create_run(request: Request, session=Depends(get_session_csrf)) ->
         # skip_master_data/use_existing — meaningless for this shape, where
         # both live per company block, and use_existing itself is superseded
         # by target.reuse_master_data (D11/D8b; build_context_list never
-        # wires the old existing_company_ids/existing_product_ids kwargs).
+        # wires the old existing_partner_company_ids/existing_product_ids kwargs).
         # Without this, a block combining skip_master_data=True with a
         # target that isn't an existing company with reuse requested got
         # NO guard at all — silently ran with an empty pool instead of 400ing.
@@ -426,7 +426,7 @@ async def api_preflight(request: Request, session=Depends(get_session_csrf)) -> 
                 installed_modules=connect.installed_modules,
                 feature_flags=connect.feature_flags,
                 model_access=connect.model_access,
-                existing_company_ids=connect.existing_company_ids,
+                existing_partner_company_ids=connect.existing_partner_company_ids,
                 existing_product_ids=connect.existing_product_ids,
             )
             contexts_and_selected = [(ctx, selected)]

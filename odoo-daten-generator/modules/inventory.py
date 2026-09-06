@@ -38,20 +38,20 @@ def create_inventory_data(client, gemini, ctx: RunContext) -> None:
     plus S13's optional second warehouse, sub-locations, and lot/serial
     tracking, and S14's optional replenishment rules (orderpoints)."""
     stock_config = ctx.module_selections.stock
-    if not isinstance(stock_config, dict) or not stock_config:
+    if stock_config is None:
         return
-    avg_qty = max(0, int(stock_config.get("avg_qty", 0)))
-    sub_locations = max(0, int(stock_config.get("sub_locations", 0)))
-    second_warehouse = bool(stock_config.get("second_warehouse", False))
-    orderpoints_pct = max(0, min(100, int(stock_config.get("orderpoints_pct", 0))))
+    avg_qty = max(0, int(stock_config.avg_qty))
+    sub_locations = max(0, int(stock_config.sub_locations))
+    second_warehouse = bool(stock_config.second_warehouse)
+    orderpoints_pct = max(0, min(100, int(stock_config.orderpoints_pct)))
     if (avg_qty <= 0 and sub_locations <= 0 and not second_warehouse
             and orderpoints_pct <= 0):
         return
 
     logger.info("\n--- INVENTORY: Seede Lagerbestände ---")
 
-    # NOT ctx.company_ids[0] — despite the name, RunContext.company_ids holds
-    # res.partner ids (customer/company contacts), never a real res.company id.
+    # NOT ctx.partner_company_ids[0] — those are res.partner ids
+    # (customer/company contacts), never a real res.company id.
     company_id = odoo_actions.get_main_company_id(
         client, company_id=(ctx.res_company_ids[0] if ctx.res_company_ids else None))
     if not company_id:
@@ -95,11 +95,11 @@ def create_inventory_data(client, gemini, ctx: RunContext) -> None:
     # S14/Befund 6: this guard is a Pattern-5 proxy for the quant/tracking
     # branch only ("does this run have any customer contacts at all") — it
     # is not a real prerequisite for orderpoints, which never read
-    # ctx.company_ids (company_id comes from get_main_company_id above).
+    # ctx.partner_company_ids (company_id comes from get_main_company_id above).
     # Must not be a `return`: an orderpoint-only run (avg_qty=0 or empty
-    # company_ids, orderpoints_pct>0) must still reach the loop below.
-    seed_quants = avg_qty > 0 and bool(ctx.company_ids)
-    if avg_qty > 0 and not ctx.company_ids:
+    # partner_company_ids, orderpoints_pct>0) must still reach the loop below.
+    seed_quants = avg_qty > 0 and bool(ctx.partner_company_ids)
+    if avg_qty > 0 and not ctx.partner_company_ids:
         logger.info("-> Keine Firmen vorhanden — Bestands-Seeding übersprungen")
     if not seed_quants and orderpoints_pct <= 0:
         return
@@ -119,7 +119,7 @@ def create_inventory_data(client, gemini, ctx: RunContext) -> None:
 
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     new_ids = set(ctx.new_product_ids)
-    tracking_serial_max = max(1, int(stock_config.get("tracking_serial_max", 10) or 10))
+    tracking_serial_max = max(1, int(stock_config.tracking_serial_max or 10))
     serial_budget = _MAX_SERIAL_RECORDS_PER_RUN
 
     # S14/R12: orderpoints target products this run provably just created —
@@ -129,8 +129,8 @@ def create_inventory_data(client, gemini, ctx: RunContext) -> None:
     # stock.warehouse.orderpoint on the same (product, warehouse, location)
     # triple (live-confirmed unique constraint, S14/Befund 3).
     orderpoint_ids = new_ids | set(ctx.component_ids)
-    orderpoint_min_qty = max(1, int(stock_config.get("orderpoint_min_qty", 5)))
-    orderpoint_max_qty = max(1, int(stock_config.get("orderpoint_max_qty", 20)))
+    orderpoint_min_qty = max(1, int(stock_config.orderpoint_min_qty))
+    orderpoint_max_qty = max(1, int(stock_config.orderpoint_max_qty))
 
     quant_vals_list = []
     lot_vals_list = []

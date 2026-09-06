@@ -196,7 +196,7 @@ def create_leave_data(client, ctx: RunContext) -> list:
     Returns list of created hr.leave IDs.
     """
     to_params = ctx.module_selections.hr_timeoff
-    if not to_params.get("enabled"):
+    if to_params is None:
         return []
     if not ctx.employee_ids:
         return []
@@ -224,11 +224,11 @@ def create_leave_data(client, ctx: RunContext) -> list:
         logger.warning(f"⚠️  Urlaubsdaten übersprungen — keine Schreibrechte auf: {', '.join(blocked)}")
         return []
 
-    entries_per_employee = int(to_params.get("entries_per_employee", 2))
-    avg_length_days = int(to_params.get("avg_length_days", 5))
-    past_future_pct = int(to_params.get("past_future_pct", 30))   # % future
-    timescale_days = int(to_params.get("timescale_days", 180))
-    validate_pct = int(to_params.get("validate_pct", 100))
+    entries_per_employee = int(to_params.entries_per_employee)
+    avg_length_days = int(to_params.avg_length_days)
+    past_future_pct = int(to_params.past_future_pct)   # % future
+    timescale_days = int(to_params.timescale_days)
+    validate_pct = int(to_params.validate_pct)
 
     logger.info("\n--- TIMEOFF: Erstelle Urlaubsdaten ---")
     leave_type_id = get_or_create_annual_leave_type(client)

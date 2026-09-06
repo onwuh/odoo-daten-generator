@@ -7,7 +7,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import DemoCriteria, ModuleSelections, RunContext, StockConfig
 from modules import master_data
 
 
@@ -52,7 +52,7 @@ def run():
         master_data._create_partners(client, ctx, country_map={})
         assert client.create_batch.call_count == 2, client.create_batch.call_count
         assert client.create.call_count == 0, "fell back to per-record create()"
-        assert len(ctx.company_ids) == 5, ctx.company_ids
+        assert len(ctx.partner_company_ids) == 5, ctx.partner_company_ids
         results.append((
             "_create_partners: exactly 2 create_batch calls (companies, contacts)",
             True, f"create_batch calls={client.create_batch.call_count}",
@@ -62,13 +62,13 @@ def run():
 
     # ------------------------------------------------------------------
     # Pattern 1: num_companies=0 -> no batch calls made with non-empty payloads,
-    # no crash, ctx.company_ids stays empty.
+    # no crash, ctx.partner_company_ids stays empty.
     # ------------------------------------------------------------------
     try:
         client = _mock_client_for_batches()
         ctx = _make_ctx(num_companies=0)
         master_data._create_partners(client, ctx, country_map={})
-        assert ctx.company_ids == [], ctx.company_ids
+        assert ctx.partner_company_ids == [], ctx.partner_company_ids
         # create_batch may still be invoked with an empty list (client-level Pattern-1
         # guard already handles that); what matters is nothing crashes and no ids appear.
         for call in client.create_batch.call_args_list:
@@ -134,9 +134,8 @@ def run():
         client = _mock_client_for_batches()
         ctx = _make_ctx()
         ctx.installed_modules = {"stock"}
-        ctx.module_selections.stock = {
-            "avg_qty": 10, "tracking_lot_pct": 20, "tracking_serial_pct": 5,
-        }
+        ctx.module_selections.stock = StockConfig(avg_qty=10, tracking_lot_pct=20,
+                                                  tracking_serial_pct=5)
         atoms = {"product_names": {"services": [], "consumables": [], "storables": ["Regal"]}}
         with patch.object(master_data.data_factory, "assign_tracking") as mocked:
             master_data._create_products(client, atoms, ctx)
@@ -165,7 +164,8 @@ def run():
         client = _mock_client_for_batches()
         ctx = _make_ctx()
         ctx.installed_modules = {"stock"}
-        ctx.module_selections.stock = {"avg_qty": 0, "tracking_lot_pct": 50, "tracking_serial_pct": 0}
+        ctx.module_selections.stock = StockConfig(avg_qty=0, tracking_lot_pct=50,
+                                                  tracking_serial_pct=0)
         atoms = {"product_names": {"services": [], "consumables": [], "storables": ["Regal"]}}
         with patch.object(master_data.data_factory, "assign_tracking") as mocked:
             master_data._create_products(client, atoms, ctx)
@@ -181,7 +181,8 @@ def run():
         client = _mock_client_for_batches()
         ctx = _make_ctx()
         ctx.installed_modules = set()
-        ctx.module_selections.stock = {"avg_qty": 10, "tracking_lot_pct": 50, "tracking_serial_pct": 0}
+        ctx.module_selections.stock = StockConfig(avg_qty=10, tracking_lot_pct=50,
+                                                  tracking_serial_pct=0)
         atoms = {"product_names": {"services": [], "consumables": [], "storables": ["Regal"]}}
         with patch.object(master_data.data_factory, "assign_tracking") as mocked:
             master_data._create_products(client, atoms, ctx)
@@ -232,7 +233,8 @@ def run():
         client.create_batch.side_effect = _create_batch
         ctx = _make_ctx()
         ctx.installed_modules = {"stock"}
-        ctx.module_selections.stock = {"avg_qty": 10, "tracking_lot_pct": 100, "tracking_serial_pct": 0}
+        ctx.module_selections.stock = StockConfig(avg_qty=10, tracking_lot_pct=100,
+                                                  tracking_serial_pct=0)
         atoms = {"product_names": {"services": [], "consumables": [], "storables": ["Regal"]}}
         master_data._create_products(client, atoms, ctx)
         assert len(calls) == 2, f"expected exactly one retry, got {len(calls)} calls"

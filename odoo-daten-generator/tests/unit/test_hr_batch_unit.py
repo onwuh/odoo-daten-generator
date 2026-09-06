@@ -12,7 +12,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import DemoCriteria, ModuleSelections, RunContext, TimeoffConfig
 from modules import hr
 
 
@@ -95,7 +95,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(
-            hr_timeoff={"enabled": True, "entries_per_employee": 0, "validate_pct": 0},
+            hr_timeoff=TimeoffConfig(entries_per_employee=0, validate_pct=0),
             employee_ids=[201, 202, 203, 204],
         )
         hr.create_leave_data(client, ctx)
@@ -123,7 +123,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(
-            hr_timeoff={"enabled": True, "entries_per_employee": 1, "validate_pct": 0},
+            hr_timeoff=TimeoffConfig(entries_per_employee=1, validate_pct=0),
             employee_ids=[301, 302, 303],
         )
         hr.create_leave_data(client, ctx)
@@ -148,10 +148,8 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(
-            hr_timeoff={
-                "enabled": True, "entries_per_employee": 2, "avg_length_days": 5,
-                "past_future_pct": 50, "timescale_days": 180, "validate_pct": 100,
-            },
+            hr_timeoff=TimeoffConfig(entries_per_employee=2, avg_length_days=5, past_future_pct=50,
+                                     timescale_days=180, validate_pct=100),
             employee_ids=[401, 402],
         )
         leave_ids = hr.create_leave_data(client, ctx)

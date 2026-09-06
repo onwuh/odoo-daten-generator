@@ -1,4 +1,4 @@
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import AnalyticConfig, DemoCriteria, ModuleSelections, RunContext
 from modules import purchase
 
 
@@ -33,7 +33,7 @@ def run(client, ctx):
     # Step 1 — end-to-end: 3 POs, 100% confirmed, bills created + posted.
     try:
         rctx = _make_rctx()
-        rctx.company_ids = [partner_id]  # prerequisite proxy only — the module
+        rctx.partner_company_ids = [partner_id]  # prerequisite proxy only — the module
         rctx.component_ids = [product_id]  # resolves the real res.company id itself
         rctx.module_selections.purchase = 3
         rctx.module_selections.purchase_confirm_pct = 100
@@ -83,7 +83,7 @@ def run(client, ctx):
     # Step 3 — Pattern 5: missing prerequisites (empty component_ids) -> graceful skip.
     try:
         skip_rctx = _make_rctx()
-        skip_rctx.company_ids = [partner_id]
+        skip_rctx.partner_company_ids = [partner_id]
         skip_rctx.component_ids = []
         skip_rctx.module_selections.purchase = 5
         purchase.create_purchase_data(client, None, skip_rctx)
@@ -97,13 +97,12 @@ def run(client, ctx):
     # referencing one of the (newly created) cost-center accounts.
     try:
         rctx = _make_rctx()
-        rctx.company_ids = [partner_id]
+        rctx.partner_company_ids = [partner_id]
         rctx.component_ids = [product_id]
         rctx.module_selections.purchase = 2
         rctx.module_selections.purchase_confirm_pct = 0  # scoped to line creation, not confirm/bill
-        rctx.module_selections.analytic = {
-            "enabled": True, "sale_pct": 0, "purchase_pct": 100, "expense_pct": 0,
-        }
+        rctx.module_selections.analytic = AnalyticConfig(sale_pct=0, purchase_pct=100,
+                                                         expense_pct=0)
 
         purchase.create_purchase_data(client, None, rctx)
 

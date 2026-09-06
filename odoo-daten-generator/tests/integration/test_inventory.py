@@ -1,4 +1,4 @@
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import DemoCriteria, ModuleSelections, RunContext, StockConfig
 from modules import inventory
 
 
@@ -45,9 +45,9 @@ def run(client, ctx):
         })
 
         rctx = _make_rctx()
-        rctx.company_ids = [partner_id]
+        rctx.partner_company_ids = [partner_id]
         rctx.product_ids = [product_id]
-        rctx.module_selections.stock = {"avg_qty": 20}
+        rctx.module_selections.stock = StockConfig(avg_qty=20)
 
         inventory.create_inventory_data(client, None, rctx)
 
@@ -76,9 +76,9 @@ def run(client, ctx):
     # Step 2 — Pattern 5: missing prerequisites (empty company_ids) -> graceful skip.
     try:
         skip_rctx = _make_rctx()
-        skip_rctx.company_ids = []
+        skip_rctx.partner_company_ids = []
         skip_rctx.product_ids = [product_id]
-        skip_rctx.module_selections.stock = {"avg_qty": 20}
+        skip_rctx.module_selections.stock = StockConfig(avg_qty=20)
         before = client.search_read('stock.quant', [["product_id", "=", product_id]], fields=["id"], limit=0)
         inventory.create_inventory_data(client, None, skip_rctx)
         after = client.search_read('stock.quant', [["product_id", "=", product_id]], fields=["id"], limit=0)
@@ -95,7 +95,7 @@ def run(client, ctx):
     # ------------------------------------------------------------------
     try:
         rctx = _make_rctx()
-        rctx.company_ids = [partner_id]
+        rctx.partner_company_ids = [partner_id]
         product_ids = []
         for i in range(4):
             product_ids.append(client.create('product.product', {
@@ -104,7 +104,7 @@ def run(client, ctx):
             }))
         rctx.product_ids = product_ids
         rctx.new_product_ids = []  # none tracked, only sub-locations under test here
-        rctx.module_selections.stock = {"avg_qty": 20, "sub_locations": 2}
+        rctx.module_selections.stock = StockConfig(avg_qty=20, sub_locations=2)
 
         inventory.create_inventory_data(client, None, rctx)
 
@@ -148,14 +148,14 @@ def run(client, ctx):
     # ------------------------------------------------------------------
     try:
         rctx = _make_rctx()
-        rctx.company_ids = [partner_id]
+        rctx.partner_company_ids = [partner_id]
         product_id = client.create('product.product', {
             "name": "S13 Second Warehouse Test", "type": "consu",
             "is_storable": True, "sale_ok": False, "purchase_ok": True,
         })
         rctx.product_ids = [product_id]
         rctx.new_product_ids = []
-        rctx.module_selections.stock = {"avg_qty": 20, "second_warehouse": True}
+        rctx.module_selections.stock = StockConfig(avg_qty=20, second_warehouse=True)
 
         # A name-`like` search alone can match "Lager 2 (NNNN)" residue left
         # over from an earlier run on this shared demo tenant and pass
@@ -196,7 +196,7 @@ def run(client, ctx):
     # ------------------------------------------------------------------
     try:
         rctx = _make_rctx()
-        rctx.company_ids = [partner_id]
+        rctx.partner_company_ids = [partner_id]
         lot_product_id = client.create('product.product', {
             "name": "S13 Lot Tracking Test", "type": "consu",
             "is_storable": True, "sale_ok": False, "purchase_ok": True,
@@ -209,10 +209,8 @@ def run(client, ctx):
         })
         rctx.product_ids = [lot_product_id, serial_product_id]
         rctx.new_product_ids = [lot_product_id, serial_product_id]  # Befund 4: only tracked if "new"
-        rctx.module_selections.stock = {
-            "avg_qty": 20, "tracking_lot_pct": 100, "tracking_serial_pct": 0,
-            "tracking_serial_max": 3,
-        }
+        rctx.module_selections.stock = StockConfig(avg_qty=20, tracking_lot_pct=100,
+                                                   tracking_serial_pct=0, tracking_serial_max=3)
 
         inventory.create_inventory_data(client, None, rctx)
 
@@ -257,17 +255,15 @@ def run(client, ctx):
     # ------------------------------------------------------------------
     try:
         rctx = _make_rctx()
-        rctx.company_ids = [partner_id]
+        rctx.partner_company_ids = [partner_id]
         op_product_id = client.create('product.product', {
             "name": "S14 Orderpoint Test", "type": "consu",
             "is_storable": True, "sale_ok": False, "purchase_ok": True,
         })
         rctx.product_ids = [op_product_id]
         rctx.new_product_ids = [op_product_id]
-        rctx.module_selections.stock = {
-            "avg_qty": 0, "orderpoints_pct": 100,
-            "orderpoint_min_qty": 8, "orderpoint_max_qty": 30,
-        }
+        rctx.module_selections.stock = StockConfig(avg_qty=0, orderpoints_pct=100,
+                                                   orderpoint_min_qty=8, orderpoint_max_qty=30)
 
         inventory.create_inventory_data(client, None, rctx)
 

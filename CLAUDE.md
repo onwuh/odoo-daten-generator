@@ -173,9 +173,24 @@ for behaviour unverifiable without side effects, but don't replace live integrat
 
 ## Current Sprint
 <!-- Architect updates this before each Claude Code session -->
-**Stand 2026-09-05: S1–S16 abgeschlossen und in `main`.** Zuletzt S16 (Multicompany, R17) über [PR #35](https://github.com/pahuodoo/odoo-daten-generator/pull/35) — N Firmen pro Lauf, Firma-Scoping über Odoo-Kontext-Injektion auf dem geteilten Client statt über Modul-Code, `STATUS_PARTIAL` für Teilausfälle.
+**Stand 2026-09-06: S1–S17 abgeschlossen.** S17 (Schema-Härtung) liegt auf Branch
+`s17-schema-haertung`, noch nicht in `main` — D5 (die 10 dict-Felder von `ModuleSelections`
+sind je eine `Optional[<X>Config] = None`-Dataclass) und D16 (`ctx.company_ids` →
+`partner_company_ids`), plus zwei D8-Teilpunkte. Null Verhaltensänderung, belegt durch ein
+Sicherungsnetz, das vor der ersten Refactor-Zeile auf `main` erzeugt und danach nicht mehr
+angefasst wurde.
 
-**Kein Sprint für S17 festgelegt.** Offene Kandidaten nach Priorität: `ROADMAP.md` §5. Empfehlung von dort: D5 (typisierte Modul-Configs) und D16 (`ctx.company_ids` → `partner_company_ids`) zusammen — beide berühren `config.py` 🔒, gebündelt kosten sie eine Architekten-Freigabe statt zwei.
+**Zwei Konventionen aus S17, die beim Weiterarbeiten gelten:**
+- **Objekt vorhanden = Feature aktiv.** `ModuleSelections.<feld> is None` heißt „aus". Die
+  früheren `enabled`-Schlüssel gibt es nicht mehr. In Tests wird ein abgeschaltetes Feature
+  als `<feld>=None` geschrieben, **nie** als `<X>Config()` — ein defaultkonstruiertes Objekt
+  ist truthy und schaltet das Feature ein.
+- **Dataclass-Defaults sind die Fallbacks der Lesestellen** in `modules/`, nicht die
+  Payload-Defaults aus `run_config.build_selections`. Die Herkunft steht als Docstring an
+  jeder Config-Dataclass. Wer einen Default ändert, ändert Testverhalten, nicht
+  Produktionsverhalten — im Produktionspfad setzt `build_selections` immer alle Werte.
+
+**Kein Sprint für S18 festgelegt.** Offene Kandidaten nach Priorität: `ROADMAP.md` §5.
 
 Wo was steht: Sprint-Verlauf und Peer-Review-Ergebnisse in `odoo-daten-generator/SPRINT_LOG.md`, Item-Statusblöcke und die WP-Sequenzen abgeschlossener Sprints in `ROADMAP_ARCHIVE.md`, offene Arbeit in `ROADMAP.md`. Vor jedem Sprint-Plan und jeder Review-Runde den `sprint-review`-Skill aufrufen (siehe Planning-document rule 1 oben).
 

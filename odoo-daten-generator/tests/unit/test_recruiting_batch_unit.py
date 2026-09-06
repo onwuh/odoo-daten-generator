@@ -7,7 +7,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import DemoCriteria, ModuleSelections, RecruitmentConfig, RunContext
 from modules import recruiting
 
 
@@ -19,10 +19,10 @@ def _make_ctx(num_jobs, num_candidates):
     )
     return RunContext(
         criteria=criteria,
-        module_selections=ModuleSelections(hr_recruitment={
-            "num_jobs": num_jobs, "num_candidates": num_candidates,
-            "create_skills": False, "num_skill_types": 0, "skills_per_type": 0,
-        }),
+        module_selections=ModuleSelections(hr_recruitment=RecruitmentConfig(
+            num_jobs=num_jobs, num_candidates=num_candidates,
+            create_skills=False, num_skill_types=0, skills_per_type=0,
+        )),
         industry="IT", language_name="German", language_code="de", gemini_model_name="test",
     )
 

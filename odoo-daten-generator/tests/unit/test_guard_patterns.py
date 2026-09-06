@@ -19,9 +19,15 @@ from modules.crm import (
     _create_activities,
     _unique_titles,
 )
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import (
+    ActivitiesConfig,
+    ChatterConfig,
+    DemoCriteria,
+    ModuleSelections,
+    RunContext,
+)
 
-_CHATTER_CFG = {"enabled": True, "style": "mixed", "messages_per_opp": 4}
+_CHATTER_CFG = ChatterConfig(style="mixed", messages_per_opp=4)
 
 
 def _make_ctx(**kwargs):
@@ -32,7 +38,7 @@ def _make_ctx(**kwargs):
     )
     sel_kwargs = dict(
         crm_chatter=_CHATTER_CFG,
-        crm_activities={"enabled": True, "past_pct": 30, "today_pct": 20},
+        crm_activities=ActivitiesConfig(past_pct=30, today_pct=20),
     )
     sel_kwargs.update(kwargs.get("sel", {}))
     sel = ModuleSelections(**sel_kwargs)
@@ -216,17 +222,17 @@ def run():
     except Exception as e:
         results.append(("_post_chatter_messages: empty opp_data → no call_method", False, str(e)))
 
-    # Disabled chatter (empty dict) → no LLM call, no message_post
+    # Disabled chatter (crm_chatter=None) → no LLM call, no message_post
     try:
         mock_client = MagicMock()
         mock_gemini = MagicMock()
-        ctx = _make_ctx(sel={"crm_chatter": {}})
+        ctx = _make_ctx(sel={"crm_chatter": None})
         _post_chatter_messages(mock_client, mock_gemini, ctx, _make_opp_data())
         mock_gemini.fetch_crm_chatter_messages.assert_not_called()
         mock_client.call_method.assert_not_called()
-        results.append(("_post_chatter_messages: empty dict → disabled, no LLM call", True, ""))
+        results.append(("_post_chatter_messages: crm_chatter=None → disabled, no LLM call", True, ""))
     except Exception as e:
-        results.append(("_post_chatter_messages: empty dict → disabled, no LLM call", False, str(e)))
+        results.append(("_post_chatter_messages: crm_chatter=None → disabled, no LLM call", False, str(e)))
 
     # _normalize_message handles all input types
     try:

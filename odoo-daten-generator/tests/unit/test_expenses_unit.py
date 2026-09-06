@@ -1,7 +1,7 @@
 """Unit tests for modules/expenses.py (R19/S12-WP2).
 
 Patterns covered: 1 (empty can_be_expensed pool -> no create_batch), 3
-(hr_expense={} -> no API calls), 5 (empty employee_ids -> no calls), 7
+(hr_expense=None -> no API calls), 5 (empty employee_ids -> no calls), 7
 (approved_pct distribution over many employees). No Pattern 2/8 — no LLM
 calls in this module (LLM-minimalism: template description, no creative
 text worth a round-trip).
@@ -15,7 +15,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import AnalyticConfig, DemoCriteria, ExpenseConfig, ModuleSelections, RunContext
 from modules import expenses
 
 
@@ -66,7 +66,7 @@ def run():
     results = []
 
     # ------------------------------------------------------------------
-    # Pattern 3: hr_expense={} (default) -> no API calls at all.
+    # Pattern 3: hr_expense=None (feature off) -> no API calls at all.
     # ------------------------------------------------------------------
     try:
         client = _mock_client()
@@ -74,16 +74,17 @@ def run():
         expenses.create_expense_data(client, gemini=None, ctx=ctx)
         client.create_batch.assert_not_called()
         client.search_read.assert_not_called()
-        results.append(("create_expense_data: hr_expense={} -> no calls (Pattern 3)", True, ""))
+        results.append(("create_expense_data: hr_expense=None -> no calls (Pattern 3)", True, ""))
     except AssertionError as e:
-        results.append(("create_expense_data: hr_expense={} -> no calls (Pattern 3)", False, str(e)))
+        results.append(("create_expense_data: hr_expense=None -> no calls (Pattern 3)", False, str(e)))
 
     # ------------------------------------------------------------------
     # Pattern 5: empty employee_ids -> no calls, graceful skip.
     # ------------------------------------------------------------------
     try:
         client = _mock_client()
-        ctx = _make_ctx(employee_ids=[], hr_expense={"count_per_employee": 3, "approved_pct": 70})
+        ctx = _make_ctx(employee_ids=[], hr_expense=ExpenseConfig(count_per_employee=3,
+                                                                  approved_pct=70))
         expenses.create_expense_data(client, gemini=None, ctx=ctx)
         client.create_batch.assert_not_called()
         results.append(("create_expense_data: empty employee_ids -> no calls (Pattern 5)", True, ""))
@@ -95,7 +96,7 @@ def run():
     # ------------------------------------------------------------------
     try:
         client = _mock_client(categories=[])
-        ctx = _make_ctx(hr_expense={"count_per_employee": 3, "approved_pct": 70})
+        ctx = _make_ctx(hr_expense=ExpenseConfig(count_per_employee=3, approved_pct=70))
         expenses.create_expense_data(client, gemini=None, ctx=ctx)
         client.create_batch.assert_not_called()
         results.append(("create_expense_data: empty can_be_expensed pool -> no calls (Pattern 1)", True, ""))
@@ -108,7 +109,8 @@ def run():
     # ------------------------------------------------------------------
     try:
         client = _mock_client()
-        ctx = _make_ctx(employee_ids=[1, 2, 3], hr_expense={"count_per_employee": 2, "approved_pct": 0})
+        ctx = _make_ctx(employee_ids=[1, 2, 3], hr_expense=ExpenseConfig(count_per_employee=2,
+                                                                         approved_pct=0))
         expenses.create_expense_data(client, gemini=None, ctx=ctx)
         batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'hr.expense']
         assert len(batches) == 1, batches
@@ -125,7 +127,8 @@ def run():
     # ------------------------------------------------------------------
     try:
         client = _mock_client()
-        ctx = _make_ctx(employee_ids=[1], hr_expense={"count_per_employee": 4, "approved_pct": 0})
+        ctx = _make_ctx(employee_ids=[1], hr_expense=ExpenseConfig(count_per_employee=4,
+                                                                   approved_pct=0))
         expenses.create_expense_data(client, gemini=None, ctx=ctx)
         client.write.assert_not_called()
         results.append(("create_expense_data: approved_pct=0 -> no write calls (Pattern 3-adjacent)", True, ""))
@@ -138,7 +141,8 @@ def run():
     # ------------------------------------------------------------------
     try:
         client = _mock_client()
-        ctx = _make_ctx(employee_ids=[1, 2], hr_expense={"count_per_employee": 3, "approved_pct": 100})
+        ctx = _make_ctx(employee_ids=[1, 2], hr_expense=ExpenseConfig(count_per_employee=3,
+                                                                      approved_pct=100))
         expenses.create_expense_data(client, gemini=None, ctx=ctx)
         write_calls = client.write.call_args_list
         assert len(write_calls) == 2, f"expected exactly 2 batched writes, got {len(write_calls)}"
@@ -155,7 +159,8 @@ def run():
     try:
         random.seed(42)
         client = _mock_client()
-        ctx = _make_ctx(employee_ids=list(range(100)), hr_expense={"count_per_employee": 1, "approved_pct": 40})
+        ctx = _make_ctx(employee_ids=list(range(100)), hr_expense=ExpenseConfig(count_per_employee=1,
+                                                                                approved_pct=40))
         expenses.create_expense_data(client, gemini=None, ctx=ctx)
         write_calls = client.write.call_args_list
         assert len(write_calls) == 2, write_calls
@@ -173,7 +178,8 @@ def run():
         # Pattern 3: analytic disabled (default) -> helper never called, no
         # analytic_distribution in the created vals.
         client = _mock_client()
-        ctx = _make_ctx(employee_ids=[1, 2], hr_expense={"count_per_employee": 2, "approved_pct": 0})
+        ctx = _make_ctx(employee_ids=[1, 2], hr_expense=ExpenseConfig(count_per_employee=2,
+                                                                      approved_pct=0))
         with patch("modules.expenses.odoo_actions.get_or_create_analytic_accounts") as mock_helper:
             expenses.create_expense_data(client, gemini=None, ctx=ctx)
             mock_helper.assert_not_called()
@@ -188,8 +194,9 @@ def run():
         # expense_pct=0 with analytic enabled -> same as disabled (its own
         # sub-off-switch, not just the shared enabled flag).
         client = _mock_client()
-        ctx = _make_ctx(employee_ids=[1, 2], hr_expense={"count_per_employee": 2, "approved_pct": 0},
-                        analytic={"enabled": True, "sale_pct": 50, "purchase_pct": 50, "expense_pct": 0})
+        ctx = _make_ctx(employee_ids=[1, 2], hr_expense=ExpenseConfig(count_per_employee=2,
+                                                                      approved_pct=0),
+                        analytic=AnalyticConfig(sale_pct=50, purchase_pct=50, expense_pct=0))
         with patch("modules.expenses.odoo_actions.get_or_create_analytic_accounts") as mock_helper:
             expenses.create_expense_data(client, gemini=None, ctx=ctx)
             mock_helper.assert_not_called()
@@ -201,8 +208,9 @@ def run():
         # Happy path: analytic enabled + expense_pct>0 -> helper called once,
         # assign_analytic_distribution's effect visible in the create_batch vals.
         client = _mock_client()
-        ctx = _make_ctx(employee_ids=list(range(20)), hr_expense={"count_per_employee": 1, "approved_pct": 0},
-                        analytic={"enabled": True, "sale_pct": 0, "purchase_pct": 0, "expense_pct": 100})
+        ctx = _make_ctx(employee_ids=list(range(20)), hr_expense=ExpenseConfig(count_per_employee=1,
+                                                                               approved_pct=0),
+                        analytic=AnalyticConfig(sale_pct=0, purchase_pct=0, expense_pct=100))
         with patch("modules.expenses.odoo_actions.get_or_create_analytic_accounts",
                   return_value=[701, 702]) as mock_helper:
             expenses.create_expense_data(client, gemini=None, ctx=ctx)

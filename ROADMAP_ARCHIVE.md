@@ -3123,3 +3123,42 @@ Kostenstellen-Erzeugung).
 Konfigurationsfläche) · **Benefit:** Mittel-Hoch
 
 </details>
+
+### S17 — WP-Sequenz (Schema-Härtung: D5, D16, D8-Teil)
+
+**Stand 2026-09-06, Branch `s17-schema-haertung`.** Planungsdokument war
+`.claude/plans/`-lokal, in Register-und-Matrix-Form nach dem `sprint-review`-Skill.
+Drei Cold-Review-Runden vor der ersten Code-Zeile (Verlauf: `SPRINT_LOG.md`).
+
+| WP | Inhalt | Commit |
+|---|---|---|
+| WP0 | Architekten-Freigabe (`config.py` 🔒) + drei Cold-Review-Runden | — |
+| WP1 | Sicherungsnetz: Netz A (`build_selections` → Golden) + Netz B (7 Module → aufgezeichnete Odoo-Aufrufsequenz), erzeugt auf `main` vor der ersten Refactor-Zeile, danach eingefroren | `8aa3f51` |
+| WP2 | D16: `ctx.company_ids` → `partner_company_ids`, inkl. `ConnectResult.existing_company_ids` und `build_context`-Kwarg; D8-Beifang (`# Besitzer:`-Zeilen) | `3e6c2a3` |
+| WP3 | D5: 10 `Optional[<X>Config] = None`-Dataclasses, 5 `isinstance`-Guards ersetzt, ~78 Teststellen | `e7d586c` |
+| WP4 | Dokumentation | dieser Commit |
+
+**Vier Entscheidungen, die beim Weiterarbeiten gelten:**
+
+1. **Objekt vorhanden = Feature aktiv** (`S17-D2`). Die `enabled`-Schlüssel von
+   `crm_chatter`/`crm_activities`/`hr_timeoff`/`analytic` entfallen. Tragfähig, weil
+   `build_selections` alle zehn Felder ausschließlich innerhalb eines `if _enabled(...)`-Blocks
+   zuweist und kein Produktionscode ein Config-Objekt teilbefüllt konstruiert — beides in
+   zwei Review-Runden unabhängig nachgeprüft.
+2. **Dataclass-Defaults = Fallbacks der Lesestellen** in `modules/`, nicht die
+   Payload-Defaults aus `build_selections`. Die weichen breit ab (`stock.avg_qty` 0 vs. 50,
+   `mrp.num_manufacturing_orders` 0 vs. 5, `hr_recruitment.create_skills` False vs. True).
+   Nur die Lesestellen-Werte halten die Umschreibung der Testkonstruktionen
+   verhaltenserhaltend: im Produktionspfad wird ein Dataclass-Default nie gezogen.
+3. **`<feld>={}` in Tests wird `None`, nie `<X>Config()`.** Ein defaultkonstruiertes Objekt
+   ist truthy und kippt Pattern-3-Tests von „aus" auf „an".
+4. **`orchestrator.py` blieb bis auf zwei Rename-Zeilen unangetastet.** Der Gate-Block
+   `elif not sel: continue` funktioniert mit `None` unverändert. Das ursprünglich geplante
+   strikte `ModuleSelections.get` wurde ausgegliedert → `ROADMAP.md`s D20.
+
+**Die teuerste Falle des Sprints:** fünf `isinstance(<cfg>, dict)`-Guards
+(`documents.py`, `inventory.py`, `mrp.py`, `recruiting.py`, `master_data.py`).
+`isinstance(MrpConfig(), dict)` ist `False` — sie hätten vier Module still abgeschaltet und
+weiterhin Erfolg an `on_module_done` gemeldet, ohne je eine `.get()`-Zeile zu erreichen.
+Sie entziehen sich damit genau der `AttributeError`-Absicherung, auf die ein solcher
+Typ-Refactor sich sonst stützt. Gefunden in Cold-Review Runde 1.

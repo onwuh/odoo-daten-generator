@@ -13,7 +13,16 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 import run_config
-from config import ModuleSelections
+from config import (
+    ActivitiesConfig,
+    AnalyticConfig,
+    ChatterConfig,
+    DocumentsConfig,
+    ExpenseConfig,
+    LostConfig,
+    ModuleSelections,
+    StockConfig,
+)
 
 
 _FULL = {
@@ -63,7 +72,7 @@ def _build(payload, installed=None, flags=None, model_access=None):
         installed_modules=installed if installed is not None else _ALL_INSTALLED,
         feature_flags=flags if flags is not None else {"crm_leads": True},
         model_access=model_access,
-        existing_company_ids=[101, 102], existing_product_ids=[201],
+        existing_partner_company_ids=[101, 102], existing_product_ids=[201],
     )
 
 
@@ -110,40 +119,41 @@ def run():
         ctx, selected = _build(_FULL)
         sel = ctx.module_selections
         assert sel.crm == 6 and sel.leads == 2
-        assert sel.crm_chatter == {"enabled": True, "style": "full_email",
-                                   "messages_per_opp": 5, "use_db_names": True}, sel.crm_chatter
-        assert sel.crm_activities == {"enabled": True, "past_pct": 40, "today_pct": 30}
-        assert sel.crm_lost == {"pct": 25}, sel.crm_lost
+        assert sel.crm_chatter == ChatterConfig(style="full_email", messages_per_opp=5,
+                                               use_db_names=True), sel.crm_chatter
+        assert sel.crm_activities == ActivitiesConfig(past_pct=40, today_pct=30)
+        assert sel.crm_lost == LostConfig(pct=25), sel.crm_lost
         assert sel.sale == 7 and sel.sale_confirm_pct == 80
         assert sel.account == 5 and sel.account_bills == 3 and sel.create_bank_transactions is True
-        assert sel.hr == 9 and sel.hr_timeoff["validate_pct"] == 90
+        assert sel.hr == 9 and sel.hr_timeoff.validate_pct == 90
         assert sel.project == 4 and sel.tasks_per_project == 6
         assert sel.hr_timesheet == 25
         # sub_boms is clamped to the component count, never above it
-        assert sel.mrp["sub_boms_per_product"] == 3, sel.mrp
-        assert sel.hr_recruitment["num_candidates"] == 8
+        assert sel.mrp.sub_boms_per_product == 3, sel.mrp
+        assert sel.hr_recruitment.num_candidates == 8
         assert sel.purchase == 6 and sel.purchase_confirm_pct == 55
-        assert sel.stock == {
-            "avg_qty": 42, "sub_locations": 3, "second_warehouse": True,
-            "tracking_lot_pct": 20, "tracking_serial_pct": 10, "tracking_serial_max": 7,
-            "orderpoints_pct": 15, "orderpoint_min_qty": 8, "orderpoint_max_qty": 30,
-        }, sel.stock
-        assert sel.hr_expense == {"count_per_employee": 4, "approved_pct": 60}, sel.hr_expense
-        assert sel.documents == {"bill_pdfs_enabled": True, "cv_pdfs_enabled": False}
-        assert sel.analytic == {
-            "enabled": True, "sale_pct": 30, "purchase_pct": 20, "expense_pct": 10,
-        }, sel.analytic
+        assert sel.stock == StockConfig(
+            avg_qty=42, sub_locations=3, second_warehouse=True,
+            tracking_lot_pct=20, tracking_serial_pct=10, tracking_serial_max=7,
+            orderpoints_pct=15, orderpoint_min_qty=8, orderpoint_max_qty=30,
+        ), sel.stock
+        assert sel.hr_expense == ExpenseConfig(count_per_employee=4, approved_pct=60), sel.hr_expense
+        assert sel.documents == DocumentsConfig(bill_pdfs_enabled=True, cv_pdfs_enabled=False)
+        assert sel.analytic == AnalyticConfig(
+            sale_pct=30, purchase_pct=20, expense_pct=10,
+        ), sel.analytic
         assert selected == _ALL_INSTALLED | {"documents", "analytic"}, selected
         results.append(("Vollständiges Payload füllt alle ModuleSelections-Felder", True, ""))
     except Exception as e:
         results.append(("Vollständiges Payload füllt alle ModuleSelections-Felder", False, str(e)))
 
     # ------------------------------------------------------------------
-    # stock must stay dict-shaped: orchestrator looks it up via getattr(sel, "stock")
+    # stock stays a truthy object under getattr(sel, "stock"): that is exactly
+    # how orchestrator.py gates the step (`elif not sel: continue`)
     # ------------------------------------------------------------------
     try:
         ctx, _ = _build(_FULL)
-        assert ctx.module_selections.get("stock")["avg_qty"] == 42
+        assert ctx.module_selections.get("stock").avg_qty == 42
         assert ctx.module_selections.get("purchase") == 6
         assert bool(ctx.module_selections.get("stock")) is True
         empty = ModuleSelections()
@@ -163,7 +173,7 @@ def run():
         ctx, selected = _build(payload)
         assert "purchase" not in selected and "stock" not in selected
         assert ctx.module_selections.purchase == 0
-        assert ctx.module_selections.stock == {}
+        assert ctx.module_selections.stock is None
         keys = run_config.active_progress_keys(ctx, selected)
         assert "purchase" not in keys and "stock" not in keys, keys
         results.append(("Pattern 3: abgeschaltetes Modul erzeugt keine Auswahl", True, ""))
@@ -182,13 +192,13 @@ def run():
         payload["modules"]["crm"] = {"enabled": False, "lost": {"enabled": True, "pct": 90}}
         ctx, selected = _build(payload)
         assert "crm" not in selected, selected
-        assert ctx.module_selections.crm_lost == {}, ctx.module_selections.crm_lost
+        assert ctx.module_selections.crm_lost is None, ctx.module_selections.crm_lost
         results.append(("R11: crm_lost cannot be set while crm itself is disabled", True, ""))
     except Exception as e:
         results.append(("R11: crm_lost cannot be set while crm itself is disabled", False, str(e)))
 
     # ------------------------------------------------------------------
-    # S15/R20: "analytic" absent from the payload entirely -> empty dict,
+    # S15/R20: "analytic" absent from the payload entirely -> None,
     # not in selected, no progress row (it never has one — not its own
     # orchestrated module, see config.py's ModuleSelections.analytic).
     # ------------------------------------------------------------------
@@ -197,12 +207,12 @@ def run():
         payload["modules"] = {k: v for k, v in _FULL["modules"].items() if k != "analytic"}
         ctx, selected = _build(payload)
         assert "analytic" not in selected, selected
-        assert ctx.module_selections.analytic == {}, ctx.module_selections.analytic
+        assert ctx.module_selections.analytic is None, ctx.module_selections.analytic
         keys = run_config.active_progress_keys(ctx, selected)
         assert "analytic" not in keys, keys
-        results.append(("S15/Pattern 3: analytic absent from payload -> empty dict, no selection", True, ""))
+        results.append(("S15/Pattern 3: analytic absent from payload -> None, no selection", True, ""))
     except Exception as e:
-        results.append(("S15/Pattern 3: analytic absent from payload -> empty dict, no selection", False, str(e)))
+        results.append(("S15/Pattern 3: analytic absent from payload -> None, no selection", False, str(e)))
 
     try:
         # explicitly disabled (enabled=False) -> same as absent.
@@ -211,10 +221,10 @@ def run():
         payload["modules"]["analytic"] = {"enabled": False, "sale_pct": 99}
         ctx, selected = _build(payload)
         assert "analytic" not in selected, selected
-        assert ctx.module_selections.analytic == {}, ctx.module_selections.analytic
-        results.append(("S15/Pattern 3: analytic enabled=False -> empty dict, no selection", True, ""))
+        assert ctx.module_selections.analytic is None, ctx.module_selections.analytic
+        results.append(("S15/Pattern 3: analytic enabled=False -> None, no selection", True, ""))
     except Exception as e:
-        results.append(("S15/Pattern 3: analytic enabled=False -> empty dict, no selection", False, str(e)))
+        results.append(("S15/Pattern 3: analytic enabled=False -> None, no selection", False, str(e)))
 
     try:
         # enabled=True with all three pcts omitted -> defaults to 0 each,
@@ -224,9 +234,9 @@ def run():
         payload["modules"]["analytic"] = {"enabled": True}
         ctx, selected = _build(payload)
         assert "analytic" in selected, selected
-        assert ctx.module_selections.analytic == {
-            "enabled": True, "sale_pct": 0, "purchase_pct": 0, "expense_pct": 0,
-        }, ctx.module_selections.analytic
+        assert ctx.module_selections.analytic == AnalyticConfig(
+            sale_pct=0, purchase_pct=0, expense_pct=0,
+        ), ctx.module_selections.analytic
         results.append(("S15: analytic enabled=True, pcts omitted -> default to 0", True, ""))
     except Exception as e:
         results.append(("S15: analytic enabled=True, pcts omitted -> default to 0", False, str(e)))
@@ -275,11 +285,11 @@ def run():
         payload = dict(_FULL, skip_master_data=True)
         ctx, selected = _build(payload)
         assert ctx.skip_master_data is True
-        assert ctx.company_ids == [101, 102] and ctx.product_ids == [201]
+        assert ctx.partner_company_ids == [101, 102] and ctx.product_ids == [201]
         assert "stammdaten" not in run_config.active_progress_keys(ctx, selected)
         no_existing = dict(_FULL, use_existing=False)
         ctx2, _ = _build(no_existing)
-        assert ctx2.company_ids == [] and ctx2.product_ids == []
+        assert ctx2.partner_company_ids == [] and ctx2.product_ids == []
         results.append(("skip_master_data / use_existing werden übernommen", True, ""))
     except Exception as e:
         results.append(("skip_master_data / use_existing werden übernommen", False, str(e)))
@@ -307,16 +317,16 @@ def run():
     try:
         granted = dict(_FULL, use_existing=True, existing_data_consent="granted")
         ctx, _ = _build(granted)
-        assert ctx.module_selections.crm_chatter["use_db_names"] is True, ctx.module_selections.crm_chatter
-        assert ctx.company_ids == [101, 102], ctx.company_ids
+        assert ctx.module_selections.crm_chatter.use_db_names is True, ctx.module_selections.crm_chatter
+        assert ctx.partner_company_ids == [101, 102], ctx.partner_company_ids
 
         # Without existing data the question does not arise, and the chatter
         # prompt still gets generic placeholders rather than real names.
         without = dict(_FULL, use_existing=False)
         without.pop("existing_data_consent", None)
         ctx2, _ = _build(without)
-        assert ctx2.module_selections.crm_chatter["use_db_names"] is False, ctx2.module_selections.crm_chatter
-        assert ctx2.company_ids == [], ctx2.company_ids
+        assert ctx2.module_selections.crm_chatter.use_db_names is False, ctx2.module_selections.crm_chatter
+        assert ctx2.partner_company_ids == [], ctx2.partner_company_ids
         results.append(("Einwilligung: Zustimmung gibt DB-Namen frei, sonst nicht", True, ""))
     except Exception as e:
         results.append(("Einwilligung: Zustimmung gibt DB-Namen frei, sonst nicht", False, str(e)))
@@ -578,7 +588,7 @@ def run():
         results_list = _build_list(companies)
         (ctx1, _), (ctx2, _) = results_list
         assert ctx1 is not ctx2
-        assert ctx1.company_ids is not ctx2.company_ids
+        assert ctx1.partner_company_ids is not ctx2.partner_company_ids
         results.append(("build_context_list: each company gets its own independent RunContext (D10)", True, ""))
     except AssertionError as e:
         results.append(("build_context_list: each company gets its own independent RunContext (D10)", False, str(e)))
@@ -609,7 +619,7 @@ def run():
         })]
         results_list = _build_list(companies, existing_consent="granted")
         ctx, _ = results_list[0]
-        assert ctx.module_selections.crm_chatter.get("use_db_names") is True, ctx.module_selections.crm_chatter
+        assert ctx.module_selections.crm_chatter.use_db_names is True, ctx.module_selections.crm_chatter
         results.append(("build_context_list: top-level consent reaches crm_chatter.use_db_names per block", True, ""))
     except AssertionError as e:
         results.append(("build_context_list: top-level consent reaches crm_chatter.use_db_names per block", False, str(e)))

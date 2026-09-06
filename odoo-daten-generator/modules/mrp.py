@@ -123,25 +123,25 @@ def get_manufacturing_picking_type_id(client, company_id: int):
 def create_mrp_data(client, gemini, ctx: RunContext) -> None:
     """Creates manufacturing products with BOMs and component lines."""
     mrp_config = ctx.module_selections.mrp
-    if not isinstance(mrp_config, dict):
+    if mrp_config is None:
         return
-    num_mrp_products = max(0, int(mrp_config.get("num_products", 0)))
-    components_per_bom = max(1, int(mrp_config.get("components_per_bom", 1)))
-    sub_boms_per_product = max(0, int(mrp_config.get("sub_boms_per_product", 0)))
-    num_workcenters = max(0, int(mrp_config.get("num_workcenters", 3)))
-    num_manufacturing_orders = max(0, int(mrp_config.get("num_manufacturing_orders", 0)))
-    create_quality_points = bool(mrp_config.get("create_quality_points", False))
-    quality_fail_pct = max(0, min(100, int(mrp_config.get("quality_fail_pct", 0))))
+    num_mrp_products = max(0, int(mrp_config.num_products))
+    components_per_bom = max(1, int(mrp_config.components_per_bom))
+    sub_boms_per_product = max(0, int(mrp_config.sub_boms_per_product))
+    num_workcenters = max(0, int(mrp_config.num_workcenters))
+    num_manufacturing_orders = max(0, int(mrp_config.num_manufacturing_orders))
+    create_quality_points = bool(mrp_config.create_quality_points)
+    quality_fail_pct = max(0, min(100, int(mrp_config.quality_fail_pct)))
     if sub_boms_per_product > components_per_bom:
         sub_boms_per_product = components_per_bom
     if num_mrp_products <= 0:
         return
 
-    # A6/R10: lazy + memoized. ctx.company_ids holds res.partner ids (customer
-    # contacts from master_data.py), never a real res.company id — the
-    # long-masked bug both work-center and manufacturing-order creation used
-    # to have (a broad try/except turned a wrong id into a quiet skip, not a
-    # crash). get_main_company_id(client) is the real thing, but it's still one
+    # A6/R10: lazy + memoized. ctx.partner_company_ids holds res.partner ids
+    # (customer contacts from master_data.py), never a real res.company id —
+    # the long-masked bug both work-center and manufacturing-order creation
+    # used to have (a broad try/except turned a wrong id into a quiet skip, not
+    # a crash). get_main_company_id(client) is the real thing, but it's still one
     # extra request: lazy so a products/BOMs-only run (mrp_routings off, no
     # manufacturing orders requested) never pays for it, memoized so a run
     # that needs it for both sections below only pays once.

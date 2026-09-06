@@ -375,10 +375,10 @@ def get_main_company_id(client, company_id: Optional[int] = None) -> Optional[in
     the first company found — used at connect time, before any RunContext
     exists, where there is no target company to pass yet.
 
-    NOT the same as RunContext.company_ids, which despite its name holds
+    NOT the same as RunContext.partner_company_ids, which holds
     res.partner ids (customer/company contacts created by master_data.py,
-    e.g. sale.py uses ctx.company_ids[i] as a sale.order partner_id) — never
-    a real res.company id. Use this helper wherever an actual res.company id
+    e.g. sale.py uses ctx.partner_company_ids[i] as a sale.order partner_id) —
+    never a real res.company id. Use this helper wherever an actual res.company id
     is needed (e.g. stock.warehouse/purchase.order/stock.quant company_id).
     """
     if company_id is not None:

@@ -8,7 +8,13 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from modules import accounting, recruiting, documents
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import (
+    DemoCriteria,
+    DocumentsConfig,
+    ModuleSelections,
+    RecruitmentConfig,
+    RunContext,
+)
 
 
 def _make_rctx():
@@ -48,16 +54,15 @@ def run(client, ctx):
     # and real applicants (P2 prerequisite), same pattern test_accounting.py /
     # test_recruiting.py use to exercise their own module end-to-end.
     rctx = _make_rctx()
-    rctx.company_ids = [partner_id]
+    rctx.partner_company_ids = [partner_id]
     rctx.product_ids = [product_id]
     rctx.component_ids = [product_id]
     rctx.installed_modules = set()  # force standalone invoice path in accounting
     rctx.module_selections.account = 2
     rctx.module_selections.account_bills = 2
-    rctx.module_selections.hr_recruitment = {
-        "num_jobs": 1, "num_candidates": 2,
-        "create_skills": False, "num_skill_types": 0, "skills_per_type": 0,
-    }
+    rctx.module_selections.hr_recruitment = RecruitmentConfig(num_jobs=1, num_candidates=2,
+                                                              create_skills=False,
+                                                              num_skill_types=0, skills_per_type=0)
 
     try:
         accounting.create_accounting_data(client, None, rctx)
@@ -85,7 +90,8 @@ def run(client, ctx):
     # gemini=None throughout: P1 needs no LLM call at all (design decision 1),
     # P2 must fall back gracefully without one (Pattern 2).
     try:
-        rctx.module_selections.documents = {"bill_pdfs_enabled": True, "cv_pdfs_enabled": False}
+        rctx.module_selections.documents = DocumentsConfig(bill_pdfs_enabled=True,
+                                                           cv_pdfs_enabled=False)
         documents.create_documents(client, None, rctx)
         attachments = client.search_read(
             'ir.attachment',
@@ -117,7 +123,8 @@ def run(client, ctx):
         ))
     else:
         try:
-            rctx.module_selections.documents = {"bill_pdfs_enabled": False, "cv_pdfs_enabled": True}
+            rctx.module_selections.documents = DocumentsConfig(bill_pdfs_enabled=False,
+                                                               cv_pdfs_enabled=True)
             documents.create_documents(client, None, rctx)
             attachments = client.search_read(
                 'ir.attachment',
@@ -147,7 +154,8 @@ def run(client, ctx):
     try:
         mock_client = MagicMock()
         empty_rctx = _make_rctx()
-        empty_rctx.module_selections.documents = {"bill_pdfs_enabled": True, "cv_pdfs_enabled": True}
+        empty_rctx.module_selections.documents = DocumentsConfig(bill_pdfs_enabled=True,
+                                                                 cv_pdfs_enabled=True)
         documents.create_documents(mock_client, None, empty_rctx)
         mock_client.search_read.assert_not_called()
         mock_client.create_batch.assert_not_called()

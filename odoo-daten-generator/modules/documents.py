@@ -40,7 +40,8 @@ def _unwrap(val):
 
 
 def _create_bill_pdfs(client, ctx: RunContext) -> None:
-    if not ctx.module_selections.documents.get('bill_pdfs_enabled'):
+    doc_config = ctx.module_selections.documents
+    if doc_config is None or not doc_config.bill_pdfs_enabled:
         return
     if not ctx.bill_ids:
         logger.info("-> Keine Eingangsrechnungen vorhanden — PDF-Rechnungen übersprungen")
@@ -193,7 +194,8 @@ def _create_bill_pdfs(client, ctx: RunContext) -> None:
 
 
 def _create_cv_pdfs(client, gemini, ctx: RunContext) -> None:
-    if not ctx.module_selections.documents.get('cv_pdfs_enabled'):
+    doc_config = ctx.module_selections.documents
+    if doc_config is None or not doc_config.cv_pdfs_enabled:
         return
     if not ctx.applicant_ids:
         logger.info("-> Keine Bewerber vorhanden — CV-PDFs übersprungen")
@@ -275,7 +277,7 @@ def create_documents(client, gemini, ctx: RunContext) -> None:
     cannot suppress the other.
     """
     doc_config = ctx.module_selections.documents
-    if not isinstance(doc_config, dict) or not doc_config:
+    if doc_config is None:
         return
 
     # documents is a pseudo-module (orchestrator.py hardcodes is_installed=True

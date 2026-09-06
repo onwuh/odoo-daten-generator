@@ -112,7 +112,7 @@ def run(client, ctx):
             # second call: sale.order search → returns order with opportunity_id
             [{"id": order_id or 1, "opportunity_id": [opp_id or 1, "Test Opp"]}],
         ]
-        from config import DemoCriteria, ModuleSelections, RunContext
+        from config import AnalyticConfig, DemoCriteria, ModuleSelections, RunContext
         criteria = DemoCriteria(
             mode="both", industry="Test", num_companies=1,
             num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
@@ -135,7 +135,7 @@ def run(client, ctx):
     # order count (was hardcoded to a fixed 5), read-back.
     try:
         rctx = _make_rctx(num_orders=10)
-        rctx.company_ids = [partner_id]
+        rctx.partner_company_ids = [partner_id]
         rctx.product_ids = ctx.product_ids
         create_sale_data(client, None, rctx)
         assert len(rctx.order_ids) == 10, f"expected 10 orders, got {len(rctx.order_ids)}"
@@ -166,7 +166,7 @@ def run(client, ctx):
         opp_b = create_opportunity(client, partner_b, "B14 Opp B")
 
         rctx = _make_rctx(num_orders=2)
-        rctx.company_ids = [partner_a, partner_b]
+        rctx.partner_company_ids = [partner_a, partner_b]
         rctx.product_ids = ctx.product_ids
         rctx.opportunity_ids = [opp_b, opp_a]  # deliberately reversed vs. company order
 
@@ -205,7 +205,7 @@ def run(client, ctx):
     try:
         rctx = _make_rctx(num_orders=10)
         rctx.module_selections.sale_confirm_pct = 50
-        rctx.company_ids = [partner_id]
+        rctx.partner_company_ids = [partner_id]
         rctx.product_ids = ctx.product_ids
         create_sale_data(client, None, rctx)
         assert len(rctx.order_ids) == 10, f"expected 10 orders, got {len(rctx.order_ids)}"
@@ -282,12 +282,11 @@ def run(client, ctx):
     # production code path for the same propagation WP1 verified manually.
     try:
         rctx = _make_rctx(num_orders=3)
-        rctx.company_ids = [partner_id]
+        rctx.partner_company_ids = [partner_id]
         rctx.product_ids = ctx.product_ids
         rctx.module_selections.sale_confirm_pct = 100
-        rctx.module_selections.analytic = {
-            "enabled": True, "sale_pct": 100, "purchase_pct": 0, "expense_pct": 0,
-        }
+        rctx.module_selections.analytic = AnalyticConfig(sale_pct=100, purchase_pct=0,
+                                                         expense_pct=0)
 
         create_sale_data(client, None, rctx)
 

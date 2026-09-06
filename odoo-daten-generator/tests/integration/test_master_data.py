@@ -28,7 +28,7 @@ def _make_rctx(num_companies=1):
 
 def run(client, ctx):
     """
-    Populates: ctx.company_ids, ctx.product_ids, ctx.partner_ids
+    Populates: ctx.partner_company_ids, ctx.product_ids, ctx.partner_ids
     Returns: (all_passed, [(label, ok, detail), ...])
     """
     results = []
@@ -40,7 +40,7 @@ def run(client, ctx):
             "is_company": True,
         })
         assert isinstance(partner_id, int) and partner_id > 0
-        ctx.company_ids.append(partner_id)
+        ctx.partner_company_ids.append(partner_id)
         results.append(("master_data: create company partner", True, partner_id))
     except Exception as e:
         results.append(("master_data: create company partner", False, str(e)))
@@ -95,10 +95,10 @@ def run(client, ctx):
         }
         atoms = {"product_names": {"services": ["A1 Testservice"]}, "product_descriptions": {}}
         master_data.create_master_data(client, None, rctx, atoms)
-        assert len(rctx.company_ids) == 1, f"expected 1 company, got {len(rctx.company_ids)}"
+        assert len(rctx.partner_company_ids) == 1, f"expected 1 company, got {len(rctx.partner_company_ids)}"
         assert len(rctx.product_ids) == 1, f"expected 1 product, got {len(rctx.product_ids)}"
 
-        company_id = rctx.company_ids[0]
+        company_id = rctx.partner_company_ids[0]
         rec = client.search_read(
             'res.partner', [["id", "=", company_id]],
             fields=["street", "zip", "city", "country_id"], limit=1,
@@ -125,7 +125,7 @@ def run(client, ctx):
         rctx = _make_rctx()
         rctx.name_banks = {}
         master_data.create_master_data(client, None, rctx, {})
-        assert len(rctx.company_ids) == 1, f"expected 1 fallback company, got {len(rctx.company_ids)}"
+        assert len(rctx.partner_company_ids) == 1, f"expected 1 fallback company, got {len(rctx.partner_company_ids)}"
         assert len(rctx.product_ids) == 1, f"expected 1 fallback product, got {len(rctx.product_ids)}"
         results.append(("master_data: Pattern 2 — empty atoms/name_banks -> fallback chain, no crash", True, ""))
     except Exception as e:

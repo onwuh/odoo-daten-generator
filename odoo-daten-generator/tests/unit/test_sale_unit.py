@@ -7,7 +7,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import AnalyticConfig, DemoCriteria, ModuleSelections, RunContext
 from modules import sale
 
 
@@ -24,7 +24,7 @@ def _make_ctx(num_orders, analytic=None):
         criteria=criteria, module_selections=ModuleSelections(**sel_kwargs), industry="IT",
         language_name="German", language_code="de", gemini_model_name="test",
     )
-    ctx.company_ids = [1, 2, 3]
+    ctx.partner_company_ids = [1, 2, 3]
     ctx.product_ids = [10, 11, 12]
     return ctx
 
@@ -121,7 +121,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(num_orders=1)
-        ctx.company_ids = [2]  # only company 2 gets an order this run
+        ctx.partner_company_ids = [2]  # only company 2 gets an order this run
         ctx.opportunity_ids = [500]
 
         def _search_read(model, domain=None, fields=None, limit=None, **kw):
@@ -151,7 +151,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(num_orders=1)
-        ctx.company_ids = [1]
+        ctx.partner_company_ids = [1]
         ctx.opportunity_ids = [500]
 
         def _search_read(model, domain=None, fields=None, limit=None, **kw):
@@ -229,7 +229,8 @@ def run():
     try:
         # sale_pct=0 with analytic enabled -> its own sub-off-switch.
         client = _mock_client_confirmed()
-        ctx = _make_ctx(num_orders=5, analytic={"enabled": True, "sale_pct": 0, "purchase_pct": 50, "expense_pct": 50})
+        ctx = _make_ctx(num_orders=5, analytic=AnalyticConfig(sale_pct=0, purchase_pct=50,
+                                                              expense_pct=50))
         with patch("modules.sale.odoo_actions.get_or_create_analytic_accounts") as mock_helper:
             sale.create_sale_data(client, gemini=None, ctx=ctx)
             mock_helper.assert_not_called()
@@ -241,7 +242,8 @@ def run():
         # No cost centers available (helper returns []) -> no eligibility
         # read, no write attempted.
         client = _mock_client_confirmed()
-        ctx = _make_ctx(num_orders=5, analytic={"enabled": True, "sale_pct": 100, "purchase_pct": 0, "expense_pct": 0})
+        ctx = _make_ctx(num_orders=5, analytic=AnalyticConfig(sale_pct=100, purchase_pct=0,
+                                                              expense_pct=0))
         with patch("modules.sale.odoo_actions.get_or_create_analytic_accounts", return_value=[]):
             sale.create_sale_data(client, gemini=None, ctx=ctx)
         sol_reads = [c for c in client.search_read.call_args_list if c.args[0] == 'sale.order.line']
@@ -253,7 +255,8 @@ def run():
     try:
         # No eligible lines (all already carry a value) -> no write attempted.
         client = _mock_client_confirmed(eligible_line_ids=[])
-        ctx = _make_ctx(num_orders=5, analytic={"enabled": True, "sale_pct": 100, "purchase_pct": 0, "expense_pct": 0})
+        ctx = _make_ctx(num_orders=5, analytic=AnalyticConfig(sale_pct=100, purchase_pct=0,
+                                                              expense_pct=0))
         with patch("modules.sale.odoo_actions.get_or_create_analytic_accounts", return_value=[901]):
             sale.create_sale_data(client, gemini=None, ctx=ctx)
         write_calls = [c for c in client.write.call_args_list if c.args[0] == 'sale.order.line']
@@ -268,7 +271,8 @@ def run():
         # eligibility domain filters on analytic_distribution=False, and the
         # written value is the live-confirmed {"<id>": 100.0} shape.
         client = _mock_client_confirmed(eligible_line_ids=[9001, 9002, 9003, 9004])
-        ctx = _make_ctx(num_orders=5, analytic={"enabled": True, "sale_pct": 100, "purchase_pct": 0, "expense_pct": 0})
+        ctx = _make_ctx(num_orders=5, analytic=AnalyticConfig(sale_pct=100, purchase_pct=0,
+                                                              expense_pct=0))
         with patch("modules.sale.odoo_actions.get_or_create_analytic_accounts",
                   return_value=[901, 902]) as mock_helper:
             sale.create_sale_data(client, gemini=None, ctx=ctx)

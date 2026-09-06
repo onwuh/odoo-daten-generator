@@ -140,14 +140,14 @@ def create_purchase_data(client, gemini, ctx: RunContext) -> None:
     num_orders = ctx.module_selections.purchase
     if num_orders <= 0:
         return
-    if not ctx.component_ids or not ctx.company_ids:
+    if not ctx.component_ids or not ctx.partner_company_ids:
         logger.info("-> Keine Komponenten/Firmen vorhanden — Purchase übersprungen")
         return
 
     logger.info("\n--- PURCHASE: Erstelle Bestellungen ---")
 
-    # NOT ctx.company_ids[0] — despite the name, RunContext.company_ids holds
-    # res.partner ids (customer/company contacts), never a real res.company id.
+    # NOT ctx.partner_company_ids[0] — those are res.partner ids
+    # (customer/company contacts), never a real res.company id.
     company_id = odoo_actions.get_main_company_id(
         client, company_id=(ctx.res_company_ids[0] if ctx.res_company_ids else None))
     if not company_id:
@@ -226,7 +226,7 @@ def create_purchase_data(client, gemini, ctx: RunContext) -> None:
         })
 
     analytic_sel = ctx.module_selections.analytic
-    purchase_pct = int(analytic_sel.get("purchase_pct", 0)) if analytic_sel.get("enabled") else 0
+    purchase_pct = analytic_sel.purchase_pct if analytic_sel else 0
     if purchase_pct > 0:
         account_ids = odoo_actions.get_or_create_analytic_accounts(client, ctx)
         data_factory.assign_analytic_distribution(po_line_vals_list, purchase_pct, account_ids)

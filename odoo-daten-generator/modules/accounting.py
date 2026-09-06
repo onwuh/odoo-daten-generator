@@ -351,7 +351,7 @@ def create_accounting_data(client, gemini, ctx: RunContext) -> None:
         logger.info(f"\n--- ACCOUNTING: Erstelle Kundenrechnungen aus {len(ctx.confirmed_order_ids)} bestätigten Aufträgen ---")
         ctx.invoice_ids.extend(create_invoices_from_orders(client, ctx.confirmed_order_ids))
     else:
-        if not ctx.company_ids or not ctx.product_ids:
+        if not ctx.partner_company_ids or not ctx.product_ids:
             logger.warning("⚠️  Keine Partner/Produkte — Kundenrechnungen übersprungen.")
         else:
             if 'sale' not in ctx.installed_modules:
@@ -360,7 +360,7 @@ def create_accounting_data(client, gemini, ctx: RunContext) -> None:
                 logger.info("\n--- ACCOUNTING: Erstelle Kundenrechnungen (keine bestätigten Aufträge) ---")
             invoice_vals_list = []
             for i in range(num_invoices):
-                cid = ctx.company_ids[i % len(ctx.company_ids)]
+                cid = ctx.partner_company_ids[i % len(ctx.partner_company_ids)]
                 chosen = random.sample(
                     ctx.product_ids,
                     k=min(len(ctx.product_ids), random.randint(1, min(3, len(ctx.product_ids))))

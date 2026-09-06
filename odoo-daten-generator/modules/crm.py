@@ -129,7 +129,7 @@ def create_crm_data(client, gemini, ctx: RunContext) -> None:
     num_leads = ctx.module_selections.leads
     if num_opps <= 0 and num_leads <= 0:
         return
-    if not ctx.company_ids:
+    if not ctx.partner_company_ids:
         return
 
     opp_titles_bank = ctx.name_banks.get('opportunity_titles', []) or FALLBACK_OPPORTUNITY_TITLES
@@ -144,7 +144,7 @@ def create_crm_data(client, gemini, ctx: RunContext) -> None:
     # --- Opportunities ---
     if num_opps > 0:
         logger.info(f"\n--- CRM: Erstelle {num_opps} Opportunities ---")
-        partner_pool = _build_partner_pool(ctx.company_ids, num_opps)
+        partner_pool = _build_partner_pool(ctx.partner_company_ids, num_opps)
         opp_titles = _unique_titles(opp_titles_bank, num_opps)
         opp_vals_list = []
         opp_meta = []  # (partner_id, name, salesperson), same order as opp_vals_list
@@ -191,14 +191,14 @@ def create_crm_data(client, gemini, ctx: RunContext) -> None:
             _post_chatter_messages(client, gemini, ctx, opp_data)
 
         # --- Activities ---
-        if ctx.module_selections.crm_activities.get("enabled"):
+        if ctx.module_selections.crm_activities is not None:
             _create_activities(client, ctx.opportunity_ids, ctx)
 
     # --- Leads ---
     if num_leads > 0:
         logger.info(f"\n--- CRM: Erstelle {num_leads} Leads ---")
         early_ids = _early_stages(all_stages)
-        partner_pool = _build_partner_pool(ctx.company_ids, num_leads)
+        partner_pool = _build_partner_pool(ctx.partner_company_ids, num_leads)
         lead_titles = _unique_titles(opp_titles_bank, num_leads)
         lead_vals_list = []
         for partner_id, name in zip(partner_pool, lead_titles):
@@ -228,7 +228,7 @@ def mark_lost_opportunities(client, gemini, ctx: RunContext) -> None:
     sel = ctx.module_selections.crm_lost
     if not sel:
         return
-    pct = sel.get('pct', 0)
+    pct = sel.pct
     if pct <= 0:
         return
     if not ctx.opportunity_ids:
@@ -350,8 +350,8 @@ def _post_chatter_messages(client, gemini, ctx: RunContext, opp_data):
     if not chatter_cfg:
         return
 
-    style = chatter_cfg.get('style', 'mixed')
-    messages_per_opp = chatter_cfg.get('messages_per_opp', 4)
+    style = chatter_cfg.style
+    messages_per_opp = chatter_cfg.messages_per_opp
 
     # This prompt is the ONE place where values read out of the target database
     # reach an LLM: 'customer' is a res.partner name and 'salesperson' a res.users
@@ -362,7 +362,7 @@ def _post_chatter_messages(client, gemini, ctx: RunContext, opp_data):
     # use_db_names is the user's answer to the consent prompt in the UI. Declined
     # (or absent) means generic placeholders go out instead of the real names —
     # the chatter still reads naturally, it just addresses "Kunde"/"Verkäufer".
-    use_db_names = bool(chatter_cfg.get('use_db_names'))
+    use_db_names = bool(chatter_cfg.use_db_names)
 
     # One participant pair per opportunity — not a single sample reused for the
     # whole batch (B9), so each opp's messages address its actual customer/rep.
@@ -441,7 +441,7 @@ def _create_activities(client, opp_ids, ctx: RunContext):
         return
 
     act_cfg = ctx.module_selections.crm_activities
-    if not act_cfg or not act_cfg.get("enabled"):
+    if act_cfg is None:
         return
 
     model_id = _get_crm_lead_model_id(client)
@@ -460,8 +460,8 @@ def _create_activities(client, opp_ids, ctx: RunContext):
                  if any(kw in t.get('name', '').lower() for kw in preferred_keywords)]
     type_pool = preferred or activity_types
 
-    past_pct = act_cfg.get("past_pct", 0)
-    today_pct = act_cfg.get("today_pct", 0)
+    past_pct = act_cfg.past_pct
+    today_pct = act_cfg.today_pct
 
     logger.info(f"--- CRM: Erstelle Aktivitäten für {len(opp_ids)} Opportunities ---")
     activity_vals_list = []

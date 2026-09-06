@@ -1,4 +1,8 @@
 {
+  "account.analytic.account": [
+    "name",
+    "plan_id"
+  ],
   "account.analytic.line": [
     "date",
     "employee_id",
@@ -7,6 +11,9 @@
     "so_line",
     "task_id",
     "unit_amount"
+  ],
+  "account.analytic.plan": [
+    "name"
   ],
   "account.bank.statement": [
     "balance_end_real"
@@ -26,10 +33,13 @@
     "ref"
   ],
   "crm.lead": [
+    "active",
     "date_deadline",
     "expected_revenue",
+    "lost_reason_id",
     "name",
     "partner_id",
+    "probability",
     "stage_id",
     "type",
     "user_id"
@@ -49,6 +59,17 @@
   ],
   "hr.employee": [
     "name"
+  ],
+  "hr.expense": [
+    "analytic_distribution",
+    "approval_state",
+    "currency_id",
+    "date",
+    "employee_id",
+    "name",
+    "payment_mode",
+    "product_id",
+    "total_amount"
   ],
   "hr.job": [
     "department_id",
@@ -95,6 +116,7 @@
   ],
   "mrp.production": [
     "bom_id",
+    "company_id",
     "date_start",
     "product_id",
     "product_qty"
@@ -112,6 +134,7 @@
     "time_efficiency"
   ],
   "product.product": [
+    "barcode",
     "invoice_policy",
     "is_storable",
     "list_price",
@@ -145,7 +168,27 @@
     "partner_id",
     "picking_type_id"
   ],
+  "quality.check": [
+    "company_id",
+    "point_id",
+    "product_id",
+    "production_id",
+    "team_id",
+    "test_type_id"
+  ],
+  "quality.point": [
+    "apply_to",
+    "company_id",
+    "name",
+    "picking_type_ids",
+    "product_ids",
+    "team_id",
+    "test_report_type",
+    "test_type_id"
+  ],
+  "res.config.settings": [],
   "res.partner": [
+    "active",
     "city",
     "country_id",
     "email",
@@ -171,11 +214,39 @@
   "sale.order#action_confirm": [
     "extra"
   ],
+  "sale.order.line": [
+    "analytic_distribution"
+  ],
+  "stock.location": [
+    "barcode",
+    "location_id",
+    "name",
+    "usage"
+  ],
+  "stock.lot": [
+    "company_id",
+    "name",
+    "product_id"
+  ],
   "stock.quant": [
     "company_id",
     "in_date",
     "inventory_quantity",
     "location_id",
+    "lot_id",
     "product_id"
+  ],
+  "stock.warehouse": [
+    "code",
+    "company_id",
+    "name"
+  ],
+  "stock.warehouse.orderpoint": [
+    "company_id",
+    "location_id",
+    "product_id",
+    "product_max_qty",
+    "product_min_qty",
+    "trigger"
   ]
 }

@@ -20,7 +20,7 @@ _TARGET_COUNTRIES = ["DE", "AT", "CH"]
 
 def create_master_data(client, gemini, ctx: RunContext, atoms: Dict[str, Any]) -> None:
     """Creates products (from atoms + fallback) and companies/contacts (from
-    ctx.name_banks + fallback). Writes ctx.product_ids and ctx.company_ids.
+    ctx.name_banks + fallback). Writes ctx.product_ids and ctx.partner_company_ids.
 
     Company/contact creation no longer depends on the LLM atoms call
     succeeding — only product names/descriptions degrade to static fallbacks
@@ -79,12 +79,12 @@ def _create_products(client, atoms: Dict[str, Any], ctx: RunContext) -> None:
     # not-installed module's card visible-but-disabled rather than hiding it
     # (static/app.js), so this can't rely on the card never being submitted.
     stock_config = ctx.module_selections.stock
-    if (isinstance(stock_config, dict) and stock_config.get("avg_qty", 0) > 0
+    if (stock_config is not None and stock_config.avg_qty > 0
             and 'stock' in ctx.installed_modules):
         data_factory.assign_tracking(
             all_vals,
-            stock_config.get("tracking_lot_pct", 0),
-            stock_config.get("tracking_serial_pct", 0),
+            stock_config.tracking_lot_pct,
+            stock_config.tracking_serial_pct,
         )
 
     # R8: tag every service product so Odoo's own automation creates a
@@ -193,7 +193,7 @@ def _create_partners(client, ctx: RunContext, country_map: Dict[str, int]) -> No
         company_vals_list.append(vals)
 
     company_ids = client.create_batch('res.partner', company_vals_list)
-    ctx.company_ids.extend(company_ids)
+    ctx.partner_company_ids.extend(company_ids)
     for name, company_id in zip(company_names, company_ids):
         logger.info(f"   Partner erstellt: {name} (ID: {company_id})")
 

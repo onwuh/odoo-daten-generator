@@ -1,0 +1,235 @@
+{
+  "all_off": {
+    "selected": [],
+    "selections": {
+      "account": 0,
+      "account_bills": {},
+      "analytic": {},
+      "create_bank_transactions": false,
+      "crm": 0,
+      "crm_activities": {},
+      "crm_chatter": {},
+      "crm_lost": {},
+      "documents": {},
+      "hr": 0,
+      "hr_expense": {},
+      "hr_recruitment": {},
+      "hr_timeoff": {},
+      "hr_timesheet": 0,
+      "leads": 0,
+      "mrp": {},
+      "project": 0,
+      "purchase": 0,
+      "purchase_confirm_pct": 70,
+      "sale": 0,
+      "sale_confirm_pct": 65,
+      "stock": {},
+      "tasks_per_project": 10
+    }
+  },
+  "all_on": {
+    "selected": [
+      "account",
+      "analytic",
+      "crm",
+      "documents",
+      "hr",
+      "hr_expense",
+      "hr_recruitment",
+      "hr_timesheet",
+      "mrp",
+      "project",
+      "purchase",
+      "sale",
+      "stock"
+    ],
+    "selections": {
+      "account": 17,
+      "account_bills": 6,
+      "analytic": {
+        "expense_pct": 14,
+        "purchase_pct": 22,
+        "sale_pct": 35
+      },
+      "create_bank_transactions": true,
+      "crm": 11,
+      "crm_activities": {
+        "past_pct": 41,
+        "today_pct": 23
+      },
+      "crm_chatter": {
+        "messages_per_opp": 9,
+        "style": "full_email",
+        "use_db_names": true
+      },
+      "crm_lost": {
+        "pct": 37
+      },
+      "documents": {
+        "bill_pdfs_enabled": true,
+        "cv_pdfs_enabled": false
+      },
+      "hr": 19,
+      "hr_expense": {
+        "approved_pct": 64,
+        "count_per_employee": 6
+      },
+      "hr_recruitment": {
+        "create_skills": true,
+        "num_candidates": 21,
+        "num_jobs": 7,
+        "num_skill_types": 4,
+        "skills_per_type": 6
+      },
+      "hr_timeoff": {
+        "avg_length_days": 7,
+        "entries_per_employee": 4,
+        "past_future_pct": 44,
+        "timescale_days": 210,
+        "validate_pct": 88
+      },
+      "hr_timesheet": 31,
+      "leads": 7,
+      "mrp": {
+        "components_per_bom": 5,
+        "create_quality_points": true,
+        "num_manufacturing_orders": 8,
+        "num_products": 6,
+        "num_workcenters": 4,
+        "quality_fail_pct": 15,
+        "sub_boms_per_product": 3
+      },
+      "project": 5,
+      "purchase": 9,
+      "purchase_confirm_pct": 58,
+      "sale": 13,
+      "sale_confirm_pct": 81,
+      "stock": {
+        "avg_qty": 77,
+        "orderpoint_max_qty": 42,
+        "orderpoint_min_qty": 11,
+        "orderpoints_pct": 33,
+        "second_warehouse": true,
+        "sub_locations": 4,
+        "tracking_lot_pct": 25,
+        "tracking_serial_max": 9,
+        "tracking_serial_pct": 15
+      },
+      "tasks_per_project": 12
+    }
+  },
+  "clamp_edges": {
+    "selected": [
+      "analytic",
+      "crm",
+      "documents",
+      "hr",
+      "hr_expense",
+      "hr_recruitment",
+      "mrp",
+      "stock"
+    ],
+    "selections": {
+      "account": 0,
+      "account_bills": {},
+      "analytic": {
+        "expense_pct": 100,
+        "purchase_pct": 0,
+        "sale_pct": 100
+      },
+      "create_bank_transactions": false,
+      "crm": 3,
+      "crm_activities": {
+        "past_pct": 80,
+        "today_pct": 20
+      },
+      "crm_chatter": {
+        "messages_per_opp": 1,
+        "style": "notes_only",
+        "use_db_names": false
+      },
+      "crm_lost": {
+        "pct": 100
+      },
+      "documents": {
+        "bill_pdfs_enabled": false,
+        "cv_pdfs_enabled": true
+      },
+      "hr": 1,
+      "hr_expense": {
+        "approved_pct": 0,
+        "count_per_employee": 0
+      },
+      "hr_recruitment": {
+        "create_skills": false,
+        "num_candidates": 0,
+        "num_jobs": 0,
+        "num_skill_types": 0,
+        "skills_per_type": 0
+      },
+      "hr_timeoff": {
+        "avg_length_days": 1,
+        "entries_per_employee": 1,
+        "past_future_pct": 0,
+        "timescale_days": 1,
+        "validate_pct": 0
+      },
+      "hr_timesheet": 0,
+      "leads": 1,
+      "mrp": {
+        "components_per_bom": 2,
+        "create_quality_points": false,
+        "num_manufacturing_orders": 1,
+        "num_products": 1,
+        "num_workcenters": 1,
+        "quality_fail_pct": 100,
+        "sub_boms_per_product": 2
+      },
+      "project": 0,
+      "purchase": 0,
+      "purchase_confirm_pct": 70,
+      "sale": 0,
+      "sale_confirm_pct": 65,
+      "stock": {
+        "avg_qty": 0,
+        "orderpoint_max_qty": 21,
+        "orderpoint_min_qty": 20,
+        "orderpoints_pct": 100,
+        "second_warehouse": false,
+        "sub_locations": 0,
+        "tracking_lot_pct": 70,
+        "tracking_serial_max": 1,
+        "tracking_serial_pct": 30
+      },
+      "tasks_per_project": 10
+    }
+  },
+  "master_mode": {
+    "selected": [],
+    "selections": {
+      "account": 0,
+      "account_bills": {},
+      "analytic": {},
+      "create_bank_transactions": false,
+      "crm": 0,
+      "crm_activities": {},
+      "crm_chatter": {},
+      "crm_lost": {},
+      "documents": {},
+      "hr": 0,
+      "hr_expense": {},
+      "hr_recruitment": {},
+      "hr_timeoff": {},
+      "hr_timesheet": 0,
+      "leads": 0,
+      "mrp": {},
+      "project": 0,
+      "purchase": 0,
+      "purchase_confirm_pct": 70,
+      "sale": 0,
+      "sale_confirm_pct": 65,
+      "stock": {},
+      "tasks_per_project": 10
+    }
+  }
+}
