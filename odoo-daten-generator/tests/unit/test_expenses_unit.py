@@ -33,7 +33,7 @@ def _make_ctx(employee_ids=None, hr_expense=None, analytic=None):
     ctx = RunContext(
         criteria=criteria,
         module_selections=ModuleSelections(**sel_kwargs),
-        industry="IT", language_name="German", language_code="de", gemini_model_name="test",
+        industry="IT", language_name="German", language_code="de",
     )
     ctx.employee_ids = employee_ids if employee_ids is not None else [1, 2]
     return ctx

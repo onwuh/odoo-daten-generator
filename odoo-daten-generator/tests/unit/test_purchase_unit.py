@@ -30,7 +30,7 @@ def _make_ctx(num_purchase=1, confirm_pct=70, component_ids=None, company_ids=No
     ctx = RunContext(
         criteria=criteria,
         module_selections=ModuleSelections(**sel_kwargs),
-        industry="IT", language_name="German", language_code="de", gemini_model_name="test",
+        industry="IT", language_name="German", language_code="de",
     )
     ctx.component_ids = component_ids if component_ids is not None else [1, 2, 3]
     ctx.partner_company_ids = company_ids if company_ids is not None else [10]

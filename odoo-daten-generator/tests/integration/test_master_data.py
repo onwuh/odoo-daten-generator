@@ -22,7 +22,7 @@ def _make_rctx(num_companies=1):
     )
     return RunContext(
         criteria=crit, module_selections=ModuleSelections(), industry="IT",
-        language_name="German", language_code="de_DE", gemini_model_name="test",
+        language_name="German", language_code="de_DE",
     )
 
 

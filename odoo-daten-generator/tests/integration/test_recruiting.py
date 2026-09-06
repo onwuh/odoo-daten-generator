@@ -32,7 +32,7 @@ def _make_rctx(num_jobs, num_candidates):
             num_jobs=num_jobs, num_candidates=num_candidates,
             create_skills=False, num_skill_types=0, skills_per_type=0,
         )),
-        industry="IT", language_name="German", language_code="de_DE", gemini_model_name="test",
+        industry="IT", language_name="German", language_code="de_DE",
     )
 
 
@@ -192,7 +192,6 @@ def run(client, ctx):
         mock_ctx = RunContext(
             criteria=criteria, module_selections=ModuleSelections(),
             industry="Test", language_name="German", language_code="de_DE",
-            gemini_model_name="test",
         )
         result = _create_applicants(mock_client, mock_ctx, {}, 5, [], [], {})
         assert result == [], f"Expected [], got {result}"

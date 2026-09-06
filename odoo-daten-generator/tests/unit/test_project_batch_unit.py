@@ -21,7 +21,7 @@ def _make_ctx(num_projects=0, tasks_per_project=3, hr_timesheet=0):
         criteria=criteria,
         module_selections=ModuleSelections(project=num_projects, tasks_per_project=tasks_per_project,
                                             hr_timesheet=hr_timesheet),
-        industry="IT", language_name="German", language_code="de", gemini_model_name="test",
+        industry="IT", language_name="German", language_code="de",
     )
 
 

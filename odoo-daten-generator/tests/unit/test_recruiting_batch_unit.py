@@ -23,7 +23,7 @@ def _make_ctx(num_jobs, num_candidates):
             num_jobs=num_jobs, num_candidates=num_candidates,
             create_skills=False, num_skill_types=0, skills_per_type=0,
         )),
-        industry="IT", language_name="German", language_code="de", gemini_model_name="test",
+        industry="IT", language_name="German", language_code="de",
     )
 
 

@@ -456,7 +456,7 @@ def run():
         )
         return RunContext(
             criteria=criteria, module_selections=ModuleSelections(), industry="IT",
-            language_name="German", language_code="de", gemini_model_name="test",
+            language_name="German", language_code="de",
         )
 
     try:

@@ -33,7 +33,7 @@ def _make_ctx(stock_sel=_UNSET, company_ids=None, product_ids=None, component_id
         criteria=criteria,
         module_selections=ModuleSelections(
             stock=StockConfig(avg_qty=20) if stock_sel is _UNSET else stock_sel),
-        industry="IT", language_name="German", language_code="de", gemini_model_name="test",
+        industry="IT", language_name="German", language_code="de",
     )
     ctx.partner_company_ids = company_ids if company_ids is not None else [10]
     ctx.product_ids = product_ids if product_ids is not None else [1, 2]

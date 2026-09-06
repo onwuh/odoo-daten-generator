@@ -389,7 +389,7 @@ def _ctx(selections, **overrides):
     )
     ctx = RunContext(
         criteria=criteria, module_selections=selections, industry="IT",
-        language_name="German", language_code="de", gemini_model_name="stub",
+        language_name="German", language_code="de",
     )
     for key, value in overrides.items():
         # RunContext is a dataclass without __slots__, so a stale fixture name

@@ -166,7 +166,6 @@ def run(client, ctx):
         mock_ctx = RunContext(
             criteria=criteria, module_selections=sel,
             industry="Test", language_name="German", language_code="de_DE",
-            gemini_model_name="test",
         )
 
         opp_data = [{"id": 1, "name": "Test Opp", "partner_id": 10,
@@ -197,7 +196,6 @@ def run(client, ctx):
         b12_ctx = RunContext(
             criteria=criteria, module_selections=sel,
             industry="Test", language_name="German", language_code="de_DE",
-            gemini_model_name="test",
         )
         b12_ctx.partner_company_ids = [partner_id]
         b12_ctx.name_banks = {"opportunity_titles": ["B12 Test Opportunity"]}
@@ -240,7 +238,6 @@ def run(client, ctx):
         r11_ctx = RunContext(
             criteria=criteria, module_selections=sel,
             industry="Test", language_name="German", language_code="de_DE",
-            gemini_model_name="test",
         )
         r11_ctx.opportunity_ids = [opp_a, opp_b]
         r11_ctx.linked_opportunity_ids = [opp_a]
@@ -282,7 +279,6 @@ def run(client, ctx):
         skip_ctx = RunContext(
             criteria=criteria, module_selections=sel,
             industry="Test", language_name="German", language_code="de_DE",
-            gemini_model_name="test",
         )
         skip_ctx.opportunity_ids = []
         mark_lost_opportunities(client, None, skip_ctx)  # must not raise

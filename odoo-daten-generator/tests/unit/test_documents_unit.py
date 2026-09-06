@@ -30,7 +30,7 @@ def _make_ctx(documents_sel=None, bill_ids=None, applicant_ids=None, model_acces
     ctx = RunContext(
         criteria=criteria,
         module_selections=ModuleSelections(documents=documents_sel),
-        industry="IT", language_name="German", language_code="de", gemini_model_name="test",
+        industry="IT", language_name="German", language_code="de",
         model_access=model_access if model_access is not None else {},
     )
     ctx.bill_ids = bill_ids or []

@@ -25,7 +25,7 @@ def _make_rctx(num_employees):
     )
     return RunContext(
         criteria=crit, module_selections=ModuleSelections(hr=num_employees), industry="IT",
-        language_name="German", language_code="de_DE", gemini_model_name="test",
+        language_name="German", language_code="de_DE",
     )
 
 

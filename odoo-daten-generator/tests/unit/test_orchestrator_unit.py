@@ -21,7 +21,6 @@ def _make_ctx(installed_modules, module_selections=None, skip_master_data=False)
         criteria=criteria,
         module_selections=module_selections or ModuleSelections(),
         industry="IT", language_name="German", language_code="de",
-        gemini_model_name="test-model",
         installed_modules=installed_modules,
         skip_master_data=skip_master_data,
     )

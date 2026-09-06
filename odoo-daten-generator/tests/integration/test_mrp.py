@@ -26,7 +26,7 @@ def _make_rctx(mrp_config):
     )
     return RunContext(
         criteria=crit, module_selections=ModuleSelections(mrp=mrp_config), industry="IT",
-        language_name="German", language_code="de_DE", gemini_model_name="test",
+        language_name="German", language_code="de_DE",
     )
 
 

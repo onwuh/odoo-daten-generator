@@ -26,7 +26,7 @@ def _make_ctx(num_invoices, installed_modules=None):
     )
     ctx = RunContext(
         criteria=criteria, module_selections=ModuleSelections(account=num_invoices), industry="IT",
-        language_name="German", language_code="de", gemini_model_name="test",
+        language_name="German", language_code="de",
     )
     ctx.installed_modules = installed_modules or set()
     return ctx

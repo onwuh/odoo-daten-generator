@@ -25,7 +25,7 @@ def _make_ctx(mrp_config):
     )
     return RunContext(
         criteria=criteria, module_selections=ModuleSelections(mrp=mrp_config), industry="IT",
-        language_name="German", language_code="de", gemini_model_name="test",
+        language_name="German", language_code="de",
     )
 
 

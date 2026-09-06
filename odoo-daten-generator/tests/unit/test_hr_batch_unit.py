@@ -27,7 +27,7 @@ def _make_ctx(num_employees=0, hr_timeoff=None, employee_ids=None):
         sel.hr_timeoff = hr_timeoff
     ctx = RunContext(
         criteria=criteria, module_selections=sel, industry="IT",
-        language_name="German", language_code="de", gemini_model_name="test",
+        language_name="German", language_code="de",
         installed_modules={"hr_holidays", "hr_work_entry"},
     )
     if employee_ids is not None:

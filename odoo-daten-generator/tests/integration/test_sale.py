@@ -22,7 +22,7 @@ def _make_rctx(num_orders):
     )
     return RunContext(
         criteria=crit, module_selections=ModuleSelections(sale=num_orders), industry="IT",
-        language_name="German", language_code="de_DE", gemini_model_name="test",
+        language_name="German", language_code="de_DE",
     )
 
 
@@ -121,7 +121,6 @@ def run(client, ctx):
         mock_ctx = RunContext(
             criteria=criteria, module_selections=ModuleSelections(),
             industry="Test", language_name="German", language_code="de_DE",
-            gemini_model_name="test",
         )
         mock_ctx.confirmed_order_ids = [order_id or 1]
         mock_ctx.opportunity_ids = [opp_id or 1]

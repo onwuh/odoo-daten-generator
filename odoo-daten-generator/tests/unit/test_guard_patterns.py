@@ -45,7 +45,6 @@ def _make_ctx(**kwargs):
     return RunContext(
         criteria=criteria, module_selections=sel,
         industry="Test", language_name="German", language_code="de_DE",
-        gemini_model_name="test",
     )
 
 

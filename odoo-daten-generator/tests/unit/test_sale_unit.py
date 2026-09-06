@@ -22,7 +22,7 @@ def _make_ctx(num_orders, analytic=None):
         sel_kwargs["analytic"] = analytic
     ctx = RunContext(
         criteria=criteria, module_selections=ModuleSelections(**sel_kwargs), industry="IT",
-        language_name="German", language_code="de", gemini_model_name="test",
+        language_name="German", language_code="de",
     )
     ctx.partner_company_ids = [1, 2, 3]
     ctx.product_ids = [10, 11, 12]
