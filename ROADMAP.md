@@ -42,7 +42,7 @@ Parameter heißt in allen Modulsignaturen `gemini`, Provider ist primär Groq; `
 
 **Teilstatus, verifiziert 2026-09-02** — 2 von 5 erledigt, 3 offen. **2026-09-05 um drei Punkte erweitert** (Code-Vereinfachungs-Review):
 
-- ⚪ **Offen:** `test_mrp_live.py` steht weiterhin im Wurzelverzeichnis von `odoo-daten-generator/` → nach `tests/integration/` verschieben oder löschen.
+- ✅ **Erledigt (S17/WP5):** `test_mrp_live.py` gelöscht, nicht verschoben. Alle vier geprüften Funktionen sind in `tests/integration/test_mrp.py` abgedeckt, kein Runner rief das Skript auf, und sein eigener Docstring ordnete die Löschung an („Delete this file after all steps pass").
 - ✅ **Erledigt (S17, war ohnehin stale):** der `.claude/worktrees/docker-autoupdate/`-Punkt. `git worktree list` zeigt nur `main`, `.claude/worktrees/` ist leer — der Worktree existierte zum Zeitpunkt der Erfassung schon nicht mehr.
 - ✅ **Erledigt (S17/WP2):** `# Besitzer:`-Zeilen in `config.py` für die Felder mit mehr als einem Schreiber. Korrigierte Liste gegenüber der ursprünglichen Erfassung: `supplier_ids` (2), `bill_ids` (2), `product_ids` (5), `partner_company_ids` (4) und **`analytic_account_ids`** (2, fehlte). **`confirmed_order_ids` gehörte nie dazu** — viele Leser, aber genau ein Schreiber (`sale.py:121`).
 - ⚪ **Geprüft und verworfen (2026-09-05):** Lint-Ausbau `ruff --select B,C901` gemessen — 97 Treffer (56 × C901, 41 × B: B905 19, B008 10, B904 7, B007 3, B023 2). **Kein einziger echter Bug** darunter: C901 feuert flächig auf die absichtlich langen prozeduralen Modul-Dateien (400–550 Zeilen), beide B023-Fälle liegen in Tests und sind harmlos (Closure wird noch in derselben Schleifen-Iteration aufgerufen). Kein eigenes Item — `ruff.toml`s `select = ["F"]`-Begründung bleibt gültig. Hier notiert, damit der Vorschlag nicht ungemessen wiederkehrt.
@@ -521,7 +521,7 @@ Kein Sprint festgelegt. Nach Priorität:
 | 🟡 | **D6** | `gemini` → `llm` |
 | 🟡 | **D17** | Breite `except Exception` gezielt verengen |
 | 🟡 | **R6** | Multi-Country Customer/Supplier |
-| ⚪ | **D8** | Kleinigkeiten (3 offene Punkte) |
+| ⚪ | **D8** | Kleinigkeiten (2 offene Punkte) |
 | ⚪ | **D18** | Paketstruktur — bewusst zurückgestellt, eigenes WP |
 | ⚪ | **D20** 🔒 | Striktes `ModuleSelections.get` (aus S17 ausgegliedert) |
 
