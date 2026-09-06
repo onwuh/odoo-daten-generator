@@ -401,3 +401,78 @@ Cold-Review-Durchgang mehr nötig,** nur noch dieser gezielte Text-Fix-
 Durchgang (bereits eingearbeitet). Plan gilt als freigegeben zur
 Implementierungsplanung.
 
+
+---
+
+## S17 — Schema-Härtung (D5 + D16), 2026-09-05/06
+
+Branch `s17-schema-haertung`. Reiner Refactor, Anspruch: null Verhaltensänderung.
+Item-Statusblöcke und WP-Sequenz in `ROADMAP_ARCHIVE.md` §5.
+
+### Cold-Review: drei Runden, sechs harte Blocker
+
+Jede Runde ein frischer Agent, Plantext plus Live-Repo, ohne Konversationshistorie und
+ohne die Befunde der Vorrunden — Verfahren nach `sprint-review`-Skill §2. Jede Runde bekam
+einen anderen Prüfschwerpunkt, damit sie nicht die Erzählung der Vorrunde nachprüft.
+
+**Runde 1** (tragende Annahme, Matrix-Vollständigkeit, Ausschlussliste) — **1 Blocker:**
+fünf `isinstance(<cfg>, dict)`-Guards in `documents.py:278`, `inventory.py:41`,
+`mrp.py:126`, `recruiting.py:225`, `master_data.py:82`. `isinstance(MrpConfig(), dict)` ist
+`False`; die Guards hätten vier Module still abgeschaltet und weiterhin `ok=True` gemeldet.
+Sie sitzen **vor** jeder `.get()`-Zeile und entziehen sich damit der
+`AttributeError`-Absicherung, auf der der Plan seine Sicherheit aufbaute. Bestätigt: die
+tragende Annahme (alle 10 Felder nur im `_enabled`-Block zugewiesen) hält Feld für Feld.
+
+**Runde 2** (Feldtabelle, Lesestellen, Wire-Format, Netz-Determinismus, Testmuster) —
+**2 Blocker:**
+1. Die Dataclass-Defaults waren aus der falschen Quelle abgeleitet. Der Plan sagte
+   „wörtlich aus `build_selections`" — richtig sind die Fallbacks der **Lesestellen**.
+   Mit den Payload-Defaults hätten 37 Testkonstruktionen still ihr Verhalten geändert;
+   schärfster Fall `test_inventory_unit.py`s Pattern-3-Test (`stock={}` → kein
+   `create_batch`), der mit `avg_qty=50` angefangen hätte, Bestände anzulegen — und grün
+   geblieben wäre. Das hätte ausgerechnet das Sicherungsnetz entwertet.
+2. Netz B war als eingefrorenes Golden nicht deterministisch: 17 Produktionsstellen in
+   8 Modulen schreiben `datetime.now()`/`date.today()` direkt in die aufgezeichneten Vals.
+   `random.seed` deckt davon nichts ab. Gelöst durch Datums-Normalisierung vor dem
+   Vergleich, mit im Golden-Header notiertem Abdeckungsverlust.
+
+**Runde 3** (Nachrechnen der handübertragenen Werte, WP2, Netz A) — **4 Blocker,** drei
+davon derselbe Fehlertyp: falsch abgeschriebene Zeilenangaben in Anweisungen zur
+Kommentar-Chirurgie (`mrp.py:140` hätte eine tragende Begründung mitgenommen,
+`odoo_actions.py:378-380` mitten im Satz geschnitten, `config.py:109-110` zielte auf einen
+Sammel-Header statt auf die echte Warnung in `:173-176` — die der eigene Prüfbefehl
+strukturell nicht findet, weil sie `from company_ids above` ohne führenden Punkt schreibt).
+Vierter Blocker: die fehlende generelle Regel `<feld>={}` → `None` für Testkonstruktionen.
+Die Default-Tabelle selbst wurde Wert für Wert nachgerechnet — alle 43 korrekt.
+
+### Formwechsel statt vierter Runde
+
+Runde 3 fand einen Blocker in genau dem Abschnitt, den die Korrektur nach Runde 2 gerade
+umgeschrieben hatte — die Abbruchbedingung aus `sprint-review`-Skill §4, die ab Runde 3
+ohnehin ohne dieses Signal gilt. Diagnose: nicht das Design war falsch, sondern die Form.
+Der Plan **zählte Fundstellen auf**, wo er **Regeln** hätte geben müssen. WP2 Punkt 4 und
+WP3 Punkt 6 wurden auf Regel-plus-Suchbefehl umgestellt; verbliebene Listen stehen
+ausdrücklich als Kalibrierung da, nicht als abschließend. Danach Umsetzung.
+
+Drei Runden, drei substanzielle Befunde, kein einziger im Design: `S17-D2`, `S17-D3`, der
+Wire-Format-Anspruch und die Feldnamen aller 10 Dataclasses wurden mehrfach unabhängig
+bestätigt. Die Blocker lagen ausnahmslos in dem, was der Planer von Hand aus dem Code
+übertragen hatte.
+
+### Ergebnis
+
+Offline-Suite **493/493 grün** (von 317/342 unmittelbar vor der Test-Umschreibung),
+Live-Integration gegen `demo-test5` **95/95, alle 14 Module PASS**, `ruff` sauber.
+Die Goldens des Sicherungsnetzes
+wurden seit ihrem Erstellungs-Commit nicht angefasst (`git log --follow` auf
+`tests/unit/fixtures/` zeigt nur `8aa3f51`) und blieben ohne Anpassung grün. Am
+Netz-Testfile wurde allein die Eingabe-Konstruktion nachgezogen — Dict-Literal zu
+Konstruktor, wertgleich über dieselben Modulkonstanten —, nicht die Vergleichslogik. Damit
+ist die Kernaussage belegt: gleiche Eingaben, identische aufgezeichnete Odoo-Aufrufe.
+
+### Verfahrensnotiz
+
+Zwei Umsetzer-Läufe brachen an Nutzungslimits ab, beide mitten in WP3. Weil pro WP
+committet wurde, ging in beiden Fällen nichts verloren — der Wiederaufsetzpunkt war aus
+`git log` und `git status` in unter einer Minute rekonstruierbar. Für lange Refactors
+bestätigt das die Ein-Commit-pro-WP-Regel als Kosten-, nicht Stilfrage.

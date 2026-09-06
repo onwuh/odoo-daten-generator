@@ -34,19 +34,6 @@ Kennzeichnung: 🔴 kritisch · 🟠 hoch · 🟡 mittel · ⚪ niedrig · 🔒 
 
 **Was hier bewusst NICHT steht** (2026-09-05 nachgemessen, damit es niemand "repariert"): der Import-Graph ist ein sauberer Stern — **kein Modul importiert ein anderes Modul**, alle 12 `modules/*.py` hängen nur an `{config, odoo_actions, data_factory, fallback_data, pdf_factory}`, keine Zyklen, Pipeline-Reihenfolge an genau einer Stelle (`orchestrator.py:44`). Und `RunContext` ist kein Gott-Objekt: 23 Schreibstellen, 18 davon mit genau einem Besitzer (die 5 Ausnahmen siehe D8). Beides ist tragfähig.
 
-### D5 🟠 Typisierte Modul-Configs statt roher Dicts 🔒
-
-`ModuleSelections.mrp/hr_recruitment/hr_timeoff/crm_chatter/crm_activities` sind untypisierte Dicts mit Shape-Kommentaren. Fehlerklasse: Tippfehler im Key fällt erst zur Laufzeit (oder nie) auf.
-
-**Fix (nach Architekten-Freigabe, da Config-Schema):** je ein Dataclass (`MrpConfig`, `TimeoffConfig`, …) mit Defaults; `ModuleSelections` referenziert `Optional[MrpConfig]`. GUI erzeugt die Objekte direkt. `enabled`-Bools entfallen (Objekt vorhanden = aktiv).
-
-**Belege nachgemessen 2026-09-05** — Umfang seit der Erfassung gewachsen, Priorität von 🟡 auf 🟠 angehoben:
-
-- Nicht mehr 5, sondern **10** `dict`-typisierte Felder (`grep -c ": dict = field" config.py`): dazu `crm_lost`, `documents`, `stock`, `hr_expense`, `analytic`.
-- `config.py` besteht zu **57 %** aus Kommentar (105 von 185 Zeilen). Der Kommentar ersetzt den Typ: er beschreibt in Prosa, was eine Dataclass erzwingen würde.
-- Die Falle, vor der die Kommentare warnen, ist real und namentlich benannt — `ModuleSelections.get(module_code)` ist `getattr(self, module_code)`, also ein String-Key-Lookup gegen `orchestrator.py`s `module_order`. `config.py`s eigener `stock`-Kommentar: *"would look up a nonexistent attribute and always skip silently"*. Mit Dataclasses ist diese Fehlerklasse konstruktionsbedingt weg.
-- Größter Vereinfachungs-Gewinn pro geänderter Zeile im gesamten Repo: löscht ~60 Kommentarzeilen, ersetzt sie durch prüfbare Typen.
-
 ### D6 🟡 Namens-Hygiene: `gemini` → `llm`
 
 Parameter heißt in allen Modulsignaturen `gemini`, Provider ist primär Groq; `RunContext.gemini_model_name` ist ungenutztes Erbe. Umbenennen (`llm`, `llm_model_name`), rein mechanisch.
@@ -56,25 +43,31 @@ Parameter heißt in allen Modulsignaturen `gemini`, Provider ist primär Groq; `
 **Teilstatus, verifiziert 2026-09-02** — 2 von 5 erledigt, 3 offen. **2026-09-05 um drei Punkte erweitert** (Code-Vereinfachungs-Review):
 
 - ⚪ **Offen:** `test_mrp_live.py` steht weiterhin im Wurzelverzeichnis von `odoo-daten-generator/` → nach `tests/integration/` verschieben oder löschen.
-- ⚪ **Offen (neu 2026-09-05):** `.claude/worktrees/docker-autoupdate/` enthält eine vollständige Zweitkopie der Codebase (jede `wc -l`-Auswertung über das Repo zählt sie doppelt mit). Branch `docker-autoupdate` **ist** in `main` gemerged (`git branch --merged main` bestätigt) → `git worktree remove` gefahrlos.
-- ⚪ **Offen (neu 2026-09-05):** Fünf `RunContext`-Felder werden von mehr als einem Modul beschrieben, ohne dass irgendwo steht, wem sie gehören: `supplier_ids` (accounting+purchase), `bill_ids` (purchase+accounting), `confirmed_order_ids` (sale+accounting), `product_ids` (master_data+mrp+orchestrator), `company_ids` (master_data+orchestrator). Die übrigen 18 Schreibstellen haben je genau einen Besitzer — also kein Gott-Objekt, kein Umbau nötig. Fix: eine `# Besitzer:`-Zeile pro Mehrfach-Feld in `config.py`.
+- ✅ **Erledigt (S17, war ohnehin stale):** der `.claude/worktrees/docker-autoupdate/`-Punkt. `git worktree list` zeigt nur `main`, `.claude/worktrees/` ist leer — der Worktree existierte zum Zeitpunkt der Erfassung schon nicht mehr.
+- ✅ **Erledigt (S17/WP2):** `# Besitzer:`-Zeilen in `config.py` für die Felder mit mehr als einem Schreiber. Korrigierte Liste gegenüber der ursprünglichen Erfassung: `supplier_ids` (2), `bill_ids` (2), `product_ids` (5), `partner_company_ids` (4) und **`analytic_account_ids`** (2, fehlte). **`confirmed_order_ids` gehörte nie dazu** — viele Leser, aber genau ein Schreiber (`sale.py:121`).
 - ⚪ **Geprüft und verworfen (2026-09-05):** Lint-Ausbau `ruff --select B,C901` gemessen — 97 Treffer (56 × C901, 41 × B: B905 19, B008 10, B904 7, B007 3, B023 2). **Kein einziger echter Bug** darunter: C901 feuert flächig auf die absichtlich langen prozeduralen Modul-Dateien (400–550 Zeilen), beide B023-Fälle liegen in Tests und sind harmlos (Closure wird noch in derselben Schleifen-Iteration aufgerufen). Kein eigenes Item — `ruff.toml`s `select = ["F"]`-Begründung bleibt gültig. Hier notiert, damit der Vorschlag nicht ungemessen wiederkehrt.
 - ✅ **Erledigt (durch Umbau, nicht gezielt):** die ursprüngliche `odoo_client._post:46`-Stelle mit dem immer-wahren `response is not None`-Check existiert so nicht mehr — `odoo_client.py`s Fehlerbehandlung wurde in S9/S10 komplett umgebaut (`_record_failure`-Frame-Stack). Die verbleibenden `response is not None`-Checks (z. B. `create_batch`s HTTPError-Handler, `has_create_access`) sind echte Null-Checks, keine toten Bedingungen mehr.
 - ✅ **Erledigt:** `LLMService.ping()` existiert (`llm_service.py:262`) und wird von `connect_service.py:245` verwendet — ohnehin gegenstandslos, da `gui.py` seit S9 komplett entfernt ist.
 - ⚪ **Offen:** Provider-Erkennung ist weiterhin Prefix-Sniffing — `connect_service.py:126`: `"groq" if llm_key.startswith("gsk_") else "gemini"`. Kein explizites Dropdown/Feld für die Provider-Wahl im Web-Frontend.
 - ⚪ **Offen:** `orchestrator.py:54` — `gemini.fetch_name_suggestions(...)` läuft weiterhin unconditional bei jedem Lauf, außerhalb des `skip_master_data`-Gates (Zeile 46). Lädt Namensbänke auch dann, wenn kein Modul sie braucht.
 
-### D16 🟠 `ctx.company_ids` heißt falsch — umbenennen zu `partner_company_ids` 🔒
+### D20 ⚪ `ModuleSelections.get` strikt machen
 
-**Neu 2026-09-05.** `RunContext.company_ids` hält `res.partner`-Ids (Firmen-*Kontakte* aus `master_data.py`), nie eine `res.company`-Id. Der Name hat bereits einen Live-Bug verursacht (`mrp.py`s Work-Center/Fertigungsauftrag-Erstellung, monatelang von einem `try/except` verdeckt, gefixt in S10 Phase A) und ist in `config.py:110` selbst als irreführend dokumentiert.
+**Neu 2026-09-06, aus S17 ausgegliedert.** `ModuleSelections.get(key)` ist
+`getattr(self, key, default)` — ein String-Key-Lookup gegen `orchestrator.py`s
+`module_order`. D5 (S17) hat die Tippfehler *innerhalb* eines Configs beseitigt, diesen
+äußeren Lookup nicht. Ein Modul-Code, der zu keinem Feld passt, wird weiterhin still
+übersprungen (B1-Fehlerklasse).
 
-Seit `f052fe3` (S16-NEU WP2b) steht `res_company_ids` — die *echten* Firmen — direkt daneben. Zwei Namen, ein Präfix Unterschied, gegensätzliche Bedeutung, in derselben Dataclass.
+**In S17 bewusst nicht umgesetzt:** ein striktes `get` würde in `orchestrator.py:102` —
+🔒-Datei, außerhalb von `_run_module`s `except Exception` — einen stillen Skip in einen
+Absturz verwandeln. Das ist eine Verhaltensänderung, und S17s Prämisse war „null sichtbare
+Änderung". Stattdessen deckt seit S17 ein **Invariantentest** in
+`tests/unit/test_run_config_unit.py` die Fehlerklasse ab: jeder `orchestrator.module_order`-Code
+wird gegen `dataclasses.fields(ModuleSelections)` geprüft. Gleicher Schutz, kein Laufzeitrisiko.
 
-**Fix:** `company_ids` → **`partner_company_ids`**. Name jetzt festgelegt, damit er beim Aufgreifen nicht neu verhandelt wird — er sagt, was drinsteht (`res.partner`-Ids vom Typ Firma). Rein mechanisch, aber 127 Referenzen in 20 Dateien (inkl. `odoo_actions.py`, `odoo_client.py`, `run_config.py`, `web/app.py`, `web/jobs.py`, `connect_service.py`, `orchestrator.py` und 12 Testdateien).
-
-🔒 **Architekten-Freigabe nötig** — `RunContext` ist Config-Schema (CLAUDE.md "Do Not Touch"), gleiche Lage wie D5.
-
-**Zeitpunkt: vor dem S16-Merge, nicht danach.** Jedes weitere S16-Arbeitspaket, das auf `res_company_ids` aufbaut, vergrößert den Diff und die Verwechslungsfläche. Danach ist es dieselbe Arbeit plus die neuen Aufrufstellen.
+Ein striktes `get` bliebe trotzdem sauberer — aber erst zusammen mit einer Entscheidung, was
+`orchestrator.py` bei einem unbekannten Modul-Code tun soll. 🔒, Architekten-Freigabe.
 
 ### D17 🟡 Breite `except Exception` gezielt verengen
 
@@ -475,28 +468,28 @@ enthielt — Begründung, Review-Verlauf, Testzahlen und PR-Links stehen in
 | **S14** Prozess-Tiefe | R12, R18 |
 | **S15** Analytic Accounting | R20 |
 | **S16** Multicompany | R17 — N Firmen, Kontext-Scoping, `STATUS_PARTIAL` |
+| **S17** Schema-Härtung | D5 (10 typisierte Modul-Configs), D16 (`partner_company_ids`), D8-Teil |
 
-### Offene Kandidaten für S17+
+### Offene Kandidaten für S18+
 
 Kein Sprint festgelegt. Nach Priorität:
 
 | Prio | Item | Kurz |
 |---|---|---|
-| 🟠 | **D5** 🔒 | Typisierte Modul-Configs statt 10 roher Dicts |
-| 🟠 | **D16** 🔒 | `ctx.company_ids` → `partner_company_ids` |
 | 🟠 | **R1** | PDF P3/P4 |
 | 🟠 | **R5** | Übersetzungs-Registry (WP3, in S11 zurückgestellt) |
 | 🟠 | **R14** | Wareneingangs-Anteil (Quant-Anteil erledigt) |
 | 🟡 | **D6** | `gemini` → `llm` |
 | 🟡 | **D17** | Breite `except Exception` gezielt verengen |
 | 🟡 | **R6** | Multi-Country Customer/Supplier |
-| ⚪ | **D8** | Kleinigkeiten (4 offene Punkte) |
+| ⚪ | **D8** | Kleinigkeiten (3 offene Punkte) |
 | ⚪ | **D18** | Paketstruktur — bewusst zurückgestellt, eigenes WP |
+| ⚪ | **D20** 🔒 | Striktes `ModuleSelections.get` (aus S17 ausgegliedert) |
 
-**D5 und D16 hängen zusammen** und berühren beide `config.py` (🔒): D5 ersetzt die
-Dict-Felder von `ModuleSelections`, D16 benennt ein `RunContext`-Feld um. Zusammen in
-einem Sprint kostet eine Architekten-Freigabe statt zwei und einen Test-Durchlauf statt
-zwei.
+**Empfehlung: D6 als Nächstes.** Es ist derselbe Typ mechanischer Rename wie S17s D16, und
+S17 hat dafür ein wiederverwendbares Verfahren hinterlassen — Sicherungsnetz auf `main` vor
+der ersten Refactor-Zeile, dann Regel-plus-Suchbefehl statt Fundstellenliste. `D6` berührt
+`RunContext.gemini_model_name`, also erneut `config.py` 🔒.
 
 ### Pro Arbeitspaket verbindlich
 
