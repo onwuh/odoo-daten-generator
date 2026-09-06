@@ -40,7 +40,7 @@ Parameter heißt in allen Modulsignaturen `gemini`, Provider ist primär Groq; `
 
 ### D8 ⚪ Kleinigkeiten
 
-**Teilstatus, verifiziert 2026-09-02** — 2 von 5 erledigt, 3 offen. **2026-09-05 um drei Punkte erweitert** (Code-Vereinfachungs-Review):
+**Teilstatus, aktualisiert 2026-09-06 nach S17** — 5 erledigt, 1 geprüft und verworfen, **2 offen** (Provider-Sniffing und der unconditional `fetch_name_suggestions`-Aufruf, beide unten):
 
 - ✅ **Erledigt (S17/WP5):** `test_mrp_live.py` gelöscht, nicht verschoben. Alle vier geprüften Funktionen sind in `tests/integration/test_mrp.py` abgedeckt, kein Runner rief das Skript auf, und sein eigener Docstring ordnete die Löschung an („Delete this file after all steps pass").
 - ✅ **Erledigt (S17, war ohnehin stale):** der `.claude/worktrees/docker-autoupdate/`-Punkt. `git worktree list` zeigt nur `main`, `.claude/worktrees/` ist leer — der Worktree existierte zum Zeitpunkt der Erfassung schon nicht mehr.
