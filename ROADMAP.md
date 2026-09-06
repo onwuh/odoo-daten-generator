@@ -32,24 +32,11 @@ Kennzeichnung: 🔴 kritisch · 🟠 hoch · 🟡 mittel · ⚪ niedrig · 🔒 
 
 **Nummernvergabe:** neue Punkte laufen ab **D16** weiter. D11–D15 sind übersprungen, weil der S16-Architektur-Spike (heute in [`ROADMAP_ARCHIVE.md`](ROADMAP_ARCHIVE.md) §5) seine sprint-internen Entscheidungen ebenfalls D1–D15 nennt — dieselben Kennungen, andere Bedeutung (§3-D8 = "Kleinigkeiten", S16-D8 = "Bestehende-Firma-Wiederverwendung"). Wie die Kollision aufgelöst wurde: D19. Ab S17 gilt die Präfix-Pflicht `S<N>-D<n>` aus CLAUDE.mds Planning-document rule 2.
 
-**Was hier bewusst NICHT steht** (2026-09-05 nachgemessen, damit es niemand "repariert"): der Import-Graph ist ein sauberer Stern — **kein Modul importiert ein anderes Modul**, alle 12 `modules/*.py` hängen nur an `{config, odoo_actions, data_factory, fallback_data, pdf_factory}`, keine Zyklen, Pipeline-Reihenfolge an genau einer Stelle (`orchestrator.py:44`). Und `RunContext` ist kein Gott-Objekt: 23 Schreibstellen, 18 davon mit genau einem Besitzer (die 5 Ausnahmen siehe D8). Beides ist tragfähig.
+**Was hier bewusst NICHT steht** (2026-09-05 nachgemessen, damit es niemand "repariert"): der Import-Graph ist ein sauberer Stern — **kein Modul importiert ein anderes Modul**, alle 12 `modules/*.py` hängen nur an `{config, odoo_actions, data_factory, fallback_data, pdf_factory}`, keine Zyklen, Pipeline-Reihenfolge an genau einer Stelle (`orchestrator.py:74`). Und `RunContext` ist kein Gott-Objekt: 23 Schreibstellen, 18 davon mit genau einem Besitzer (die 5 Ausnahmen siehe D8). Beides ist tragfähig.
 
-### D6 🟡 Namens-Hygiene: `gemini` → `llm`
+### D8 ✅ Kleinigkeiten — abgeschlossen (S18) → [`ROADMAP_ARCHIVE.md`](ROADMAP_ARCHIVE.md)
 
-Parameter heißt in allen Modulsignaturen `gemini`, Provider ist primär Groq; `RunContext.gemini_model_name` ist ungenutztes Erbe. Umbenennen (`llm`, `llm_model_name`), rein mechanisch.
-
-### D8 ⚪ Kleinigkeiten
-
-**Teilstatus, aktualisiert 2026-09-06 nach S17** — 5 erledigt, 1 geprüft und verworfen, **2 offen** (Provider-Sniffing und der unconditional `fetch_name_suggestions`-Aufruf, beide unten):
-
-- ✅ **Erledigt (S17/WP5):** `test_mrp_live.py` gelöscht, nicht verschoben. Alle vier geprüften Funktionen sind in `tests/integration/test_mrp.py` abgedeckt, kein Runner rief das Skript auf, und sein eigener Docstring ordnete die Löschung an („Delete this file after all steps pass").
-- ✅ **Erledigt (S17, war ohnehin stale):** der `.claude/worktrees/docker-autoupdate/`-Punkt. `git worktree list` zeigt nur `main`, `.claude/worktrees/` ist leer — der Worktree existierte zum Zeitpunkt der Erfassung schon nicht mehr.
-- ✅ **Erledigt (S17/WP2):** `# Besitzer:`-Zeilen in `config.py` für die Felder mit mehr als einem Schreiber. Korrigierte Liste gegenüber der ursprünglichen Erfassung: `supplier_ids` (2), `bill_ids` (2), `product_ids` (5), `partner_company_ids` (4) und **`analytic_account_ids`** (2, fehlte). **`confirmed_order_ids` gehörte nie dazu** — viele Leser, aber genau ein Schreiber (`sale.py:121`).
-- ⚪ **Geprüft und verworfen (2026-09-05):** Lint-Ausbau `ruff --select B,C901` gemessen — 97 Treffer (56 × C901, 41 × B: B905 19, B008 10, B904 7, B007 3, B023 2). **Kein einziger echter Bug** darunter: C901 feuert flächig auf die absichtlich langen prozeduralen Modul-Dateien (400–550 Zeilen), beide B023-Fälle liegen in Tests und sind harmlos (Closure wird noch in derselben Schleifen-Iteration aufgerufen). Kein eigenes Item — `ruff.toml`s `select = ["F"]`-Begründung bleibt gültig. Hier notiert, damit der Vorschlag nicht ungemessen wiederkehrt.
-- ✅ **Erledigt (durch Umbau, nicht gezielt):** die ursprüngliche `odoo_client._post:46`-Stelle mit dem immer-wahren `response is not None`-Check existiert so nicht mehr — `odoo_client.py`s Fehlerbehandlung wurde in S9/S10 komplett umgebaut (`_record_failure`-Frame-Stack). Die verbleibenden `response is not None`-Checks (z. B. `create_batch`s HTTPError-Handler, `has_create_access`) sind echte Null-Checks, keine toten Bedingungen mehr.
-- ✅ **Erledigt:** `LLMService.ping()` existiert (`llm_service.py:262`) und wird von `connect_service.py:245` verwendet — ohnehin gegenstandslos, da `gui.py` seit S9 komplett entfernt ist.
-- ⚪ **Offen:** Provider-Erkennung ist weiterhin Prefix-Sniffing — `connect_service.py:126`: `"groq" if llm_key.startswith("gsk_") else "gemini"`. Kein explizites Dropdown/Feld für die Provider-Wahl im Web-Frontend.
-- ⚪ **Offen:** `orchestrator.py:54` — `gemini.fetch_name_suggestions(...)` läuft weiterhin unconditional bei jedem Lauf, außerhalb des `skip_master_data`-Gates (Zeile 46). Lädt Namensbänke auch dann, wenn kein Modul sie braucht.
+Alle acht Teilpunkte sind erledigt oder gemessen verworfen. Statusblock im Archiv.
 
 ### D21 🟠 `field_manifest.json`-Drift wird nirgends erzwungen — Manifest war vier Sprints blind
 
@@ -76,18 +63,78 @@ committeten Stand, und sein PASS-Text nennt den Diff nur als manuellen Schritt (
 field_manifest.json against odoo_actions.FIELD_COMPAT_WHITELIST"). Ein manueller Schritt in
 einem Skript, das man selten und unter Zeitdruck ausführt, ist kein Mechanismus.
 
-**Fix (Reihenfolge nach Kosten):**
-1. `scripts/check_compat.sh` bricht mit eigenem Exit-Code ab, wenn `git diff --quiet
-   field_manifest.json` nach dem Lauf fehlschlägt — Drift wird sichtbar, statt still ins
-   Arbeitsverzeichnis geschrieben zu werden. Billig, sofort wirksam.
+---
+
+#### Zuschnitt: eigener Spike, kein Arbeitspaket (Korrektur 2026-09-06, S18)
+
+Der ursprüngliche Punkt 1 unten las sich als „wenige Zeilen `git diff --quiet` in
+`check_compat.sh`". **Das stimmt nicht.** D21 war als WP1 von S18 geplant und wurde nach
+drei kalten Review-Runden wieder herausgelöst: 13 harte Blocker insgesamt, **8 davon in
+D21s Mechanik**, und Runde 3 fand erneut Blocker in genau dem, was Runde 2 gefixt hatte —
+die Abbruchbedingung des `sprint-review`-Skills §4. Die Ursache ist nicht schlechte
+Planung, sondern dass hier drei gekoppelte Unbekannte stecken (Vergleichsbasis,
+Formatmigration, Verhältnis zur Whitelist), die ein Arbeitspaket nicht auflöst.
+
+**Warum `git diff --quiet` als Mechanismus nicht trägt:** `check_compat.sh` existiert per
+Header, um gegen eine *neue/Beta*-Instanz zu laufen. Andere Instanz ⇒ anderes App-Set ⇒
+andere erfasste Modelle. Ein Vergleich, der auf jede Abweichung failt, bricht beim ersten
+legitimen Einsatz falsch ab — in beide Richtungen. Live belegt: das Manifest ist
+**abdeckungs-**, nicht driftbegrenzt. `res.company` fehlt darin, obwohl
+`odoo_actions.py:182` es anlegt (S16); `hr.leave*` fehlt, weil `hr_holidays` auf
+demo-test5 uninstalled ist. Beides auch nach der S17-Regenerierung.
+
+**Durchgearbeiteter Entwurfsstand (3 Runden geprüft, Startpunkt des Spikes):**
+
+| Fall | Verdikt |
+|---|---|
+| Neues Feld in einem Modell, das **beide** Manifeste kennen | Exit 1 (echtes Drift-Signal) |
+| Modell nur im neuen Lauf | Report, Exit 0 (App-Set-Unterschied) |
+| Modell/Feld nur im committeten Stand | Report, Exit 0 (Abdeckung ist instanzabhängig) |
+| Manifest-Feld ohne `FIELD_COMPAT_WHITELIST`-Eintrag | Report, Exit 0 (nie failend) |
+| Committete Datei in alter flacher Form | Exit 2 (Migration, kein Drift) |
+
+Mechanik: `dump_captured_fields(path, meta=None)` schreibt
+`{"_meta": {"odoo_version", "installed_wanted_modules"}, "models": {…}}` — kein Host, kein
+DB-Name, kein Zeitstempel (Diff-Rauschen). Zielpfad aus `ODOO_GENERATOR_MANIFEST_OUT`,
+relativ zu `_ROOT`; `check_compat.sh` lenkt auf `field_manifest.new.json` (gitignored) und
+ruft `scripts/compare_manifest.py` **vor** jeder PASS-Ausgabe, mit
+`if ! python3 …; then …; fi` statt auf `set -e` zu bauen. Kein `subprocess` in
+`compare_manifest.py` — CI fährt `bandit -r .` über `scripts/`, B404/B603/B607 sind nicht
+geskippt. Der Whitelist-Report ersetzt den heutigen manuellen PASS-Schritt 1, der gegen ein
+*drittes* Artefakt vergleicht und sonst ersatzlos verschwände.
+
+**Die drei offenen Punkte, an denen Runde 3 hängen blieb — hier beginnt der Spike:**
+1. **Migrationsreihenfolge.** Der Migrations-Commit muss **vor** der Abnahmeliste liegen,
+   sonst stellt deren `git checkout field_manifest.json` die alte flache Form wieder her.
+   Migrationslauf und Exit-2-Abnahmezweig sind zudem dasselbe Ereignis.
+2. **Frische-Garantie.** `field_manifest.new.json` ist gitignored und wird nur manuell
+   gelöscht. Greift `ODOO_GENERATOR_MANIFEST_OUT` einmal nicht, schreibt der Dump wieder
+   in-place und verglichen wird gegen ein altes `.new`: Exit 0, PASS, Vergleichsbasis still
+   überschrieben — exakt die Fehlerklasse, gegen die D21 antritt. Zwei Regeln schließen sie:
+   `.new` muss von *diesem* Lauf stammen, und ein leeres `models` ist nie ein Erfolg.
+3. **`_meta.odoo_version` hat keinen Leser.** `test_suite.py` kennt die Odoo-Version heute
+   nicht (`grep -i version` → null Treffer); der Spike beschafft sie per
+   `odoo_actions.get_server_version`. Der manuelle `LAST_VERIFIED_VERSION`-Schritt
+   (`check_compat.sh:39-42`) bleibt sonst ohne Eingabe.
+
+**Zusätzlich zu klären:** ob Punkt 3 unten (Whitelist ablösen) mit dem Whitelist-Report
+zusammenfällt, und ob `model#method`-Schlüssel überhaupt whitelistfähig sind
+(`odoo_actions.py:693-712` sagt nein). Gemessen: 18 der 39 Manifest-Schlüssel haben keinen
+Whitelist-Eintrag.
+
+---
+
+**Fix (ursprüngliche Reihenfolge nach Kosten, Punkt 1 durch den Zuschnitt oben ersetzt):**
+1. ~~`git diff --quiet field_manifest.json`~~ — siehe Zuschnitt oben. Der Vergleich bleibt
+   das Ziel, aber asymmetrisch und mit `_meta`, nicht als Einzeiler.
 2. Denselben Vergleich in CI, gegen eine Referenzinstanz. Braucht eine Entscheidung, wo die
    Zugangsdaten liegen — siehe die Einschränkung „keine Firmen-IT" — deshalb nicht Teil von 1.
 3. Erwägen, ob `FIELD_COMPAT_WHITELIST` (`odoo_actions.py`) noch eigenständig gepflegt werden
    muss, wenn das Manifest verlässlich aktuell ist. R5/WP1 nannte die Whitelist bereits als
    „von Hand kuratiert und nachweislich unvollständig".
 
-**Komplexität:** Punkt 1 klein · **Benefit:** Hoch — stellt eine Sicherungsmaßnahme wieder
-her, die es nominell schon gab.
+**Komplexität:** eigener Spike, nicht klein · **Benefit:** Hoch — stellt eine
+Sicherungsmaßnahme wieder her, die es nominell schon gab.
 
 ### D20 ⚪ `ModuleSelections.get` strikt machen
 
@@ -483,7 +530,7 @@ Jedes Arbeitspaket endet mit grüner `test_suite.py` gegen die Live-Instanz
 
 ### Abgeschlossen
 
-S1–S16 sind umgesetzt und in `main`. Diese Tabelle nennt nur noch, was ein Sprint
+S1–S18 sind umgesetzt und in `main`. Diese Tabelle nennt nur noch, was ein Sprint
 enthielt — Begründung, Review-Verlauf, Testzahlen und PR-Links stehen in
 [`SPRINT_LOG.md`](odoo-daten-generator/SPRINT_LOG.md), die Item-Statusblöcke in
 [`ROADMAP_ARCHIVE.md`](ROADMAP_ARCHIVE.md).
@@ -507,33 +554,33 @@ enthielt — Begründung, Review-Verlauf, Testzahlen und PR-Links stehen in
 | **S15** Analytic Accounting | R20 |
 | **S16** Multicompany | R17 — N Firmen, Kontext-Scoping, `STATUS_PARTIAL` |
 | **S17** Schema-Härtung | D5 (10 typisierte Modul-Configs), D16 (`partner_company_ids`), D8-Teil |
+| **S18** Namens-Hygiene | D6 (`gemini` → `llm`, Feld gelöscht), D8 abgeschlossen (D21 nach 3 Review-Runden ausgegliedert) |
 
-### Offene Kandidaten für S18+
+### Offene Kandidaten für S19+
 
 Kein Sprint festgelegt. Nach Priorität:
 
 | Prio | Item | Kurz |
 |---|---|---|
-| 🟠 | **D21** | `field_manifest.json`-Drift erzwingen (Manifest war seit S11 blind) |
+| 🟠 | **D21** | `field_manifest.json`-Drift erzwingen — **eigener Spike**, siehe Zuschnitt im D21-Abschnitt |
 | 🟠 | **R1** | PDF P3/P4 |
 | 🟠 | **R5** | Übersetzungs-Registry (WP3, in S11 zurückgestellt) |
 | 🟠 | **R14** | Wareneingangs-Anteil (Quant-Anteil erledigt) |
-| 🟡 | **D6** | `gemini` → `llm` |
 | 🟡 | **D17** | Breite `except Exception` gezielt verengen |
 | 🟡 | **R6** | Multi-Country Customer/Supplier |
-| ⚪ | **D8** | Kleinigkeiten (2 offene Punkte) |
 | ⚪ | **D18** | Paketstruktur — bewusst zurückgestellt, eigenes WP |
 | ⚪ | **D20** 🔒 | Striktes `ModuleSelections.get` (aus S17 ausgegliedert) |
 
-**Empfehlung: D21 zuerst, dann D6.** D21 ist Punkt 1 seines Fix-Blocks — wenige Zeilen in
-`scripts/check_compat.sh` — und stellt eine Sicherungsmaßnahme wieder her, die nominell seit
-S11 existiert und tatsächlich nie gegriffen hat. Solange sie fehlt, arbeitet jeder
-Versions-Check mit einem Instrument, dessen Blindheit niemand bemerkt.
+**Empfehlung: D21 als eigener Spike, nicht als Arbeitspaket eines gemischten Sprints.**
+Die frühere Fassung dieser Empfehlung nannte D21 „wenige Zeilen in
+`scripts/check_compat.sh`" — S18 hat das widerlegt: drei kalte Review-Runden, 8 harte
+Blocker allein in D21s Mechanik, Abbruchbedingung des `sprint-review`-Skills §4 ausgelöst.
+Der durchgearbeitete Entwurfsstand und die drei verbliebenen offenen Punkte stehen im
+D21-Abschnitt oben; dort beginnen, nicht neu herleiten.
 
-Danach D6. Es ist derselbe Typ mechanischer Rename wie S17s D16, und
-S17 hat dafür ein wiederverwendbares Verfahren hinterlassen — Sicherungsnetz auf `main` vor
-der ersten Refactor-Zeile, dann Regel-plus-Suchbefehl statt Fundstellenliste. `D6` berührt
-`RunContext.gemini_model_name`, also erneut `config.py` 🔒.
+**Was das für die Reihenfolge heißt:** ein Sprint, der D21 enthält, sollte **nur** D21
+enthalten, bis dessen drei offene Punkte entschieden sind. Alles andere in dieser Tabelle
+ist unabhängig davon lieferbar.
 
 ### Pro Arbeitspaket verbindlich
 

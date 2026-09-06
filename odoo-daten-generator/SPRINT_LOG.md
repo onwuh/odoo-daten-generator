@@ -476,3 +476,80 @@ Zwei Umsetzer-Läufe brachen an Nutzungslimits ab, beide mitten in WP3. Weil pro
 committet wurde, ging in beiden Fällen nichts verloren — der Wiederaufsetzpunkt war aus
 `git log` und `git status` in unter einer Minute rekonstruierbar. Für lange Refactors
 bestätigt das die Ein-Commit-pro-WP-Regel als Kosten-, nicht Stilfrage.
+
+---
+
+## S18 — Namens-Hygiene (D6 + D8), 2026-09-06
+
+### Planung: drei kalte Runden, und ein Item, das kein Arbeitspaket war
+
+Geplant nach dem `sprint-review`-Verfahren. Ausgangspunkt war `ROADMAP.md`s eigene
+Empfehlung „D21 zuerst, dann D6", also ein Sprint aus D21/Punkt 1 + D6 + den zwei offenen
+D8-Punkten.
+
+| Runde | Blocker | Should-Fix | Wo die Blocker lagen |
+|---|---|---|---|
+| 1 | 6 | 7 | 4 in D21s Mechanik, 1 in der WP3-Ausnahmeliste, 1 in der Testregistrierung |
+| 2 | 4 | 13 | 3 in D21s Mechanik, 1 falsches „live geprüft = ja" |
+| 3 | 3 | 14 | 2 in D21s Mechanik, 1 im Sicherungsnetz-Entwurf |
+
+**8 der 13 Blocker lagen in D21.** Runde 3 fand sie erneut in genau dem, was Runde 2
+gefixt hatte — die Formwechsel-Bedingung des `sprint-review`-Skills §4. Der Plan war zu
+diesem Zeitpunkt bereits in Register-plus-Matrix-Form, der dort vorgesehene Ausweg also
+schon genutzt. Die richtige Konsequenz war deshalb nicht Runde 4, sondern **D21 aus dem
+Sprint herauszulösen**: es sind drei gekoppelte Unbekannte (Vergleichsbasis,
+Formatmigration, Verhältnis zur Whitelist), die ein Arbeitspaket nicht auflöst. Der
+Reviewer der dritten Runde kam unabhängig zum selben Schluss und schrieb ihn ungefragt an
+den Anfang seines Berichts.
+
+Die drei Runden waren trotzdem nicht verloren: der durchgearbeitete D21-Entwurf steht mit
+allen Belegen und den drei verbliebenen offenen Punkten in `ROADMAP.md`s D21-Abschnitt und
+ist der Startpunkt des Spikes.
+
+### Was die Runden inhaltlich fanden
+
+Drei Befunde hätten echten Schaden angerichtet:
+
+1. **Runde 1:** die WP-Ausnahmeliste für den Rename nannte drei falsche Belege. Einer davon
+   hätte `_ini(parser, "gemini", …)` in `server_config.py:77,78` umbenannt — das ist ein
+   `config.ini`-Sektionsname, der Rename hätte still das Lesen bestehender
+   Betreiber-Konfigurationen gebrochen. Unter einer Prämisse „null Verhaltensänderung".
+2. **Runde 1:** das Abschlusskriterium war ein `\bgemini\b`-Grep. Der sieht
+   `gemini_stages_map` (3× Produktionscode, `modules/project.py`) nicht — der Sprint hätte
+   Erfolg gemeldet und Produktionscode zurückgelassen.
+3. **Runde 3:** der geplante Sicherungsnetz-Entwurf war unkonstruierbar. Er sollte
+   `RunContext`-Feldwerte einfrieren, während WP1 genau eines dieser Felder löscht. Der
+   Fund führte zur besseren Lösung: **S17s bestehendes Netz** ist für einen Rename bereits
+   das richtige Instrument (Netz B hält aufgezeichnete Odoo-Call-Sequenzen, nicht
+   Feldwerte). Kein neues Netz gebaut — die billigere und stärkere Variante.
+
+Nebenher fanden alle drei Runden stale Zeilennummern in `ROADMAP.md` (`:35`, `:51`, `:52`)
+und meldeten sie als harte Blocker für inhaltlich richtige Aussagen. Das ist der
+messbare Preis dafür, Fundstellen als Zeilennummern statt als Suchbefehle zu dokumentieren.
+
+### 🔒-Freigabe
+
+`RunContext.gemini_model_name` löschen statt umbenennen berührt das Config-Schema.
+Freigabe vom Architekten am 2026-09-06 in der Planungssitzung erteilt, auf Basis des
+Befunds, dass das Feld repoweit **null Lesestellen** hat. Hier festgehalten, weil eine
+Chat-Freigabe für einen Cold-Reviewer sonst nicht nachprüfbar ist — Runde 3 hat genau das
+angemerkt.
+
+### Ergebnis
+
+Offline-Suite **494/494** (493 vorher, +1 durch den neuen Pattern-3-Test),
+Live-Integration gegen `demo-test5` **95/95**, `ruff` und `bandit` sauber. S17s Goldens
+über alle drei WPs unverändert grün — der eigentliche Rename-Nachweis.
+
+WP3 zusätzlich live gegengeprüft: mit Anbieter=*Gemini* und einem `gsk_`-Schlüssel geht der
+Request an `generativelanguage.googleapis.com` statt an Groq. Der Unit-Test bleibt der
+formale Nachweis (ein Live-Klick kann ihn nicht ersetzen, weil `connect_service.py:330`
+`result.llm_provider` erst nach erfolgreichem Ping setzt), aber die Gegenprobe zeigt, dass
+die Wahl durch die ganze Kette trägt.
+
+### Nebenbefund
+
+`bandit.yaml`s B101-Skip war gegenstandslos: seine Begründung nannte `test_mrp_live.py`,
+das S17 gelöscht hat, und bandit läuft ohne den Skip grün. Entfernt, statt die falsche
+Begründung umzuschreiben — eine Sicherheits-Lint-Unterdrückung, die nichts unterdrückt,
+erzeugt nur den Eindruck, es gäbe dort etwas zu dulden.

@@ -81,7 +81,7 @@ Single entry point: `web/app.py` (FastAPI; browser UI in `static/` is
 | `static/` | `index.html` / `app.js` / `app.css` — split apart, CSP forbids inline |
 | `config.py` | Dataclasses: DemoCriteria, ModuleSelections, RunContext |
 | `llm_service.py` | LLMService: Groq (primary) + Gemini (fallback), seed caching |
-| `odoo_client.py` | Low-level HTTP wrapper, JSON2 API, payload-format fallbacks |
+| `odoo_client.py` | Low-level HTTP wrapper, JSON2 API (one request format per operation, no fallback chain) |
 | `odoo_actions.py` | Shared cross-module helpers (installed modules, feature flags, company info) |
 | `odoo_repository.py` | Batch reference-data lookups (countries, skill levels) — avoids N+1 |
 | `fallback_data.py` | Static fallback names when LLM unavailable |
@@ -114,7 +114,11 @@ tasks claim timesheet budget first).
   names, street names, text bodies (chatter, job summaries). Never request complete import
   structures (nested records, addresses, emails, phones, prices, dates). All structure/
   derivable values assembled deterministically in code. See ROADMAP.md §1.
-- **Primary:** Groq (`llama-3.3-70b-versatile`), OpenAI-compatible endpoint
+- **Primary:** Groq, OpenAI-compatible endpoint. The frontend's default model is
+  `qwen/qwen3.8-27b` (`static/index.html`); `llama-3.3-70b-versatile` 404s since
+  2026-08-28 — Groq retires models silently, so never hardcode a model name in docs
+  without checking the frontend default. A successful ping does not prove a model can
+  hold the JSON prompts.
 - **Fallback:** Google Gemini
 - **Caching:** `seeds/cache/<slug-parts>_<_PROMPT_VERSION>.json` (e.g.
   `it_dienstleistung_german_name_suggestions_v3.json`). Always check cache before LLM
@@ -173,24 +177,35 @@ for behaviour unverifiable without side effects, but don't replace live integrat
 
 ## Current Sprint
 <!-- Architect updates this before each Claude Code session -->
-**Stand 2026-09-06: S1–S17 abgeschlossen und in `main`.** Zuletzt S17 (Schema-Härtung) über
-[PR #37](https://github.com/pahuodoo/odoo-daten-generator/pull/37) — D5 (die 10 dict-Felder
-von `ModuleSelections` sind je eine `Optional[<X>Config] = None`-Dataclass) und D16
-(`ctx.company_ids` → `partner_company_ids`), plus zwei D8-Teilpunkte. Null
-Verhaltensänderung, belegt durch ein Sicherungsnetz, das vor der ersten Refactor-Zeile auf
-`main` erzeugt und danach nicht mehr angefasst wurde.
+**Stand 2026-09-06: S1–S18 abgeschlossen.** S18 (Namens-Hygiene) hat D6 erledigt
+(`gemini` → `llm` als Parametername, `RunContext.gemini_model_name` ersatzlos gelöscht)
+und D8 auf null offene Punkte gebracht (Anbieter-Auswahlfeld im Frontend; der
+Orchestrator-Punkt wurde geprüft und verworfen).
 
-**Zwei Konventionen aus S17, die beim Weiterarbeiten gelten:**
-- **Objekt vorhanden = Feature aktiv.** `ModuleSelections.<feld> is None` heißt „aus". Die
-  früheren `enabled`-Schlüssel gibt es nicht mehr. In Tests wird ein abgeschaltetes Feature
-  als `<feld>=None` geschrieben, **nie** als `<X>Config()` — ein defaultkonstruiertes Objekt
-  ist truthy und schaltet das Feature ein.
-- **Dataclass-Defaults sind die Fallbacks der Lesestellen** in `modules/`, nicht die
-  Payload-Defaults aus `run_config.build_selections`. Die Herkunft steht als Docstring an
-  jeder Config-Dataclass. Wer einen Default ändert, ändert Testverhalten, nicht
-  Produktionsverhalten — im Produktionspfad setzt `build_selections` immer alle Werte.
+**Drei Konventionen, die beim Weiterarbeiten gelten:**
+- **Der LLM-Parameter heißt `llm`.** Nicht mehr `gemini`. Vier Fundstellen behalten den
+  alten Namen bewusst und dürfen nicht "mit aufgeräumt" werden: `server_config.py:77,78`
+  (`[gemini]` ist ein `config.ini`-Sektionsname — Umbenennen bricht still bestehende
+  Betreiber-Konfigurationen), `connect_service.py:187,189` (Provider-Literale),
+  `llm_service.py:91,121` und `:6,78` (meinen tatsächlich Gemini als Fallback-Provider),
+  `static/index.html` (Anzeigetext).
+- **Objekt vorhanden = Feature aktiv** (aus S17). `ModuleSelections.<feld> is None` heißt
+  „aus". In Tests wird ein abgeschaltetes Feature als `<feld>=None` geschrieben, **nie**
+  als `<X>Config()` — ein defaultkonstruiertes Objekt ist truthy.
+- **Dataclass-Defaults sind die Fallbacks der Lesestellen** in `modules/` (aus S17), nicht
+  die Payload-Defaults aus `run_config.build_selections`. Wer einen Default ändert, ändert
+  Testverhalten, nicht Produktionsverhalten.
 
-**Kein Sprint für S18 festgelegt.** Offene Kandidaten nach Priorität: `ROADMAP.md` §5.
+**Sicherungsnetz für mechanische Refactorings:** `tests/unit/test_selection_snapshot_unit.py`
+(S17) hält zwei Invarianten — Netz A (`asdict(ModuleSelections)`) und Netz B (aufgezeichnete
+Odoo-Call-Sequenz je Modul), beide gegen Goldens unter `tests/unit/fixtures/`. Für einen
+Rename ist das der richtige Nachweis; ein neues Netz zu bauen war in S18 nachweislich
+unnötig. Wird ein Golden rot, ist die Produktionsänderung falsch — nicht das Golden.
+
+**Kein Sprint für S19 festgelegt.** Nächster Kandidat laut `ROADMAP.md` §5: **D21** — in
+S18 aus dem Sprint herausgelöst, weil drei Cold-Review-Runden zeigten, dass es kein
+Arbeitspaket, sondern ein eigener Spike ist. Der durchgearbeitete Entwurfsstand samt der
+drei offenen Punkte steht in `ROADMAP.md`s D21-Abschnitt.
 
 Wo was steht: Sprint-Verlauf und Peer-Review-Ergebnisse in `odoo-daten-generator/SPRINT_LOG.md`, Item-Statusblöcke und die WP-Sequenzen abgeschlossener Sprints in `ROADMAP_ARCHIVE.md`, offene Arbeit in `ROADMAP.md`. Vor jedem Sprint-Plan und jeder Review-Runde den `sprint-review`-Skill aufrufen (siehe Planning-document rule 1 oben).
 
@@ -216,11 +231,11 @@ mock_client.create.assert_not_called()
 ```
 
 ### Pattern 2: LLM None-Response Guard
-Every function calling LLM (directly or via `gemini.*`) MUST test:
+Every function calling LLM (directly or via the `llm` service object) MUST test:
 - LLM returns `None` → no AttributeError on caller
 - LLM returns `{}` or `[]` → fallback used or step skipped gracefully
 ```python
-mock_gemini.fetch_xyz.return_value = None
+mock_llm.fetch_xyz.return_value = None
 # must not raise
 ```
 

@@ -12,10 +12,6 @@ skips:
   # random.random call in modules/ and pdf_factory.py trips this, 96 hits,
   # zero of them security-relevant.
   - B311
-  # assert_used: the only live hits are in test_mrp_live.py, a throwaway
-  # live-debug script (own file header: "Delete this file after all steps
-  # pass") — not production code.
-  - B101
   # try_except_pass / try_except_continue: the current instances are
   # deliberate graceful-degradation (modules/mrp.py's quality-module probe,
   # odoo_client.py's HTTP retry body read, odoo_actions.py's per-model

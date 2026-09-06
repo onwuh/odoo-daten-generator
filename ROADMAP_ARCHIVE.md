@@ -3162,3 +3162,72 @@ Drei Cold-Review-Runden vor der ersten Code-Zeile (Verlauf: `SPRINT_LOG.md`).
 weiterhin Erfolg an `on_module_done` gemeldet, ohne je eine `.get()`-Zeile zu erreichen.
 Sie entziehen sich damit genau der `AttributeError`-Absicherung, auf die ein solcher
 Typ-Refactor sich sonst stützt. Gefunden in Cold-Review Runde 1.
+
+
+---
+
+### D6 ✅ Namens-Hygiene: `gemini` → `llm` — erledigt (S18, 2026-09-06)
+
+Ursprünglicher Text: *„Parameter heißt in allen Modulsignaturen `gemini`, Provider ist
+primär Groq; `RunContext.gemini_model_name` ist ungenutztes Erbe. Umbenennen (`llm`,
+`llm_model_name`), rein mechanisch."*
+
+**Umgesetzt in zwei Schritten.** WP1: `RunContext.gemini_model_name` **gelöscht**, nicht
+umgebannt — das Feld hatte repoweit null Lesestellen, war also write-only; damit wurde der
+`llm_model_name`-Parameter tot und fiel mit weg (beide `run_config.py`-Signaturen, die
+Weiterreichung aus `build_context_list`, vier Aufrufstellen in `web/`). Config-Schema ist
+🔒; Architekten-Freigabe zum Löschen statt Umbenennen am 2026-09-06 erteilt.
+WP2: 231 Bezeichner in 32 Dateien — das bare `gemini` plus die zusammengesetzten
+`gemini_stages_map`, `mock_gemini`, `gemini_empty`. Dazu 11 Prosa-Zeilen, die den
+Fallback-Provider als Namensgeber für die LLM-Schicht benutzten.
+
+**Vier Fundstellen bleiben bewusst stehen** und dürfen nicht „mit aufgeräumt" werden:
+`server_config.py:77,78` (`[gemini]` ist ein `config.ini`-Sektionsname — Umbenennen bricht
+still bestehende Betreiber-Konfigurationen), `connect_service.py:187,189`
+(Provider-Literale), `llm_service.py:91,121` und `:6,78` (meinen tatsächlich Gemini als
+Fallback-Provider), `static/index.html` (Anzeigetext).
+
+**Nachweis ohne neues Sicherungsnetz.** S17s bestehendes Netz war bereits das richtige
+Instrument: Netz A (`asdict(ModuleSelections)`) und Netz B (aufgezeichnete
+Odoo-Call-Sequenz je Modul) blieben mit **unveränderten Goldens** grün. Kein Golden konnte
+sich bewegen — kein Modul las das gelöschte Feld je. Ein eigens gebautes Netz über
+`RunContext`-Feldwerte wäre sogar unkonstruierbar gewesen, weil WP1 eines dieser Felder
+löscht.
+
+---
+
+### D8 ✅ Kleinigkeiten — abgeschlossen (S18)
+
+**Abgeschlossen 2026-09-06 mit S18** — 6 erledigt, 2 geprüft und verworfen, **0 offen**:
+
+- ✅ **Erledigt (S17/WP5):** `test_mrp_live.py` gelöscht, nicht verschoben. Alle vier geprüften Funktionen sind in `tests/integration/test_mrp.py` abgedeckt, kein Runner rief das Skript auf, und sein eigener Docstring ordnete die Löschung an („Delete this file after all steps pass").
+- ✅ **Erledigt (S17, war ohnehin stale):** der `.claude/worktrees/docker-autoupdate/`-Punkt. `git worktree list` zeigt nur `main`, `.claude/worktrees/` ist leer — der Worktree existierte zum Zeitpunkt der Erfassung schon nicht mehr.
+- ✅ **Erledigt (S17/WP2):** `# Besitzer:`-Zeilen in `config.py` für die Felder mit mehr als einem Schreiber. Korrigierte Liste gegenüber der ursprünglichen Erfassung: `supplier_ids` (2), `bill_ids` (2), `product_ids` (5), `partner_company_ids` (4) und **`analytic_account_ids`** (2, fehlte). **`confirmed_order_ids` gehörte nie dazu** — viele Leser, aber genau ein Schreiber (`sale.py:121`).
+- ⚪ **Geprüft und verworfen (2026-09-05):** Lint-Ausbau `ruff --select B,C901` gemessen — 97 Treffer (56 × C901, 41 × B: B905 19, B008 10, B904 7, B007 3, B023 2). **Kein einziger echter Bug** darunter: C901 feuert flächig auf die absichtlich langen prozeduralen Modul-Dateien (400–550 Zeilen), beide B023-Fälle liegen in Tests und sind harmlos (Closure wird noch in derselben Schleifen-Iteration aufgerufen). Kein eigenes Item — `ruff.toml`s `select = ["F"]`-Begründung bleibt gültig. Hier notiert, damit der Vorschlag nicht ungemessen wiederkehrt.
+- ✅ **Erledigt (durch Umbau, nicht gezielt):** die ursprüngliche `odoo_client._post:46`-Stelle mit dem immer-wahren `response is not None`-Check existiert so nicht mehr — `odoo_client.py`s Fehlerbehandlung wurde in S9/S10 komplett umgebaut (`_record_failure`-Frame-Stack). Die verbleibenden `response is not None`-Checks (z. B. `create_batch`s HTTPError-Handler, `has_create_access`) sind echte Null-Checks, keine toten Bedingungen mehr.
+- ✅ **Erledigt:** `LLMService.ping()` existiert (`llm_service.py:262`) und wird von `connect_service.py:245` verwendet — ohnehin gegenstandslos, da `gui.py` seit S9 komplett entfernt ist.
+- ✅ **Erledigt (S18/WP3):** die Provider-Wahl hat ein Feld. Die Backend-Kette existierte bereits vollständig — `connect_service.detect_provider(llm_key, explicit)` (`:186`), `probe(llm_provider=…)`, `web/app.py` liest `body.get("llm_provider")`, `web/session.py` speichert, `web/jobs.py` löst für den Lauf erneut auf; es fehlte nur das Frontend-Feld. Default „Automatisch" lässt das Feld im Request weg, damit snifft `detect_provider` wie bisher am `gsk_`-Präfix. Die alte Fundstellenangabe `connect_service.py:126` war stale, korrekt ist `:189`.
+- ⚪ **Geprüft und verworfen (2026-09-06, S18):** der unconditional `fetch_name_suggestions`-Aufruf (`orchestrator.py:61`, nicht `:54` — auch diese Nummer war stale). Drei Befunde entkräften den Punkt: (a) der Aufruf endet in `_cached_llm_call` (`llm_service.py:337`), Wiederholungsläufe lesen eine JSON-Datei statt das LLM zu fragen; (b) **sieben** Module lesen `ctx.name_banks` unabhängig von `skip_master_data` (`master_data`, `crm`, `hr`, `project`, `mrp`, `accounting`, `purchase`); (c) die beiden Fallback-Seeder laufen bei `orchestrator.py:70-71` **außerhalb** des Gates und lesen `name_banks` (`:146,159`). Das in der ursprünglichen Erfassung genannte `skip_master_data`-Gate ist damit das falsche Gate — ein korrektes wäre „braucht irgendein gewähltes Modul die Namensbänke", was in nahezu jeder realen Konfiguration wahr ist. Hier notiert, damit der Vorschlag nicht ungemessen wiederkehrt.
+
+
+---
+
+### S18 — WP-Sequenz (Namens-Hygiene: D6, D8), abgeschlossen 2026-09-06
+
+Geplant nach dem `sprint-review`-Verfahren, drei kalte Review-Runden (6 / 4 / 3 Blocker).
+**D21 war ursprünglich WP1 und wurde nach Runde 3 herausgelöst** — 8 der 13 Blocker lagen
+in seiner Mechanik, und Runde 3 fand erneut Blocker in genau dem, was Runde 2 gefixt hatte
+(Abbruchbedingung `sprint-review`-Skill §4). Der durchgearbeitete Entwurfsstand steht in
+`ROADMAP.md`s D21-Abschnitt, nicht hier — D21 ist weiter offen.
+
+| WP | Inhalt | Nachweis |
+|---|---|---|
+| WP1 | `RunContext.gemini_model_name` löschen, `llm_model_name`-Parameter mit | Unit 493/493, Live 95/95; S17-Goldens unverändert |
+| WP2 | `gemini` → `llm` als Bezeichner (231 Stellen) + 11 Prosa-Zeilen | Unit 493/493, Live 95/95; S17-Goldens unverändert |
+| WP3 | Anbieter-Auswahlfeld im Frontend (D8) | Unit 494/494 (neuer P3-Test), Live 95/95; live gegengeprüft: Anbieter=Gemini + `gsk_`-Schlüssel → Request geht an `generativelanguage.googleapis.com` |
+| WP4 | Doku: `ROADMAP.md`, `ROADMAP_ARCHIVE.md`, `SPRINT_LOG.md`, `CLAUDE.md`, `bandit.yaml` | — |
+
+**Nebenbefund aus WP4:** `bandit.yaml`s B101-Skip war gegenstandslos — seine Begründung
+nannte `test_mrp_live.py`, das S17 gelöscht hat, und bandit läuft ohne den Skip grün (null
+Treffer). Entfernt statt die falsche Begründung umzuschreiben; eine Sicherheits-Lint-
+Unterdrückung, die nichts unterdrückt, soll nicht dastehen.
