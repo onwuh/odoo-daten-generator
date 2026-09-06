@@ -3214,6 +3214,10 @@ löscht.
 
 ### S18 — WP-Sequenz (Namens-Hygiene: D6, D8), abgeschlossen 2026-09-06
 
+> **Merge-Vorbehalt:** dieser Eintrag ist vorab geschrieben; S18 liegt beim Verfassen auf
+> `s18-namens-hygiene`. Planning-document rule 3 verlangt den Umzug *beim* Merge — beim
+> Mergen prüfen, dass diese Zeile entfernt wird.
+
 Geplant nach dem `sprint-review`-Verfahren, drei kalte Review-Runden (6 / 4 / 3 Blocker).
 **D21 war ursprünglich WP1 und wurde nach Runde 3 herausgelöst** — 8 der 13 Blocker lagen
 in seiner Mechanik, und Runde 3 fand erneut Blocker in genau dem, was Runde 2 gefixt hatte

@@ -177,7 +177,8 @@ for behaviour unverifiable without side effects, but don't replace live integrat
 
 ## Current Sprint
 <!-- Architect updates this before each Claude Code session -->
-**Stand 2026-09-06: S1–S18 abgeschlossen.** S18 (Namens-Hygiene) hat D6 erledigt
+**Stand 2026-09-06: S1–S17 in `main`, S18 fertig auf `s18-namens-hygiene` (noch nicht
+gemerged).** S18 (Namens-Hygiene) hat D6 erledigt
 (`gemini` → `llm` als Parametername, `RunContext.gemini_model_name` ersatzlos gelöscht)
 und D8 auf null offene Punkte gebracht (Anbieter-Auswahlfeld im Frontend; der
 Orchestrator-Punkt wurde geprüft und verworfen).

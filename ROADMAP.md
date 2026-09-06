@@ -530,7 +530,7 @@ Jedes Arbeitspaket endet mit grüner `test_suite.py` gegen die Live-Instanz
 
 ### Abgeschlossen
 
-S1–S18 sind umgesetzt und in `main`. Diese Tabelle nennt nur noch, was ein Sprint
+S1–S17 sind umgesetzt und in `main`; **S18 liegt auf `s18-namens-hygiene` und ist noch nicht gemerged** — diese Zeile und der Archiv-Eintrag werden mit dem Merge nachgezogen (Planning-document rule 3). Diese Tabelle nennt nur noch, was ein Sprint
 enthielt — Begründung, Review-Verlauf, Testzahlen und PR-Links stehen in
 [`SPRINT_LOG.md`](odoo-daten-generator/SPRINT_LOG.md), die Item-Statusblöcke in
 [`ROADMAP_ARCHIVE.md`](ROADMAP_ARCHIVE.md).
