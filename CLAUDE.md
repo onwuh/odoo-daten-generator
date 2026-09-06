@@ -173,12 +173,12 @@ for behaviour unverifiable without side effects, but don't replace live integrat
 
 ## Current Sprint
 <!-- Architect updates this before each Claude Code session -->
-**Stand 2026-09-06: S1–S17 abgeschlossen.** S17 (Schema-Härtung) liegt auf Branch
-`s17-schema-haertung`, noch nicht in `main` — D5 (die 10 dict-Felder von `ModuleSelections`
-sind je eine `Optional[<X>Config] = None`-Dataclass) und D16 (`ctx.company_ids` →
-`partner_company_ids`), plus zwei D8-Teilpunkte. Null Verhaltensänderung, belegt durch ein
-Sicherungsnetz, das vor der ersten Refactor-Zeile auf `main` erzeugt und danach nicht mehr
-angefasst wurde.
+**Stand 2026-09-06: S1–S17 abgeschlossen und in `main`.** Zuletzt S17 (Schema-Härtung) über
+[PR #37](https://github.com/pahuodoo/odoo-daten-generator/pull/37) — D5 (die 10 dict-Felder
+von `ModuleSelections` sind je eine `Optional[<X>Config] = None`-Dataclass) und D16
+(`ctx.company_ids` → `partner_company_ids`), plus zwei D8-Teilpunkte. Null
+Verhaltensänderung, belegt durch ein Sicherungsnetz, das vor der ersten Refactor-Zeile auf
+`main` erzeugt und danach nicht mehr angefasst wurde.
 
 **Zwei Konventionen aus S17, die beim Weiterarbeiten gelten:**
 - **Objekt vorhanden = Feature aktiv.** `ModuleSelections.<feld> is None` heißt „aus". Die
