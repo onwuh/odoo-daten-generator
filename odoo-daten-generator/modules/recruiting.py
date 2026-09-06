@@ -222,13 +222,13 @@ def create_applicant(client, job_id, name, email, phone, skill_ids=None, stage_i
 def create_recruiting_data(client, gemini, ctx: RunContext) -> None:
     """Creates skill taxonomy, jobs (with descriptions), and applicants."""
     rec_config = ctx.module_selections.hr_recruitment
-    if not isinstance(rec_config, dict):
+    if rec_config is None:
         return
-    num_jobs = rec_config.get("num_jobs", 0)
-    num_candidates = rec_config.get("num_candidates", 0)
-    create_skills = rec_config.get("create_skills", False)
-    num_skill_types = rec_config.get("num_skill_types", 0)
-    skills_per_type = rec_config.get("skills_per_type", 0)
+    num_jobs = rec_config.num_jobs
+    num_candidates = rec_config.num_candidates
+    create_skills = rec_config.create_skills
+    num_skill_types = rec_config.num_skill_types
+    skills_per_type = rec_config.skills_per_type
 
     if num_jobs <= 0 and num_candidates <= 0:
         return

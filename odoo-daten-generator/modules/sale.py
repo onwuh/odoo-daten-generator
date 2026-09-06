@@ -153,7 +153,7 @@ def _assign_analytic_distribution(client, ctx: RunContext) -> None:
     invoice lines (live-confirmed to propagate automatically).
     """
     analytic_sel = ctx.module_selections.analytic
-    sale_pct = int(analytic_sel.get("sale_pct", 0)) if analytic_sel.get("enabled") else 0
+    sale_pct = analytic_sel.sale_pct if analytic_sel else 0
     if sale_pct <= 0 or not ctx.confirmed_order_ids:
         return
     account_ids = odoo_actions.get_or_create_analytic_accounts(client, ctx)

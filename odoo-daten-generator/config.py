@@ -15,6 +15,163 @@ class DemoCriteria:
     num_storables: int
 
 
+# ---------------------------------------------------------------------------
+# Per-module configuration blocks (D5)
+#
+# One dataclass per formerly-untyped dict field of ModuleSelections. A typo in
+# a key used to be invisible: `cfg.get("num_prodcuts", 0)` silently returned
+# the fallback and the module quietly did nothing. The attribute access below
+# raises instead.
+#
+# DEFAULT RULE — read this before changing any value here:
+# every default is the FALLBACK OF THE READ SITE in modules/, never the
+# payload default in run_config.build_selections. build_selections always sets
+# every key when a module is enabled, so in the production path these defaults
+# are never drawn at all; they only apply to a partially-constructed object,
+# and that happens exclusively in tests. There, a missing dict key used to
+# mean exactly the read site's `.get(key, N)` fallback — so matching it is
+# what makes the D5 rewrite behaviour-preserving. Using the payload default
+# instead would silently redefine ~38 test constructions (e.g.
+# MrpConfig(num_products=3) would suddenly create 5 manufacturing orders where
+# the dict version created none).
+#
+# Presence means active (S17-D2): each field is Optional[...] = None, and
+# build_selections only assigns inside its `if _enabled(...)` block. That is
+# also why the old `enabled` keys of chatter/activities/timeoff/analytic are
+# gone — a dataclass instance is always truthy, None never is.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class MrpConfig:
+    """Defaults: modules/mrp.py's create_mrp_data read site."""
+    num_products: int = 0
+    components_per_bom: int = 1
+    sub_boms_per_product: int = 0
+    num_workcenters: int = 3
+    num_manufacturing_orders: int = 0
+    create_quality_points: bool = False
+    # S14/R18 additive — only has an effect when create_quality_points is True;
+    # read in modules/mrp.py next to that flag.
+    quality_fail_pct: int = 0
+
+
+@dataclass
+class RecruitmentConfig:
+    """Defaults: modules/recruiting.py's create_recruiting_data read site."""
+    num_jobs: int = 0
+    num_candidates: int = 0
+    create_skills: bool = False
+    num_skill_types: int = 0
+    skills_per_type: int = 0
+
+
+@dataclass
+class TimeoffConfig:
+    """Defaults: modules/hr.py's create_leave_data read site."""
+    entries_per_employee: int = 2
+    avg_length_days: int = 5
+    past_future_pct: int = 30
+    timescale_days: int = 180
+    validate_pct: int = 100
+
+
+@dataclass
+class ChatterConfig:
+    """Defaults: modules/crm.py's _post_chatter_messages read site."""
+    style: str = "mixed"  # "notes_only" | "mixed" | "full_email"
+    messages_per_opp: int = 4
+    use_db_names: bool = False
+
+
+@dataclass
+class ActivitiesConfig:
+    """Defaults: modules/crm.py's _create_activities read site.
+    future_pct is implied: 100 - past_pct - today_pct."""
+    past_pct: int = 0
+    today_pct: int = 0
+
+
+@dataclass
+class LostConfig:
+    """R11. A crm.py sub-feature like chatter/activities, NOT its own
+    orchestrated module — no WANTED_MODULES/MODULE_RUN_ORDER entry, gated in
+    build_selections inside the existing `if _enabled(crm)` block. Still its
+    own orchestrator.py module_order step (must run after "sale") — see
+    modules/crm.py's mark_lost_opportunities."""
+    pct: int = 0
+
+
+@dataclass
+class DocumentsConfig:
+    """Defaults: modules/documents.py reads these with a bare .get(), i.e. a
+    missing key yielded None (falsy) — hence False, not True."""
+    bill_pdfs_enabled: bool = False
+    cv_pdfs_enabled: bool = False
+
+
+@dataclass
+class StockConfig:
+    """Defaults: modules/inventory.py + modules/master_data.py read sites.
+
+    orchestrator.py's module_order key must equal this FIELD's name on
+    ModuleSelections ("stock") exactly, since ModuleSelections.get(module_code)
+    is getattr(self, module_code) below and the gate is `elif not sel:
+    continue` — a scalar int field named e.g. stock_avg_qty paired with
+    module_code "stock" would look up a nonexistent attribute and always skip
+    silently.
+
+    avg_qty==0 with another value set (e.g. sub_locations>0, orderpoints_pct>0)
+    still runs the step — inventory.py's own early-return checks all four
+    trigger values, not avg_qty alone. orderpoint_min_qty/orderpoint_max_qty
+    are independent config values, not derived from avg_qty (would degenerate
+    to 0.0 on the avg_qty=0 path otherwise, S14/Befund 7 — same reasoning as
+    tracking_serial_max's own decoupling from avg_qty).
+    """
+    avg_qty: int = 0
+    sub_locations: int = 0
+    second_warehouse: bool = False
+    tracking_lot_pct: int = 0
+    tracking_serial_pct: int = 0
+    tracking_serial_max: int = 10
+    orderpoints_pct: int = 0
+    orderpoint_min_qty: int = 5
+    orderpoint_max_qty: int = 20
+
+
+@dataclass
+class ExpenseConfig:
+    """R19. Defaults: modules/expenses.py's create_expense_data read site.
+
+    The ModuleSelections field holding this must be named "hr_expense", not
+    "expenses" — it matches WANTED_MODULES' Odoo technical module name and
+    orchestrator.py's module_order key, same convention as hr_recruitment/
+    hr_timesheet (see run_config.py's own note on this).
+    """
+    count_per_employee: int = 3
+    approved_pct: int = 70
+
+
+@dataclass
+class AnalyticConfig:
+    """S15/R20. NOT its own orchestrated module — no WANTED_MODULES/
+    MODULE_RUN_ORDER/orchestrator.py entry, no progress row. Read
+    independently by sale.py/purchase.py/expenses.py, each gated on its OWN
+    parent module being selected too (sale_pct is meaningless if "sale" itself
+    is off) — closer to documents' top-level shape than crm_lost's (nested
+    under one single parent's `if _enabled(crm)`), since this has three
+    unrelated parents, not one.
+
+    Each percentage defaults to 0 (that module's own off-switch, same
+    precedent as S14's orderpoints_pct/quality_fail_pct). The feature's own
+    on/off is now the presence of this object (S17-D2), no longer a separate
+    "enabled" key — an explicit gate is still clearer than "are all three
+    sub-values coincidentally zero", it is just expressed by the type.
+    """
+    sale_pct: int = 0
+    purchase_pct: int = 0
+    expense_pct: int = 0
+
+
 @dataclass
 class ModuleSelections:
     crm: int = 0
@@ -28,68 +185,28 @@ class ModuleSelections:
     project: int = 0
     tasks_per_project: int = 10
     hr_timesheet: int = 0
-    mrp: dict = field(default_factory=dict)
-    # mrp shape: {"num_products": int, "components_per_bom": int, "sub_boms_per_product": int,
-    # "num_workcenters": int, "num_manufacturing_orders": int, "create_quality_points": bool,
-    # "quality_fail_pct": int} — quality_fail_pct (S14/R18 additive) only has an effect when
-    # create_quality_points is True; read in modules/mrp.py next to that flag.
-    hr_recruitment: dict = field(default_factory=dict)
-    hr_timeoff: dict = field(default_factory=dict)
-    crm_chatter: dict = field(default_factory=dict)
-    # crm_chatter shape: {"enabled": bool, "style": "notes_only"|"mixed"|"full_email", "messages_per_opp": int}
-    # empty dict → disabled
-    crm_activities: dict = field(default_factory=dict)
-    # crm_activities shape: {"enabled": bool, "past_pct": int, "today_pct": int}
-    # future_pct is implied: 100 - past_pct - today_pct
-    # empty dict → activities disabled
-    crm_lost: dict = field(default_factory=dict)
-    # crm_lost shape: {"pct": int} (R11). A crm.py sub-feature like crm_chatter/
-    # crm_activities, NOT its own orchestrated module — no WANTED_MODULES/
-    # MODULE_RUN_ORDER entry, gated in build_selections inside the existing
-    # `if _enabled(crm)` block. Still its own orchestrator.py module_order
-    # step (must run after "sale") — see modules/crm.py's mark_lost_opportunities.
-    documents: dict = field(default_factory=dict)
-    # documents shape: {"bill_pdfs_enabled": bool, "cv_pdfs_enabled": bool}
-    # empty dict → both stages disabled
+    # The 10 typed module blocks (D5). None == feature off; the shapes and
+    # their reasoning live on the dataclasses above, not in comments here.
+    mrp: Optional[MrpConfig] = None
+    hr_recruitment: Optional[RecruitmentConfig] = None
+    hr_timeoff: Optional[TimeoffConfig] = None
+    crm_chatter: Optional[ChatterConfig] = None
+    crm_activities: Optional[ActivitiesConfig] = None
+    crm_lost: Optional[LostConfig] = None
+    documents: Optional[DocumentsConfig] = None
     purchase: int = 0                    # number of purchase orders to create; 0 = skip
     purchase_confirm_pct: int = 70       # % of created POs to confirm, mirrors sale_confirm_pct
-    stock: dict = field(default_factory=dict)
-    # stock shape: {"avg_qty": int, "sub_locations": int, "second_warehouse": bool,
-    # "tracking_lot_pct": int, "tracking_serial_pct": int, "tracking_serial_max": int,
-    # "orderpoints_pct": int, "orderpoint_min_qty": int, "orderpoint_max_qty": int}
-    # (S13/R13-R15, S14/R12 additive) — dict-gated like mrp/documents, NOT a bare int:
-    # orchestrator.py's module_order key must equal this field's name ("stock") exactly,
-    # since ModuleSelections.get(module_code) is getattr(self, module_code) below and the
-    # gate is `elif not sel: continue` — a scalar int field named e.g. stock_avg_qty paired
-    # with module_code "stock" would look up a nonexistent attribute and always skip silently.
-    # avg_qty==0 with another key set (e.g. sub_locations>0, orderpoints_pct>0) still runs
-    # the step — inventory.py's own early-return checks all four trigger keys, not avg_qty
-    # alone. orderpoint_min_qty/orderpoint_max_qty are independent config values, not
-    # derived from avg_qty (would degenerate to 0.0 on the avg_qty=0 path otherwise, S14/
-    # Befund 7 — same reasoning as tracking_serial_max's own decoupling from avg_qty).
-    hr_expense: dict = field(default_factory=dict)
-    # hr_expense shape: {"count_per_employee": int, "approved_pct": int} (R19).
-    # Field name must be "hr_expense", not "expenses" — matches WANTED_MODULES'
-    # Odoo technical module name and orchestrator.py's module_order key, same
-    # convention as hr_recruitment/hr_timesheet (see run_config.py's own note
-    # on this).
-    analytic: dict = field(default_factory=dict)
-    # analytic shape: {"enabled": bool, "sale_pct": int, "purchase_pct": int,
-    # "expense_pct": int} (S15/R20). NOT its own orchestrated module — no
-    # WANTED_MODULES/MODULE_RUN_ORDER/orchestrator.py entry, no progress row.
-    # Read independently by sale.py/purchase.py/expenses.py, each gated on
-    # its OWN parent module being selected too (sale_pct is meaningless if
-    # "sale" itself is off) — closer to documents' top-level shape than
-    # crm_lost's (nested under one single parent's `if _enabled(crm)`), since
-    # this has three unrelated parents, not one. sale_pct/purchase_pct/
-    # expense_pct each default to 0 (that module's own off-switch, same
-    # precedent as S14's orderpoints_pct/quality_fail_pct) once "enabled" is
-    # true; "enabled" itself is the feature's own on/off (matching
-    # documents/crm_chatter's top-level dict convention), not implied by the
-    # three percentages being zero — an explicit gate is clearer than "are
-    # all three sub-values coincidentally zero".
+    stock: Optional[StockConfig] = None
+    hr_expense: Optional[ExpenseConfig] = None
+    analytic: Optional[AnalyticConfig] = None
 
     def get(self, key: str, default=None):
+        # Deliberately lenient (S17-D4): orchestrator.py:102 calls this with a
+        # module_code string, outside _run_module's except, in a 🔒 file — a
+        # strict lookup would turn a silent skip into a crash, a behaviour
+        # change this sprint's premise rules out. The invariant that every
+        # module_order code IS a real field is asserted by
+        # tests/unit/test_run_config_unit.py instead.
         return getattr(self, key, default)
 
 

@@ -1,4 +1,4 @@
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import AnalyticConfig, DemoCriteria, ExpenseConfig, ModuleSelections, RunContext
 from modules import expenses
 
 
@@ -33,7 +33,7 @@ def run(client, ctx):
     try:
         rctx = _make_rctx()
         rctx.employee_ids = [employee_id]
-        rctx.module_selections.hr_expense = {"count_per_employee": 2, "approved_pct": 100}
+        rctx.module_selections.hr_expense = ExpenseConfig(count_per_employee=2, approved_pct=100)
 
         expenses.create_expense_data(client, None, rctx)
 
@@ -57,7 +57,7 @@ def run(client, ctx):
     try:
         rctx = _make_rctx()
         rctx.employee_ids = [employee_id]
-        rctx.module_selections.hr_expense = {"count_per_employee": 1, "approved_pct": 0}
+        rctx.module_selections.hr_expense = ExpenseConfig(count_per_employee=1, approved_pct=0)
 
         expenses.create_expense_data(client, None, rctx)
 
@@ -75,7 +75,8 @@ def run(client, ctx):
     try:
         skip_rctx = _make_rctx()
         skip_rctx.employee_ids = []
-        skip_rctx.module_selections.hr_expense = {"count_per_employee": 2, "approved_pct": 50}
+        skip_rctx.module_selections.hr_expense = ExpenseConfig(count_per_employee=2,
+                                                               approved_pct=50)
         before = client.search_read('hr.expense', [["employee_id", "=", employee_id]], fields=["id"], limit=0)
         expenses.create_expense_data(client, None, skip_rctx)
         after = client.search_read('hr.expense', [["employee_id", "=", employee_id]], fields=["id"], limit=0)
@@ -91,10 +92,9 @@ def run(client, ctx):
     try:
         rctx = _make_rctx()
         rctx.employee_ids = [employee_id]
-        rctx.module_selections.hr_expense = {"count_per_employee": 2, "approved_pct": 0}
-        rctx.module_selections.analytic = {
-            "enabled": True, "sale_pct": 0, "purchase_pct": 0, "expense_pct": 100,
-        }
+        rctx.module_selections.hr_expense = ExpenseConfig(count_per_employee=2, approved_pct=0)
+        rctx.module_selections.analytic = AnalyticConfig(sale_pct=0, purchase_pct=0,
+                                                         expense_pct=100)
 
         expenses.create_expense_data(client, None, rctx)
 

@@ -13,7 +13,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import DemoCriteria, ModuleSelections, MrpConfig, RunContext
 from modules import mrp
 
 
@@ -76,13 +76,13 @@ def run():
     # ------------------------------------------------------------------
     try:
         client = _mock_client()
-        ctx = _make_ctx({
-            "num_products": 3, "components_per_bom": 2, "sub_boms_per_product": 1,
+        ctx = _make_ctx(MrpConfig(
+            num_products=3, components_per_bom=2, sub_boms_per_product=1,
             # num_workcenters intentionally left forceable to >=1 by the still-open B15 bug
             # (max(1, ...)) — mrp_routings=False sidesteps that so this test stays scoped
             # to D3 (products/components/BOMs), not B15's separate workcenter concern.
-            "num_workcenters": 0, "num_manufacturing_orders": 0, "create_quality_points": False,
-        })
+            num_workcenters=0, num_manufacturing_orders=0, create_quality_points=False,
+        ))
         ctx.feature_flags = {"mrp_routings": False}
         with patch("modules.mrp.odoo_actions.create_product") as mock_create_product:
             mrp.create_mrp_data(client, gemini=None, ctx=ctx)
@@ -109,10 +109,9 @@ def run():
     # ------------------------------------------------------------------
     try:
         client = _mock_client()
-        ctx = _make_ctx({
-            "num_products": 3, "components_per_bom": 2, "sub_boms_per_product": 1,
-            "num_workcenters": 0, "num_manufacturing_orders": 0, "create_quality_points": False,
-        })
+        ctx = _make_ctx(MrpConfig(num_products=3, components_per_bom=2, sub_boms_per_product=1,
+                                  num_workcenters=0, num_manufacturing_orders=0,
+                                  create_quality_points=False))
         ctx.feature_flags = {"mrp_routings": False}
         with patch("modules.mrp.odoo_actions.create_product"):
             mrp.create_mrp_data(client, gemini=None, ctx=ctx)
@@ -134,10 +133,9 @@ def run():
     # ------------------------------------------------------------------
     try:
         client = _mock_client()
-        ctx = _make_ctx({
-            "num_products": 2, "components_per_bom": 3, "sub_boms_per_product": 0,
-            "num_workcenters": 0, "num_manufacturing_orders": 0, "create_quality_points": False,
-        })
+        ctx = _make_ctx(MrpConfig(num_products=2, components_per_bom=3, sub_boms_per_product=0,
+                                  num_workcenters=0, num_manufacturing_orders=0,
+                                  create_quality_points=False))
         with patch("modules.mrp.odoo_actions.create_product"):
             mrp.create_mrp_data(client, gemini=None, ctx=ctx)
         assert client.create_batch.call_count == 4, client.create_batch.call_count
@@ -158,7 +156,7 @@ def run():
     # ------------------------------------------------------------------
     try:
         client = _mock_client()
-        ctx = _make_ctx({"num_products": 0})
+        ctx = _make_ctx(MrpConfig(num_products=0))
         mrp.create_mrp_data(client, gemini=None, ctx=ctx)
         client.create_batch.assert_not_called()
         assert ctx.product_ids == []
@@ -172,10 +170,9 @@ def run():
     # ------------------------------------------------------------------
     try:
         client = _mock_client()
-        ctx = _make_ctx({
-            "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
-            "num_workcenters": 0, "num_manufacturing_orders": 0, "create_quality_points": False,
-        })
+        ctx = _make_ctx(MrpConfig(num_products=1, components_per_bom=1, sub_boms_per_product=0,
+                                  num_workcenters=0, num_manufacturing_orders=0,
+                                  create_quality_points=False))
         ctx.feature_flags = {"mrp_routings": True}  # routings ON, but 0 workcenters requested
         with patch("modules.mrp.odoo_actions.create_product"):
             mrp.create_mrp_data(client, gemini=None, ctx=ctx)
@@ -192,10 +189,9 @@ def run():
     # ------------------------------------------------------------------
     try:
         client = _mock_client()
-        ctx = _make_ctx({
-            "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
-            "num_workcenters": 3, "num_manufacturing_orders": 0, "create_quality_points": False,
-        })
+        ctx = _make_ctx(MrpConfig(num_products=1, components_per_bom=1, sub_boms_per_product=0,
+                                  num_workcenters=3, num_manufacturing_orders=0,
+                                  create_quality_points=False))
         ctx.feature_flags = {}  # mrp_routings key absent entirely
         with patch("modules.mrp.odoo_actions.create_product"):
             mrp.create_mrp_data(client, gemini=None, ctx=ctx)
@@ -216,10 +212,9 @@ def run():
     # ------------------------------------------------------------------
     try:
         client = _mock_client()
-        ctx = _make_ctx({
-            "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
-            "num_workcenters": 3, "num_manufacturing_orders": 0, "create_quality_points": False,
-        })
+        ctx = _make_ctx(MrpConfig(num_products=1, components_per_bom=1, sub_boms_per_product=0,
+                                  num_workcenters=3, num_manufacturing_orders=0,
+                                  create_quality_points=False))
         ctx.feature_flags = {"mrp_routings": True}
         ctx.model_access = {"mrp.workcenter": False}
         with patch("modules.mrp.odoo_actions.create_product"):
@@ -239,10 +234,9 @@ def run():
         # module wasn't in installed_modules at connect time) must default
         # open and not itself block workcenter creation.
         client = _mock_client()
-        ctx = _make_ctx({
-            "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
-            "num_workcenters": 2, "num_manufacturing_orders": 0, "create_quality_points": False,
-        })
+        ctx = _make_ctx(MrpConfig(num_products=1, components_per_bom=1, sub_boms_per_product=0,
+                                  num_workcenters=2, num_manufacturing_orders=0,
+                                  create_quality_points=False))
         ctx.feature_flags = {"mrp_routings": True}
         ctx.model_access = {}
         with patch("modules.mrp.odoo_actions.create_product"):
@@ -271,10 +265,9 @@ def run():
             return []
 
         client.search_read.side_effect = _search_read_with_company
-        ctx = _make_ctx({
-            "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
-            "num_workcenters": 1, "num_manufacturing_orders": 0, "create_quality_points": False,
-        })
+        ctx = _make_ctx(MrpConfig(num_products=1, components_per_bom=1, sub_boms_per_product=0,
+                                  num_workcenters=1, num_manufacturing_orders=0,
+                                  create_quality_points=False))
         ctx.feature_flags = {"mrp_routings": True}
         # A res.partner id, deliberately different from the res.company id
         # above — if the bug regressed, this is what would leak through.
@@ -301,10 +294,9 @@ def run():
     # ------------------------------------------------------------------
     try:
         client = _mock_client()
-        ctx = _make_ctx({
-            "num_products": 3, "components_per_bom": 2, "sub_boms_per_product": 1,
-            "num_workcenters": 0, "num_manufacturing_orders": 0, "create_quality_points": False,
-        })
+        ctx = _make_ctx(MrpConfig(num_products=3, components_per_bom=2, sub_boms_per_product=1,
+                                  num_workcenters=0, num_manufacturing_orders=0,
+                                  create_quality_points=False))
         ctx.feature_flags = {"mrp_routings": False}
         with patch("modules.mrp.odoo_actions.create_product"):
             mrp.create_mrp_data(client, gemini=None, ctx=ctx)
@@ -361,10 +353,9 @@ def run():
     try:
         client = _mock_client_quality()
         with patch("modules.mrp.random.random", return_value=0.0):  # always confirm
-            ctx = _make_ctx({
-                "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
-                "num_workcenters": 0, "num_manufacturing_orders": 3, "create_quality_points": False,
-            })
+            ctx = _make_ctx(MrpConfig(num_products=1, components_per_bom=1, sub_boms_per_product=0,
+                                      num_workcenters=0, num_manufacturing_orders=3,
+                                      create_quality_points=False))
             ctx.feature_flags = {"mrp_routings": False, "quality": True}
             with patch("modules.mrp.odoo_actions.create_product"):
                 mrp.create_mrp_data(client, gemini=None, ctx=ctx)
@@ -379,10 +370,9 @@ def run():
     # combined `if num_manufacturing_orders > 0 and created_bom_ids:`).
     try:
         client = _mock_client_quality()
-        ctx = _make_ctx({
-            "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
-            "num_workcenters": 0, "num_manufacturing_orders": 0, "create_quality_points": True,
-        })
+        ctx = _make_ctx(MrpConfig(num_products=1, components_per_bom=1, sub_boms_per_product=0,
+                                  num_workcenters=0, num_manufacturing_orders=0,
+                                  create_quality_points=True))
         ctx.feature_flags = {"mrp_routings": False, "quality": True}
         with patch("modules.mrp.odoo_actions.create_product"):
             mrp.create_mrp_data(client, gemini=None, ctx=ctx)
@@ -401,10 +391,9 @@ def run():
     try:
         client = _mock_client_quality()
         with patch("modules.mrp.random.random", return_value=0.99):  # never confirm
-            ctx = _make_ctx({
-                "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
-                "num_workcenters": 0, "num_manufacturing_orders": 3, "create_quality_points": True,
-            })
+            ctx = _make_ctx(MrpConfig(num_products=1, components_per_bom=1, sub_boms_per_product=0,
+                                      num_workcenters=0, num_manufacturing_orders=3,
+                                      create_quality_points=True))
             ctx.feature_flags = {"mrp_routings": False, "quality": True}
             with patch("modules.mrp.odoo_actions.create_product"):
                 mrp.create_mrp_data(client, gemini=None, ctx=ctx)  # must not raise
@@ -423,11 +412,9 @@ def run():
     try:
         client = _mock_client_quality()
         with patch("modules.mrp.random.random", return_value=0.0):  # always confirm
-            ctx = _make_ctx({
-                "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
-                "num_workcenters": 0, "num_manufacturing_orders": 4, "create_quality_points": True,
-                "quality_fail_pct": 100,
-            })
+            ctx = _make_ctx(MrpConfig(num_products=1, components_per_bom=1, sub_boms_per_product=0,
+                                      num_workcenters=0, num_manufacturing_orders=4,
+                                      create_quality_points=True, quality_fail_pct=100))
             ctx.feature_flags = {"mrp_routings": False, "quality": True}
             with patch("modules.mrp.odoo_actions.create_product"):
                 mrp.create_mrp_data(client, gemini=None, ctx=ctx)
@@ -468,10 +455,9 @@ def run():
     try:
         client = _mock_client_quality()
         with patch("modules.mrp.random.random", return_value=0.0):
-            ctx = _make_ctx({
-                "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
-                "num_workcenters": 0, "num_manufacturing_orders": 2, "create_quality_points": True,
-            })
+            ctx = _make_ctx(MrpConfig(num_products=1, components_per_bom=1, sub_boms_per_product=0,
+                                      num_workcenters=0, num_manufacturing_orders=2,
+                                      create_quality_points=True))
             ctx.feature_flags = {"mrp_routings": False, "quality": True}
             ctx.model_access = {"quality.check": False}
             with patch("modules.mrp.odoo_actions.create_product"):

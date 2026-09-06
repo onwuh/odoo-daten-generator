@@ -5,7 +5,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import DemoCriteria, ModuleSelections, MrpConfig, RunContext
 from modules.mrp import (
     get_product_template_id,
     create_bom,
@@ -169,11 +169,11 @@ def run(client, ctx):
     # Sequenz note on this exact gap).
     try:
         _capture = os.environ.get("ODOO_GENERATOR_CAPTURE_FIELDS") == "1"
-        rctx = _make_rctx({
-            "num_products": 2, "components_per_bom": 2, "sub_boms_per_product": 1,
-            "num_workcenters": 0, "num_manufacturing_orders": 2 if _capture else 0,
-            "create_quality_points": _capture, "quality_fail_pct": 50,
-        })
+        rctx = _make_rctx(MrpConfig(
+            num_products=2, components_per_bom=2, sub_boms_per_product=1,
+            num_workcenters=0, num_manufacturing_orders=2 if _capture else 0,
+            create_quality_points=_capture, quality_fail_pct=50,
+        ))
         rctx.feature_flags = {
             "mrp_routings": False,
             "quality": os.environ.get("ODOO_GENERATOR_CAPTURE_FIELDS") == "1",
@@ -210,11 +210,11 @@ def run(client, ctx):
         results.append(("mrp: R18 quality points+checks SKIP — quality feature not active", True, "skipped"))
     else:
         try:
-            q_rctx = _make_rctx({
-                "num_products": 1, "components_per_bom": 1, "sub_boms_per_product": 0,
-                "num_workcenters": 0, "num_manufacturing_orders": 6,
-                "create_quality_points": True, "quality_fail_pct": 50,
-            })
+            q_rctx = _make_rctx(MrpConfig(
+                num_products=1, components_per_bom=1, sub_boms_per_product=0,
+                num_workcenters=0, num_manufacturing_orders=6,
+                create_quality_points=True, quality_fail_pct=50,
+            ))
             q_rctx.feature_flags = {"mrp_routings": False, "quality": True}
             create_mrp_data(client, None, q_rctx)
 

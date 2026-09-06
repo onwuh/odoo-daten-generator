@@ -142,7 +142,12 @@ def run(client, ctx):
     # Step 7 — chatter disabled (empty dict): message_post must not be called
     try:
         from unittest.mock import MagicMock
-        from config import ModuleSelections, RunContext, DemoCriteria
+        from config import (
+            DemoCriteria,
+            LostConfig,
+            ModuleSelections,
+            RunContext,
+        )
         from modules.crm import _post_chatter_messages
 
         mock_client = MagicMock()
@@ -156,8 +161,8 @@ def run(client, ctx):
             num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
             num_services=0, num_consumables=0, num_storables=0,
         )
-        # Empty dict = disabled
-        sel = ModuleSelections(crm_chatter={})
+        # crm_chatter=None = disabled
+        sel = ModuleSelections(crm_chatter=None)
         mock_ctx = RunContext(
             criteria=criteria, module_selections=sel,
             industry="Test", language_name="German", language_code="de_DE",
@@ -169,13 +174,18 @@ def run(client, ctx):
         _post_chatter_messages(mock_client, mock_gemini, mock_ctx, opp_data)
 
         mock_client.call_method.assert_not_called()
-        results.append(("crm: chatter disabled (empty dict) → no message_post", True, "call_method not called"))
+        results.append(("crm: chatter disabled (crm_chatter=None) → no message_post", True, "call_method not called"))
     except Exception as e:
-        results.append(("crm: chatter disabled (empty dict) → no message_post", False, str(e)))
+        results.append(("crm: chatter disabled (crm_chatter=None) → no message_post", False, str(e)))
 
     # Step 8 — B12: salesperson assignment must not depend on crm_chatter flag
     try:
-        from config import ModuleSelections, RunContext, DemoCriteria
+        from config import (
+            DemoCriteria,
+            LostConfig,
+            ModuleSelections,
+            RunContext,
+        )
         from modules.crm import create_crm_data
 
         criteria = DemoCriteria(
@@ -183,7 +193,7 @@ def run(client, ctx):
             num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
             num_services=0, num_consumables=0, num_storables=0,
         )
-        sel = ModuleSelections(crm=1, leads=0, crm_chatter={})  # chatter disabled
+        sel = ModuleSelections(crm=1, leads=0, crm_chatter=None)  # chatter disabled
         b12_ctx = RunContext(
             criteria=criteria, module_selections=sel,
             industry="Test", language_name="German", language_code="de_DE",
@@ -209,7 +219,12 @@ def run(client, ctx):
     # opp_a simulates one sale.py already linked to an order (must stay
     # active); opp_b is unlinked (with pct=100, must end up lost).
     try:
-        from config import ModuleSelections, RunContext, DemoCriteria
+        from config import (
+            DemoCriteria,
+            LostConfig,
+            ModuleSelections,
+            RunContext,
+        )
         from modules.crm import mark_lost_opportunities
 
         opp_a = create_opportunity(client, partner_id, "R11 Test Opportunity Linked")
@@ -221,7 +236,7 @@ def run(client, ctx):
             num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
             num_services=0, num_consumables=0, num_storables=0,
         )
-        sel = ModuleSelections(crm_lost={"pct": 100})
+        sel = ModuleSelections(crm_lost=LostConfig(pct=100))
         r11_ctx = RunContext(
             criteria=criteria, module_selections=sel,
             industry="Test", language_name="German", language_code="de_DE",
@@ -250,7 +265,12 @@ def run(client, ctx):
 
     # Step 10 — R11 Pattern 5: empty opportunity_ids -> graceful skip, no writes.
     try:
-        from config import ModuleSelections, RunContext, DemoCriteria
+        from config import (
+            DemoCriteria,
+            LostConfig,
+            ModuleSelections,
+            RunContext,
+        )
         from modules.crm import mark_lost_opportunities
 
         criteria = DemoCriteria(
@@ -258,7 +278,7 @@ def run(client, ctx):
             num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
             num_services=0, num_consumables=0, num_storables=0,
         )
-        sel = ModuleSelections(crm_lost={"pct": 100})
+        sel = ModuleSelections(crm_lost=LostConfig(pct=100))
         skip_ctx = RunContext(
             criteria=criteria, module_selections=sel,
             industry="Test", language_name="German", language_code="de_DE",

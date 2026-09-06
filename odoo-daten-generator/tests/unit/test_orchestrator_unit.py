@@ -8,7 +8,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 import orchestrator
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import DemoCriteria, ModuleSelections, MrpConfig, RecruitmentConfig, RunContext
 
 
 def _make_ctx(installed_modules, module_selections=None, skip_master_data=False):
@@ -89,7 +89,7 @@ def run():
         gemini.fetch_name_suggestions.return_value = {}
         gemini.total_calls = 0
         gemini.total_tokens = 0
-        ctx = _make_ctx(installed_modules={"mrp"}, module_selections=ModuleSelections(mrp={"num_products": 1}))
+        ctx = _make_ctx(installed_modules={"mrp"}, module_selections=ModuleSelections(mrp=MrpConfig(num_products=1)))
 
         with patch("modules.master_data.create_master_data") as mock_master, \
              patch("modules.mrp.create_mrp_data") as mock_mrp:
@@ -143,7 +143,7 @@ def run():
         # installed: mrp, crm, sale (true Odoo state) — selected: only sale
         ctx = _make_ctx(
             installed_modules={"mrp", "crm", "sale"},
-            module_selections=ModuleSelections(sale=3),  # crm=0, mrp={} -> not selected
+            module_selections=ModuleSelections(sale=3),  # crm=0, mrp=None -> not selected
             skip_master_data=True,
         )
         with patch("modules.mrp.create_mrp_data") as mock_mrp, \
@@ -182,7 +182,7 @@ def run():
             installed_modules={"mrp", "crm", "sale", "hr", "project", "hr_timesheet",
                                 "account", "hr_recruitment"},
             module_selections=ModuleSelections(
-                sale=1, hr=1, project=1, hr_timesheet=1, account=1, hr_recruitment={"num_jobs": 1},
+                sale=1, hr=1, project=1, hr_timesheet=1, account=1, hr_recruitment=RecruitmentConfig(num_jobs=1),
             ),
             skip_master_data=True,
         )

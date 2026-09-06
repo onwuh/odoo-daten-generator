@@ -79,12 +79,12 @@ def _create_products(client, atoms: Dict[str, Any], ctx: RunContext) -> None:
     # not-installed module's card visible-but-disabled rather than hiding it
     # (static/app.js), so this can't rely on the card never being submitted.
     stock_config = ctx.module_selections.stock
-    if (isinstance(stock_config, dict) and stock_config.get("avg_qty", 0) > 0
+    if (stock_config is not None and stock_config.avg_qty > 0
             and 'stock' in ctx.installed_modules):
         data_factory.assign_tracking(
             all_vals,
-            stock_config.get("tracking_lot_pct", 0),
-            stock_config.get("tracking_serial_pct", 0),
+            stock_config.tracking_lot_pct,
+            stock_config.tracking_serial_pct,
         )
 
     # R8: tag every service product so Odoo's own automation creates a

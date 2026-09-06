@@ -16,7 +16,7 @@ if _ROOT not in sys.path:
 
 import data_factory
 import pdf_factory
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import DemoCriteria, DocumentsConfig, ModuleSelections, RunContext
 from fallback_data import FALLBACK_CV_BULLETS
 from modules import documents
 
@@ -29,7 +29,7 @@ def _make_ctx(documents_sel=None, bill_ids=None, applicant_ids=None, model_acces
     )
     ctx = RunContext(
         criteria=criteria,
-        module_selections=ModuleSelections(documents=documents_sel if documents_sel is not None else {}),
+        module_selections=ModuleSelections(documents=documents_sel),
         industry="IT", language_name="German", language_code="de", gemini_model_name="test",
         model_access=model_access if model_access is not None else {},
     )
@@ -77,7 +77,7 @@ def run():
     # ------------------------------------------------------------------
     try:
         client = _mock_client()
-        ctx = _make_ctx(documents_sel={}, bill_ids=[1], applicant_ids=[2])
+        ctx = _make_ctx(documents_sel=None, bill_ids=[1], applicant_ids=[2])
         documents.create_documents(client, gemini=None, ctx=ctx)
         client.create_batch.assert_not_called()
         client.search_read.assert_not_called()
@@ -114,7 +114,7 @@ def run():
         client.search_read.side_effect = _search_read
 
         with patch.object(pdf_factory, "build_vendor_bill_pdf", return_value=b"%PDF-fake") as mock_build:
-            ctx = _make_ctx(documents_sel={"bill_pdfs_enabled": True}, bill_ids=[501])
+            ctx = _make_ctx(documents_sel=DocumentsConfig(bill_pdfs_enabled=True), bill_ids=[501])
             documents.create_documents(client, gemini=None, ctx=ctx)
 
         assert mock_build.call_count == 1, mock_build.call_count
@@ -184,7 +184,7 @@ def run():
         client.search_read.side_effect = _search_read
 
         with patch.object(pdf_factory, "build_vendor_bill_pdf", return_value=b"%PDF-fake") as mock_build:
-            ctx = _make_ctx(documents_sel={"bill_pdfs_enabled": True}, bill_ids=[501])
+            ctx = _make_ctx(documents_sel=DocumentsConfig(bill_pdfs_enabled=True), bill_ids=[501])
             documents.create_documents(client, gemini=None, ctx=ctx)
 
         assert mock_build.call_count == 1, mock_build.call_count
@@ -236,7 +236,7 @@ def run():
         client.search_read.side_effect = _search_read
 
         with patch.object(pdf_factory, "build_vendor_bill_pdf", return_value=b"%PDF-fake") as mock_build:
-            ctx = _make_ctx(documents_sel={"bill_pdfs_enabled": True}, bill_ids=[502])
+            ctx = _make_ctx(documents_sel=DocumentsConfig(bill_pdfs_enabled=True), bill_ids=[502])
             documents.create_documents(client, gemini=None, ctx=ctx)
 
         kwargs = mock_build.call_args.kwargs
@@ -281,7 +281,7 @@ def run():
         }
 
         with patch.object(pdf_factory, "build_cv_pdf", return_value=b"%PDF-fake") as mock_build_cv:
-            ctx = _make_ctx(documents_sel={"cv_pdfs_enabled": True}, applicant_ids=[601, 602])
+            ctx = _make_ctx(documents_sel=DocumentsConfig(cv_pdfs_enabled=True), applicant_ids=[601, 602])
             documents.create_documents(client, gemini=gemini, ctx=ctx)
 
         assert gemini.fetch_cv_bullet_points_batch.call_count == 1, (
@@ -322,7 +322,7 @@ def run():
             return b"%PDF-fake"
 
         with patch.object(pdf_factory, "build_cv_pdf", side_effect=_fake_build_cv):
-            ctx = _make_ctx(documents_sel={"cv_pdfs_enabled": True}, applicant_ids=[701])
+            ctx = _make_ctx(documents_sel=DocumentsConfig(cv_pdfs_enabled=True), applicant_ids=[701])
             # gemini=None entirely (unconfigured LLM service)
             documents.create_documents(client, gemini=None, ctx=ctx)
         assert captured["bullets"] == FALLBACK_CV_BULLETS, captured["bullets"]
@@ -330,7 +330,7 @@ def run():
         gemini_empty = MagicMock()
         gemini_empty.fetch_cv_bullet_points_batch.return_value = None
         with patch.object(pdf_factory, "build_cv_pdf", side_effect=_fake_build_cv):
-            ctx2 = _make_ctx(documents_sel={"cv_pdfs_enabled": True}, applicant_ids=[701])
+            ctx2 = _make_ctx(documents_sel=DocumentsConfig(cv_pdfs_enabled=True), applicant_ids=[701])
             documents.create_documents(client, gemini=gemini_empty, ctx=ctx2)
         assert captured["bullets"] == FALLBACK_CV_BULLETS, captured["bullets"]
 
@@ -353,7 +353,7 @@ def run():
     try:
         client = _mock_client()
         ctx = _make_ctx(
-            documents_sel={"bill_pdfs_enabled": True, "cv_pdfs_enabled": True},
+            documents_sel=DocumentsConfig(bill_pdfs_enabled=True, cv_pdfs_enabled=True),
             bill_ids=[1], applicant_ids=[2],
             model_access={"ir.attachment": False},
         )
@@ -371,7 +371,7 @@ def run():
         # The converse — an EMPTY model_access (never probed) must default
         # open (B1 guard), same as everywhere else this dict is read.
         client = _mock_client()
-        ctx = _make_ctx(documents_sel={"bill_pdfs_enabled": False, "cv_pdfs_enabled": False},
+        ctx = _make_ctx(documents_sel=DocumentsConfig(bill_pdfs_enabled=False, cv_pdfs_enabled=False),
                         model_access={})
         documents.create_documents(client, gemini=None, ctx=ctx)
         assert "documents" not in ctx.skipped_modules, ctx.skipped_modules

@@ -8,11 +8,11 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from config import ModuleSelections, RunContext, DemoCriteria
+from config import ModuleSelections, RunContext, DemoCriteria, TimeoffConfig
 from modules.hr import create_leave_data, get_or_create_annual_leave_type
 
 
-def _make_ctx(hr_timeoff: dict, employee_ids=None, installed_modules=None) -> RunContext:
+def _make_ctx(hr_timeoff, employee_ids=None, installed_modules=None) -> RunContext:
     criteria = DemoCriteria(
         mode="both", industry="Test", num_companies=1,
         num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
@@ -49,26 +49,24 @@ def run():
     """Returns (all_passed, [(label, ok, detail), ...])"""
     results = []
 
-    # Step 6 — enabled=False → no leave records created
+    # Step 6 — hr_timeoff=None (feature off) → no leave records created
     try:
         mock_client = unittest.mock.MagicMock()
-        test_ctx = _make_ctx({"enabled": False}, employee_ids=[999])
+        test_ctx = _make_ctx(None, employee_ids=[999])
         leave_ids = create_leave_data(mock_client, test_ctx)
         assert leave_ids == []
         mock_client.create.assert_not_called()
-        results.append(("hr: create_leave_data enabled=False skips all", True, "no API calls"))
+        results.append(("hr: create_leave_data hr_timeoff=None skips all", True, "no API calls"))
     except Exception as e:
-        results.append(("hr: create_leave_data enabled=False skips all", False, str(e)))
+        results.append(("hr: create_leave_data hr_timeoff=None skips all", False, str(e)))
 
     # Step 7 — entries_per_employee=3 → exactly 3 leave IDs per employee
     try:
         mock_client = _mock_client_base()
         create_id_counter = iter(range(1, 1000))
         mock_client.create.side_effect = lambda *a, **kw: next(create_id_counter)
-        test_ctx = _make_ctx({
-            "enabled": True, "entries_per_employee": 3, "avg_length_days": 5,
-            "past_future_pct": 50, "timescale_days": 180, "validate_pct": 0,
-        }, employee_ids=[101, 102])
+        test_ctx = _make_ctx(TimeoffConfig(entries_per_employee=3, avg_length_days=5,
+                                           past_future_pct=50, timescale_days=180, validate_pct=0), employee_ids=[101, 102])
         leave_ids = create_leave_data(mock_client, test_ctx)
         assert len(leave_ids) == 6, f"expected 6 got {len(leave_ids)}"
         results.append(("hr: entries_per_employee=3 → 3 per employee", True, f"{len(leave_ids)} IDs"))
@@ -86,10 +84,8 @@ def run():
             return len(created_vals) + 100
 
         mock_client.create.side_effect = _capture_create
-        test_ctx = _make_ctx({
-            "enabled": True, "entries_per_employee": 2, "avg_length_days": 5,
-            "past_future_pct": 0, "timescale_days": 180, "validate_pct": 0,
-        }, employee_ids=[101])
+        test_ctx = _make_ctx(TimeoffConfig(entries_per_employee=2, avg_length_days=5,
+                                           past_future_pct=0, timescale_days=180, validate_pct=0), employee_ids=[101])
         create_leave_data(mock_client, test_ctx)
         today_str = str(datetime.date.today())
         assert all(v["date_from"] < today_str for v in created_vals), \
@@ -109,10 +105,8 @@ def run():
             return len(created_vals) + 200
 
         mock_client.create.side_effect = _capture_create2
-        test_ctx = _make_ctx({
-            "enabled": True, "entries_per_employee": 2, "avg_length_days": 5,
-            "past_future_pct": 100, "timescale_days": 180, "validate_pct": 0,
-        }, employee_ids=[101])
+        test_ctx = _make_ctx(TimeoffConfig(entries_per_employee=2, avg_length_days=5,
+                                           past_future_pct=100, timescale_days=180, validate_pct=0), employee_ids=[101])
         create_leave_data(mock_client, test_ctx)
         today_str = str(datetime.date.today())
         assert all(v["date_from"] > today_str for v in created_vals), \
@@ -126,10 +120,8 @@ def run():
         mock_client = _mock_client_base()
         create_id_seq = iter(range(1, 1000))
         mock_client.create.side_effect = lambda *a, **kw: next(create_id_seq)
-        test_ctx = _make_ctx({
-            "enabled": True, "entries_per_employee": 2, "avg_length_days": 5,
-            "past_future_pct": 50, "timescale_days": 180, "validate_pct": 0,
-        }, employee_ids=[101])
+        test_ctx = _make_ctx(TimeoffConfig(entries_per_employee=2, avg_length_days=5,
+                                           past_future_pct=50, timescale_days=180, validate_pct=0), employee_ids=[101])
         create_leave_data(mock_client, test_ctx)
         leave_approve_calls = [
             c for c in mock_client.call_method.call_args_list
@@ -145,10 +137,8 @@ def run():
         mock_client = _mock_client_base()
         create_id_seq2 = iter(range(501, 1000))
         mock_client.create.side_effect = lambda *a, **kw: next(create_id_seq2)
-        test_ctx = _make_ctx({
-            "enabled": True, "entries_per_employee": 2, "avg_length_days": 5,
-            "past_future_pct": 50, "timescale_days": 180, "validate_pct": 100,
-        }, employee_ids=[101])
+        test_ctx = _make_ctx(TimeoffConfig(entries_per_employee=2, avg_length_days=5,
+                                           past_future_pct=50, timescale_days=180, validate_pct=100), employee_ids=[101])
         leave_ids = create_leave_data(mock_client, test_ctx)
         approve_calls = [
             c for c in mock_client.call_method.call_args_list
@@ -176,10 +166,8 @@ def run():
             return next(id_counter)
 
         mock_client.create.side_effect = _capture_overlap
-        test_ctx = _make_ctx({
-            "enabled": True, "entries_per_employee": 4, "avg_length_days": 5,
-            "past_future_pct": 50, "timescale_days": 365, "validate_pct": 0,
-        }, employee_ids=[101])
+        test_ctx = _make_ctx(TimeoffConfig(entries_per_employee=4, avg_length_days=5,
+                                           past_future_pct=50, timescale_days=365, validate_pct=0), employee_ids=[101])
         create_leave_data(mock_client, test_ctx)
 
         overlap_found = False
@@ -207,10 +195,8 @@ def run():
             return call_count["n"] + 200
 
         mock_client.create.side_effect = _fail_second
-        test_ctx = _make_ctx({
-            "enabled": True, "entries_per_employee": 3, "avg_length_days": 5,
-            "past_future_pct": 0, "timescale_days": 365, "validate_pct": 0,
-        }, employee_ids=[101])
+        test_ctx = _make_ctx(TimeoffConfig(entries_per_employee=3, avg_length_days=5,
+                                           past_future_pct=0, timescale_days=365, validate_pct=0), employee_ids=[101])
         leave_ids = create_leave_data(mock_client, test_ctx)
         assert len(leave_ids) == 2, f"expected 2 successful (1 failed), got {len(leave_ids)}"
         results.append(("hr: failure isolation — one bad leave doesn't abort batch", True,
@@ -246,10 +232,8 @@ def run():
 
         mock_client.create.side_effect = _capture_new_leaves
 
-        test_ctx = _make_ctx({
-            "enabled": True, "entries_per_employee": 3, "avg_length_days": 5,
-            "past_future_pct": 0, "timescale_days": 365, "validate_pct": 0,
-        }, employee_ids=[101])
+        test_ctx = _make_ctx(TimeoffConfig(entries_per_employee=3, avg_length_days=5,
+                                           past_future_pct=0, timescale_days=365, validate_pct=0), employee_ids=[101])
         create_leave_data(mock_client, test_ctx)
 
         # Verify no new leave overlaps the existing ones
@@ -292,10 +276,8 @@ def run():
     # ------------------------------------------------------------------
     try:
         mock_client = unittest.mock.MagicMock()
-        test_ctx = _make_ctx({
-            "enabled": True, "entries_per_employee": 2, "avg_length_days": 5,
-            "past_future_pct": 30, "timescale_days": 180, "validate_pct": 100,
-        }, employee_ids=[101], installed_modules=set())
+        test_ctx = _make_ctx(TimeoffConfig(entries_per_employee=2, avg_length_days=5,
+                                           past_future_pct=30, timescale_days=180, validate_pct=100), employee_ids=[101], installed_modules=set())
         leave_ids = create_leave_data(mock_client, test_ctx)
         assert leave_ids == [], f"expected graceful skip, got {leave_ids!r}"
         mock_client.create.assert_not_called()
@@ -312,10 +294,8 @@ def run():
         # needed (hr.leave.allocation via hr_holidays, hr.work.entry.type via
         # hr_work_entry).
         mock_client = unittest.mock.MagicMock()
-        test_ctx = _make_ctx({
-            "enabled": True, "entries_per_employee": 2, "avg_length_days": 5,
-            "past_future_pct": 30, "timescale_days": 180, "validate_pct": 100,
-        }, employee_ids=[101], installed_modules={"hr_holidays"})  # hr_work_entry missing
+        test_ctx = _make_ctx(TimeoffConfig(entries_per_employee=2, avg_length_days=5,
+                                           past_future_pct=30, timescale_days=180, validate_pct=100), employee_ids=[101], installed_modules={"hr_holidays"})  # hr_work_entry missing
         leave_ids = create_leave_data(mock_client, test_ctx)
         assert leave_ids == [], f"expected graceful skip with only one of two installed, got {leave_ids!r}"
         mock_client.create.assert_not_called()

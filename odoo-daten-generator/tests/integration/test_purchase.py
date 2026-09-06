@@ -1,4 +1,4 @@
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import AnalyticConfig, DemoCriteria, ModuleSelections, RunContext
 from modules import purchase
 
 
@@ -101,9 +101,8 @@ def run(client, ctx):
         rctx.component_ids = [product_id]
         rctx.module_selections.purchase = 2
         rctx.module_selections.purchase_confirm_pct = 0  # scoped to line creation, not confirm/bill
-        rctx.module_selections.analytic = {
-            "enabled": True, "sale_pct": 0, "purchase_pct": 100, "expense_pct": 0,
-        }
+        rctx.module_selections.analytic = AnalyticConfig(sale_pct=0, purchase_pct=100,
+                                                         expense_pct=0)
 
         purchase.create_purchase_data(client, None, rctx)
 

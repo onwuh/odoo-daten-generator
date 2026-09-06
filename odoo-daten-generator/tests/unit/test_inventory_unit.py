@@ -15,11 +15,14 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import DemoCriteria, ModuleSelections, RunContext, StockConfig
 from modules import inventory
 
 
-def _make_ctx(stock_sel=None, company_ids=None, product_ids=None, component_ids=None,
+_UNSET = object()
+
+
+def _make_ctx(stock_sel=_UNSET, company_ids=None, product_ids=None, component_ids=None,
               new_product_ids=None, feature_flags=None):
     criteria = DemoCriteria(
         mode="both", industry="IT", num_companies=0,
@@ -28,7 +31,8 @@ def _make_ctx(stock_sel=None, company_ids=None, product_ids=None, component_ids=
     )
     ctx = RunContext(
         criteria=criteria,
-        module_selections=ModuleSelections(stock=stock_sel if stock_sel is not None else {"avg_qty": 20}),
+        module_selections=ModuleSelections(
+            stock=StockConfig(avg_qty=20) if stock_sel is _UNSET else stock_sel),
         industry="IT", language_name="German", language_code="de", gemini_model_name="test",
     )
     ctx.partner_company_ids = company_ids if company_ids is not None else [10]
@@ -89,35 +93,35 @@ def run():
     results = []
 
     # ------------------------------------------------------------------
-    # Pattern 3: stock={} (default/disabled) -> no API calls at all.
+    # Pattern 3: stock=None (feature off) -> no API calls at all.
     # ------------------------------------------------------------------
     try:
         client = _mock_client()
-        ctx = _make_ctx(stock_sel={})
+        ctx = _make_ctx(stock_sel=None)
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         client.create_batch.assert_not_called()
         client.search_read.assert_not_called()
-        results.append(("create_inventory_data: stock={} -> no calls (Pattern 3)", True, ""))
+        results.append(("create_inventory_data: stock=None -> no calls (Pattern 3)", True, ""))
     except AssertionError as e:
-        results.append(("create_inventory_data: stock={} -> no calls (Pattern 3)", False, str(e)))
+        results.append(("create_inventory_data: stock=None -> no calls (Pattern 3)", False, str(e)))
 
     # ------------------------------------------------------------------
-    # Pattern 3: stock={"avg_qty": 0} (non-empty dict, zero qty, no other
+    # Pattern 3: stock=StockConfig(avg_qty=0) (config present, zero qty, no other
     # S13 keys set) -> still a full no-op — this is the exact case B1's
     # fix had to keep working: the early-return checks all three trigger
-    # keys (avg_qty, sub_locations, second_warehouse), and with only
-    # avg_qty present at 0 and the other two absent (-> their .get(...,
-    # 0/False) defaults), the condition is exactly as true as before B1.
+    # fields (avg_qty, sub_locations, second_warehouse), and with only
+    # avg_qty given as 0 and the other two left at their dataclass defaults
+    # (0/False), the condition is exactly as true as before B1.
     # ------------------------------------------------------------------
     try:
         client = _mock_client()
-        ctx = _make_ctx(stock_sel={"avg_qty": 0})
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=0))
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         client.create_batch.assert_not_called()
         client.search_read.assert_not_called()
-        results.append(("create_inventory_data: stock={'avg_qty': 0} -> no calls (Pattern 3)", True, ""))
+        results.append(("create_inventory_data: stock=StockConfig(avg_qty=0) -> no calls (Pattern 3)", True, ""))
     except AssertionError as e:
-        results.append(("create_inventory_data: stock={'avg_qty': 0} -> no calls (Pattern 3)", False, str(e)))
+        results.append(("create_inventory_data: stock=StockConfig(avg_qty=0) -> no calls (Pattern 3)", False, str(e)))
 
     # ------------------------------------------------------------------
     # Pattern 5: empty company_ids -> no create_batch calls, graceful skip.
@@ -147,7 +151,7 @@ def run():
 
     try:
         client = _mock_client(warehouse=False)
-        ctx = _make_ctx(stock_sel={"avg_qty": 20, "sub_locations": 3})
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20, sub_locations=3))
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         loc_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.location']
         assert loc_batches == [], loc_batches
@@ -188,7 +192,7 @@ def run():
     # ------------------------------------------------------------------
     try:
         client = _mock_client(storable_products=[{"id": 1}, {"id": 2}, {"id": 3}])
-        ctx = _make_ctx(stock_sel={"avg_qty": 20})
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20))
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         quant_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.quant']
         assert len(quant_batches) == 1, quant_batches
@@ -211,7 +215,7 @@ def run():
     try:
         client = _mock_client(storable_products=[{"id": 1}])
         client.call_method.side_effect = Exception("simulated apply failure")
-        ctx = _make_ctx(stock_sel={"avg_qty": 5})
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=5))
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)  # must not raise
         quant_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.quant']
         assert len(quant_batches) == 1 and len(quant_batches[0].args[1]) == 1, quant_batches
@@ -228,7 +232,7 @@ def run():
     # longer gates on avg_qty alone.
     try:
         client = _mock_client(storable_products=[{"id": 1}])
-        ctx = _make_ctx(stock_sel={"avg_qty": 0, "sub_locations": 2})
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=0, sub_locations=2))
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         assert client.search_read.call_count > 0, "expected search_read to fire (warehouse lookup)"
         loc_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.location']
@@ -244,7 +248,7 @@ def run():
     # Pattern 3: sub_locations=0 (default) -> no stock.location create_batch.
     try:
         client = _mock_client(storable_products=[{"id": 1}])
-        ctx = _make_ctx(stock_sel={"avg_qty": 20})
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20))
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         loc_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.location']
         assert loc_batches == [], loc_batches
@@ -257,7 +261,7 @@ def run():
     # verified here by confirming an even, deterministic cycle across it.
     try:
         client = _mock_client(storable_products=[{"id": i} for i in range(1, 7)])
-        ctx = _make_ctx(stock_sel={"avg_qty": 20, "sub_locations": 2})
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20, sub_locations=2))
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         quant_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.quant']
         vals_list = quant_batches[0].args[1]
@@ -278,7 +282,7 @@ def run():
     # Pattern 3: second_warehouse=False (default) -> no stock.warehouse create.
     try:
         client = _mock_client(storable_products=[{"id": 1}])
-        ctx = _make_ctx(stock_sel={"avg_qty": 20})
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20))
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         wh_creates = [c for c in client.create.call_args_list if c.args[0] == 'stock.warehouse']
         assert wh_creates == [], wh_creates
@@ -290,7 +294,7 @@ def run():
     # be found afterwards — it only needs company_id, not warehouse 1.
     try:
         client = _mock_client(warehouse=False)
-        ctx = _make_ctx(stock_sel={"avg_qty": 0, "second_warehouse": True})
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=0, second_warehouse=True))
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         wh_creates = [c for c in client.create.call_args_list if c.args[0] == 'stock.warehouse']
         assert len(wh_creates) == 1, wh_creates
@@ -303,7 +307,7 @@ def run():
     # warehouse 1's — with 2 storables the round-robin hits both exactly once.
     try:
         client = _mock_client(storable_products=[{"id": 1}, {"id": 2}], second_warehouse_location_id=77)
-        ctx = _make_ctx(stock_sel={"avg_qty": 20, "second_warehouse": True})
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20, second_warehouse=True))
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         quant_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.quant']
         locations = sorted(v["location_id"] for v in quant_batches[0].args[1])
@@ -320,7 +324,7 @@ def run():
     # exactly 1 stock.lot and its quant carries that lot_id.
     try:
         client = _mock_client(storable_products=[{"id": 1, "tracking": "lot"}])
-        ctx = _make_ctx(stock_sel={"avg_qty": 20}, product_ids=[1], new_product_ids=[1])
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20), product_ids=[1], new_product_ids=[1])
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         lot_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.lot']
         assert len(lot_batches) == 1 and len(lot_batches[0].args[1]) == 1, lot_batches
@@ -339,7 +343,7 @@ def run():
     # stock.lot.create() calls.
     try:
         client = _mock_client(storable_products=[{"id": 1, "tracking": "serial"}])
-        ctx = _make_ctx(stock_sel={"avg_qty": 20, "tracking_serial_max": 5},
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20, tracking_serial_max=5),
                         product_ids=[1], new_product_ids=[1])
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         lot_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.lot']
@@ -363,7 +367,7 @@ def run():
     # tracking) -> untouched bulk-quant path, no stock.lot at all.
     try:
         client = _mock_client(storable_products=[{"id": 1, "tracking": "lot"}])
-        ctx = _make_ctx(stock_sel={"avg_qty": 20}, product_ids=[1], new_product_ids=[])
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20), product_ids=[1], new_product_ids=[])
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         lot_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.lot']
         assert lot_batches == [], lot_batches
@@ -378,7 +382,7 @@ def run():
     # call at all, same as before S13.
     try:
         client = _mock_client(storable_products=[{"id": 1, "tracking": "none"}])
-        ctx = _make_ctx(stock_sel={"avg_qty": 20}, product_ids=[1], new_product_ids=[1])
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20), product_ids=[1], new_product_ids=[1])
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         lot_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.lot']
         assert lot_batches == [], lot_batches
@@ -392,7 +396,7 @@ def run():
     # already thinks is tracking='serial').
     try:
         client = _mock_client(storable_products=[{"id": i, "tracking": "serial"} for i in range(1, 6)])
-        ctx = _make_ctx(stock_sel={"avg_qty": 20, "tracking_serial_max": 50},
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20, tracking_serial_max=50),
                         product_ids=list(range(1, 6)), new_product_ids=list(range(1, 6)))
         original_cap = inventory._MAX_SERIAL_RECORDS_PER_RUN
         inventory._MAX_SERIAL_RECORDS_PER_RUN = 3  # force exhaustion well before 5 products x up-to-50 each
@@ -428,7 +432,7 @@ def run():
 
     try:
         client = _mock_client(storable_products=[{"id": 1}])
-        ctx = _make_ctx(stock_sel={"avg_qty": 0, "sub_locations": 2},
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=0, sub_locations=2),
                          feature_flags={"stock_multi_locations": False})
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         loc_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.location']
@@ -440,7 +444,7 @@ def run():
 
     try:
         client = _mock_client(storable_products=[{"id": 1, "tracking": "lot"}])
-        ctx = _make_ctx(stock_sel={"avg_qty": 20}, product_ids=[1], new_product_ids=[1],
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20), product_ids=[1], new_product_ids=[1],
                          feature_flags={"stock_lots": False})
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         lot_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.lot']
@@ -465,7 +469,7 @@ def run():
             return base_batch(model, values_list, context=context)
 
         client.create_batch.side_effect = _create_batch_lot_blocked
-        ctx = _make_ctx(stock_sel={"avg_qty": 20}, product_ids=[1, 2], new_product_ids=[1, 2])
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20), product_ids=[1, 2], new_product_ids=[1, 2])
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)  # must not raise
         lot_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.lot']
         assert len(lot_batches) == 1, "expected exactly one (failed) stock.lot attempt"
@@ -486,7 +490,7 @@ def run():
     # Pattern 3: orderpoints_pct=0 (default/absent) -> no orderpoint batch.
     try:
         client = _mock_client(storable_products=[{"id": 1}])
-        ctx = _make_ctx(stock_sel={"avg_qty": 20})
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20))
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         op_batches = [c for c in client.create_batch.call_args_list
                       if c.args[0] == 'stock.warehouse.orderpoint']
@@ -501,7 +505,7 @@ def run():
     # get_main_company_id, not ctx.partner_company_ids).
     try:
         client = _mock_client(storable_products=[{"id": 1}])
-        ctx = _make_ctx(stock_sel={"avg_qty": 0, "orderpoints_pct": 100},
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=0, orderpoints_pct=100),
                          company_ids=[], product_ids=[1], component_ids=[],
                          new_product_ids=[1])
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
@@ -520,8 +524,8 @@ def run():
     # call (Pattern 8).
     try:
         client = _mock_client(storable_products=[{"id": 1}, {"id": 2}])
-        ctx = _make_ctx(stock_sel={"avg_qty": 20, "orderpoints_pct": 100,
-                                    "orderpoint_min_qty": 8, "orderpoint_max_qty": 30},
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20, orderpoints_pct=100, orderpoint_min_qty=8,
+                                              orderpoint_max_qty=30),
                          product_ids=[1, 2], component_ids=[], new_product_ids=[1, 2])
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         op_batches = [c for c in client.create_batch.call_args_list
@@ -544,7 +548,7 @@ def run():
     # live-confirmed (product, warehouse, location) uniqueness constraint).
     try:
         client = _mock_client(storable_products=[{"id": 1}, {"id": 2}, {"id": 3}])
-        ctx = _make_ctx(stock_sel={"avg_qty": 20, "orderpoints_pct": 100},
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20, orderpoints_pct=100),
                          product_ids=[1, 2], component_ids=[3], new_product_ids=[1])
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         op_batches = [c for c in client.create_batch.call_args_list
@@ -562,7 +566,7 @@ def run():
     # stock.warehouse.orderpoint batch call.
     try:
         client = _mock_client(storable_products=[{"id": 1}])
-        ctx = _make_ctx(stock_sel={"avg_qty": 20, "orderpoints_pct": 100},
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20, orderpoints_pct=100),
                          product_ids=[1], component_ids=[], new_product_ids=[1])
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)
         quant_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.quant']
@@ -585,7 +589,7 @@ def run():
             return base_batch(model, values_list, context=context)
 
         client.create_batch.side_effect = _create_batch_op_blocked
-        ctx = _make_ctx(stock_sel={"avg_qty": 20, "orderpoints_pct": 100},
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20, orderpoints_pct=100),
                          product_ids=[1], component_ids=[], new_product_ids=[1])
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)  # must not raise
         quant_batches = [c for c in client.create_batch.call_args_list if c.args[0] == 'stock.quant']
@@ -600,7 +604,7 @@ def run():
         random_module = __import__("random")
         random_module.seed(42)
         client = _mock_client(storable_products=[{"id": i} for i in range(1, 101)])
-        ctx = _make_ctx(stock_sel={"avg_qty": 20, "orderpoints_pct": 50},
+        ctx = _make_ctx(stock_sel=StockConfig(avg_qty=20, orderpoints_pct=50),
                         product_ids=list(range(1, 101)), component_ids=[],
                         new_product_ids=list(range(1, 101)))
         inventory.create_inventory_data(client, gemini=None, ctx=ctx)

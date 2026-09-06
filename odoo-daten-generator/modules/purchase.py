@@ -226,7 +226,7 @@ def create_purchase_data(client, gemini, ctx: RunContext) -> None:
         })
 
     analytic_sel = ctx.module_selections.analytic
-    purchase_pct = int(analytic_sel.get("purchase_pct", 0)) if analytic_sel.get("enabled") else 0
+    purchase_pct = analytic_sel.purchase_pct if analytic_sel else 0
     if purchase_pct > 0:
         account_ids = odoo_actions.get_or_create_analytic_accounts(client, ctx)
         data_factory.assign_analytic_distribution(po_line_vals_list, purchase_pct, account_ids)

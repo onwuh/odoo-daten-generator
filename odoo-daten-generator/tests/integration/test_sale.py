@@ -112,7 +112,7 @@ def run(client, ctx):
             # second call: sale.order search → returns order with opportunity_id
             [{"id": order_id or 1, "opportunity_id": [opp_id or 1, "Test Opp"]}],
         ]
-        from config import DemoCriteria, ModuleSelections, RunContext
+        from config import AnalyticConfig, DemoCriteria, ModuleSelections, RunContext
         criteria = DemoCriteria(
             mode="both", industry="Test", num_companies=1,
             num_delivery_contacts=0, num_invoice_contacts=0, num_other_contacts=0,
@@ -285,9 +285,8 @@ def run(client, ctx):
         rctx.partner_company_ids = [partner_id]
         rctx.product_ids = ctx.product_ids
         rctx.module_selections.sale_confirm_pct = 100
-        rctx.module_selections.analytic = {
-            "enabled": True, "sale_pct": 100, "purchase_pct": 0, "expense_pct": 0,
-        }
+        rctx.module_selections.analytic = AnalyticConfig(sale_pct=100, purchase_pct=0,
+                                                         expense_pct=0)
 
         create_sale_data(client, None, rctx)
 

@@ -56,8 +56,8 @@ def create_expense_data(client, gemini, ctx: RunContext) -> None:
         if company:
             currency_id = _unwrap(company[0].get("currency_id"))
 
-    count_per_employee = sel.get("count_per_employee", 3)
-    approved_pct = sel.get("approved_pct", 70)
+    count_per_employee = sel.count_per_employee
+    approved_pct = sel.approved_pct
     today_str = datetime.date.today().isoformat()
 
     vals_list = []
@@ -84,7 +84,7 @@ def create_expense_data(client, gemini, ctx: RunContext) -> None:
     # off. Cost-center ids are lazy+memoized (odoo_actions), so calling this
     # here doesn't duplicate creation if sale.py/purchase.py already did it.
     analytic_sel = ctx.module_selections.analytic
-    expense_pct = int(analytic_sel.get("expense_pct", 0)) if analytic_sel.get("enabled") else 0
+    expense_pct = analytic_sel.expense_pct if analytic_sel else 0
     if expense_pct > 0:
         account_ids = odoo_actions.get_or_create_analytic_accounts(client, ctx)
         data_factory.assign_analytic_distribution(vals_list, expense_pct, account_ids)

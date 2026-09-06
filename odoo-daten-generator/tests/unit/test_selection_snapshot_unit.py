@@ -73,7 +73,17 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 import run_config
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import (
+    AnalyticConfig,
+    DemoCriteria,
+    DocumentsConfig,
+    ExpenseConfig,
+    ModuleSelections,
+    MrpConfig,
+    RecruitmentConfig,
+    RunContext,
+    StockConfig,
+)
 from modules import documents, expenses, inventory, mrp, purchase, recruiting, sale
 
 _FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
@@ -418,7 +428,7 @@ def _search_mrp(model, domain, fields, limit):
 
 def _case_mrp():
     client, log = _recording_client(_search_mrp)
-    ctx = _ctx(ModuleSelections(mrp=dict(_MRP_SEL)),
+    ctx = _ctx(ModuleSelections(mrp=MrpConfig(**_MRP_SEL)),
                feature_flags={"mrp_routings": True, "quality": True},
                name_banks={"product_names": [f"Produkt {i}" for i in range(1, 9)]},
                installed_modules={"mrp", "stock"})
@@ -456,7 +466,7 @@ def _search_inventory(model, domain, fields, limit):
 
 def _case_inventory():
     client, log = _recording_client(_search_inventory)
-    ctx = _ctx(ModuleSelections(stock=dict(_STOCK_SEL)),
+    ctx = _ctx(ModuleSelections(stock=StockConfig(**_STOCK_SEL)),
                partner_company_ids=[10, 11],
                product_ids=[1, 2, 3],
                component_ids=[4, 5],
@@ -502,7 +512,8 @@ def _search_documents(model, domain, fields, limit):
 
 def _case_documents():
     client, log = _recording_client(_search_documents)
-    ctx = _ctx(ModuleSelections(documents={"bill_pdfs_enabled": True, "cv_pdfs_enabled": True}),
+    ctx = _ctx(ModuleSelections(documents=DocumentsConfig(bill_pdfs_enabled=True,
+                                                          cv_pdfs_enabled=True)),
                bill_ids=[201, 202],
                applicant_ids=[301, 302],
                installed_modules={"hr_recruitment", "hr_recruitment_skills"},
@@ -543,7 +554,7 @@ def _search_recruiting(model, domain, fields, limit):
 
 def _case_recruiting():
     client, log = _recording_client(_search_recruiting)
-    ctx = _ctx(ModuleSelections(hr_recruitment=dict(_RECRUIT_SEL)),
+    ctx = _ctx(ModuleSelections(hr_recruitment=RecruitmentConfig(**_RECRUIT_SEL)),
                installed_modules={"hr_recruitment", "hr_recruitment_skills"})
     recruiting.create_recruiting_data(client, _StubLLM(), ctx)
     return log
@@ -571,8 +582,8 @@ def _search_sale(model, domain, fields, limit):
 def _case_sale():
     client, log = _recording_client(_search_sale)
     ctx = _ctx(ModuleSelections(sale=6, sale_confirm_pct=50,
-                                analytic={"enabled": True, "sale_pct": 60,
-                                          "purchase_pct": 40, "expense_pct": 30}),
+                                analytic=AnalyticConfig(sale_pct=60,
+                                                        purchase_pct=40, expense_pct=30)),
                partner_company_ids=[1, 2],
                product_ids=[10, 11, 12],
                opportunity_ids=[401, 402],
@@ -612,8 +623,8 @@ def _search_purchase(model, domain, fields, limit):
 def _case_purchase():
     client, log = _recording_client(_search_purchase)
     ctx = _ctx(ModuleSelections(purchase=4, purchase_confirm_pct=75,
-                                analytic={"enabled": True, "sale_pct": 60,
-                                          "purchase_pct": 45, "expense_pct": 30}),
+                                analytic=AnalyticConfig(sale_pct=60,
+                                                        purchase_pct=45, expense_pct=30)),
                partner_company_ids=[10],
                component_ids=[21, 22, 23],
                supplier_ids=[51, 52],
@@ -634,9 +645,9 @@ def _search_expenses(model, domain, fields, limit):
 
 def _case_expenses():
     client, log = _recording_client(_search_expenses)
-    ctx = _ctx(ModuleSelections(hr_expense={"count_per_employee": 3, "approved_pct": 60},
-                                analytic={"enabled": True, "sale_pct": 60,
-                                          "purchase_pct": 40, "expense_pct": 50}),
+    ctx = _ctx(ModuleSelections(hr_expense=ExpenseConfig(count_per_employee=3, approved_pct=60),
+                                analytic=AnalyticConfig(sale_pct=60,
+                                                        purchase_pct=40, expense_pct=50)),
                employee_ids=[71, 72, 73],
                installed_modules={"hr_expense"})
     expenses.create_expense_data(client, _StubLLM(), ctx)

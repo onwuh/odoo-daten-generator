@@ -8,7 +8,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import ChatterConfig, DemoCriteria, LostConfig, ModuleSelections, RunContext
 from modules import crm
 
 
@@ -110,10 +110,9 @@ def run():
                     return {}
 
             ctx = _make_ctx(num_opps=1, num_leads=0)
-            ctx.module_selections.crm_chatter = {
-                "enabled": True, "style": "mixed", "messages_per_opp": 2,
-                "use_db_names": use_db_names,
-            }
+            ctx.module_selections.crm_chatter = ChatterConfig(
+                style="mixed", messages_per_opp=2, use_db_names=use_db_names,
+            )
             opp_data = [{
                 "id": 1, "name": "Angebot A",
                 "partner_name": "Echte Kunden GmbH",
@@ -148,9 +147,9 @@ def run():
         crm.mark_lost_opportunities(client, gemini=None, ctx=ctx)
         client.search_read.assert_not_called()
         client.write.assert_not_called()
-        results.append(("mark_lost_opportunities: crm_lost={} -> no calls (Pattern 3)", True, ""))
+        results.append(("mark_lost_opportunities: crm_lost=None -> no calls (Pattern 3)", True, ""))
     except AssertionError as e:
-        results.append(("mark_lost_opportunities: crm_lost={} -> no calls (Pattern 3)", False, str(e)))
+        results.append(("mark_lost_opportunities: crm_lost=None -> no calls (Pattern 3)", False, str(e)))
 
     # ------------------------------------------------------------------
     # R11: pct=0 -> no calls at all.
@@ -159,7 +158,7 @@ def run():
         client = MagicMock()
         ctx = _make_ctx()
         ctx.opportunity_ids = [1, 2, 3]
-        ctx.module_selections.crm_lost = {"pct": 0}
+        ctx.module_selections.crm_lost = LostConfig(pct=0)
         crm.mark_lost_opportunities(client, gemini=None, ctx=ctx)
         client.search_read.assert_not_called()
         results.append(("mark_lost_opportunities: pct=0 -> no calls", True, ""))
@@ -175,7 +174,7 @@ def run():
         client = MagicMock()
         ctx = _make_ctx()
         ctx.opportunity_ids = []
-        ctx.module_selections.crm_lost = {"pct": 50}
+        ctx.module_selections.crm_lost = LostConfig(pct=50)
         crm.mark_lost_opportunities(client, gemini=None, ctx=ctx)
         client.search_read.assert_not_called()
         results.append(("mark_lost_opportunities: empty opportunity_ids -> no calls (Pattern 5)", True, ""))
@@ -194,7 +193,7 @@ def run():
         ctx = _make_ctx()
         ctx.opportunity_ids = [1, 2, 3, 4]
         ctx.linked_opportunity_ids = [1, 2]
-        ctx.module_selections.crm_lost = {"pct": 100}
+        ctx.module_selections.crm_lost = LostConfig(pct=100)
         crm.mark_lost_opportunities(client, gemini=None, ctx=ctx)
         written_ids = set()
         for call in client.write.call_args_list:
@@ -212,7 +211,7 @@ def run():
         client.search_read.side_effect = lambda model, *a, **kw: []
         ctx = _make_ctx()
         ctx.opportunity_ids = [1, 2, 3]
-        ctx.module_selections.crm_lost = {"pct": 100}
+        ctx.module_selections.crm_lost = LostConfig(pct=100)
         crm.mark_lost_opportunities(client, gemini=None, ctx=ctx)
         client.write.assert_not_called()
         results.append(("mark_lost_opportunities: empty crm.lost.reason pool -> no writes (Pattern 1)", True, ""))
@@ -231,7 +230,7 @@ def run():
         )
         ctx = _make_ctx()
         ctx.opportunity_ids = [1, 2]
-        ctx.module_selections.crm_lost = {"pct": 100}
+        ctx.module_selections.crm_lost = LostConfig(pct=100)
         crm.mark_lost_opportunities(client, gemini=None, ctx=ctx)
         assert client.write.call_count >= 1
         for call in client.write.call_args_list:
@@ -253,7 +252,7 @@ def run():
         )
         ctx = _make_ctx()
         ctx.opportunity_ids = list(range(200))
-        ctx.module_selections.crm_lost = {"pct": 30}
+        ctx.module_selections.crm_lost = LostConfig(pct=30)
         crm.mark_lost_opportunities(client, gemini=None, ctx=ctx)
         written_ids = set()
         for call in client.write.call_args_list:

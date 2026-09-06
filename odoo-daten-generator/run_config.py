@@ -13,7 +13,11 @@ error. Same silent-disable class as the historical B1 bug.
 import logging
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import (
+    ActivitiesConfig, AnalyticConfig, ChatterConfig, DemoCriteria, DocumentsConfig,
+    ExpenseConfig, LostConfig, ModuleSelections, MrpConfig, RecruitmentConfig,
+    RunContext, StockConfig, TimeoffConfig,
+)
 from odoo_actions import PRIMARY_MODEL_PER_MODULE
 
 logger = logging.getLogger(__name__)
@@ -276,20 +280,19 @@ def build_selections(payload: Dict[str, Any]) -> Tuple[ModuleSelections, Set[str
             style = chatter.get("style", "mixed")
             if style not in VALID_CHATTER_STYLES:
                 raise ConfigError(f"Unbekannter Chatter-Stil '{style}'.")
-            sel.crm_chatter = {
-                "enabled": True,
-                "style": style,
-                "messages_per_opp": _as_int(chatter.get("messages_per_opp"),
-                                            "crm.chatter.messages_per_opp", 1, 50, default=4),
+            sel.crm_chatter = ChatterConfig(
+                style=style,
+                messages_per_opp=_as_int(chatter.get("messages_per_opp"),
+                                         "crm.chatter.messages_per_opp", 1, 50, default=4),
                 # Real customer/salesperson names only with explicit consent.
-                "use_db_names": payload.get("existing_data_consent") == CONSENT_GRANTED,
-            }
+                use_db_names=payload.get("existing_data_consent") == CONSENT_GRANTED,
+            )
         activities = _as_dict(crm.get("activities"), "crm.activities")
         if _enabled(activities):
             past = _as_pct(activities.get("past_pct"), "crm.activities.past_pct", 30)
             today = min(_as_pct(activities.get("today_pct"), "crm.activities.today_pct", 20),
                         100 - past)
-            sel.crm_activities = {"enabled": True, "past_pct": past, "today_pct": today}
+            sel.crm_activities = ActivitiesConfig(past_pct=past, today_pct=today)
         # R11: crm_lost only settable when crm itself is enabled — a crm.py
         # sub-feature (like chatter/activities above), not its own module.
         # Set here, inside `if _enabled(crm)`, so "CRM installed but not
@@ -299,7 +302,7 @@ def build_selections(payload: Dict[str, Any]) -> Tuple[ModuleSelections, Set[str
         # prevent it).
         lost = _as_dict(crm.get("lost"), "crm.lost")
         if _enabled(lost):
-            sel.crm_lost = {"pct": _as_pct(lost.get("pct"), "crm.lost.pct", 20)}
+            sel.crm_lost = LostConfig(pct=_as_pct(lost.get("pct"), "crm.lost.pct", 20))
 
     sale = _as_dict(modules.get("sale"), "modules.sale")
     if _enabled(sale):
@@ -320,18 +323,17 @@ def build_selections(payload: Dict[str, Any]) -> Tuple[ModuleSelections, Set[str
         sel.hr = _as_int(hr.get("count"), "hr.count", 0, 1000, default=0)
         timeoff = _as_dict(hr.get("timeoff"), "hr.timeoff")
         if _enabled(timeoff):
-            sel.hr_timeoff = {
-                "enabled": True,
-                "entries_per_employee": _as_int(timeoff.get("entries_per_employee"),
-                                                "hr.timeoff.entries_per_employee", 1, 50, default=2),
-                "avg_length_days": _as_int(timeoff.get("avg_length_days"),
-                                           "hr.timeoff.avg_length_days", 1, 60, default=5),
-                "past_future_pct": _as_pct(timeoff.get("past_future_pct"),
-                                           "hr.timeoff.past_future_pct", 30),
-                "timescale_days": _as_int(timeoff.get("timescale_days"),
-                                          "hr.timeoff.timescale_days", 1, 3650, default=180),
-                "validate_pct": _as_pct(timeoff.get("validate_pct"), "hr.timeoff.validate_pct", 100),
-            }
+            sel.hr_timeoff = TimeoffConfig(
+                entries_per_employee=_as_int(timeoff.get("entries_per_employee"),
+                                             "hr.timeoff.entries_per_employee", 1, 50, default=2),
+                avg_length_days=_as_int(timeoff.get("avg_length_days"),
+                                        "hr.timeoff.avg_length_days", 1, 60, default=5),
+                past_future_pct=_as_pct(timeoff.get("past_future_pct"),
+                                        "hr.timeoff.past_future_pct", 30),
+                timescale_days=_as_int(timeoff.get("timescale_days"),
+                                       "hr.timeoff.timescale_days", 1, 3650, default=180),
+                validate_pct=_as_pct(timeoff.get("validate_pct"), "hr.timeoff.validate_pct", 100),
+            )
 
     project = _as_dict(modules.get("project"), "modules.project")
     if _enabled(project):
@@ -349,34 +351,34 @@ def build_selections(payload: Dict[str, Any]) -> Tuple[ModuleSelections, Set[str
     if _enabled(mrp):
         selected.add("mrp")
         components = _as_int(mrp.get("components_per_bom"), "mrp.components_per_bom", 0, 50, default=4)
-        sel.mrp = {
-            "num_products": _as_int(mrp.get("num_products"), "mrp.num_products", 0, 200, default=3),
-            "components_per_bom": components,
+        sel.mrp = MrpConfig(
+            num_products=_as_int(mrp.get("num_products"), "mrp.num_products", 0, 200, default=3),
+            components_per_bom=components,
             # Never more sub-BOMs than there are components to hang them off.
-            "sub_boms_per_product": min(
+            sub_boms_per_product=min(
                 _as_int(mrp.get("sub_boms_per_product"), "mrp.sub_boms_per_product", 0, 50, default=2),
                 components,
             ),
-            "num_workcenters": _as_int(mrp.get("num_workcenters"), "mrp.num_workcenters", 0, 50, default=3),
-            "num_manufacturing_orders": _as_int(mrp.get("num_manufacturing_orders"),
-                                                "mrp.num_manufacturing_orders", 0, 200, default=5),
-            "create_quality_points": _as_bool(mrp.get("create_quality_points")),
-            "quality_fail_pct": _as_pct(mrp.get("quality_fail_pct"), "mrp.quality_fail_pct", default=0),
-        }
+            num_workcenters=_as_int(mrp.get("num_workcenters"), "mrp.num_workcenters", 0, 50, default=3),
+            num_manufacturing_orders=_as_int(mrp.get("num_manufacturing_orders"),
+                                             "mrp.num_manufacturing_orders", 0, 200, default=5),
+            create_quality_points=_as_bool(mrp.get("create_quality_points")),
+            quality_fail_pct=_as_pct(mrp.get("quality_fail_pct"), "mrp.quality_fail_pct", default=0),
+        )
 
     recruitment = _as_dict(modules.get("hr_recruitment"), "modules.hr_recruitment")
     if _enabled(recruitment):
         selected.add("hr_recruitment")
-        sel.hr_recruitment = {
-            "num_jobs": _as_int(recruitment.get("num_jobs"), "hr_recruitment.num_jobs", 0, 200, default=5),
-            "num_candidates": _as_int(recruitment.get("num_candidates"),
-                                      "hr_recruitment.num_candidates", 0, 500, default=15),
-            "create_skills": _as_bool(recruitment.get("create_skills"), default=True),
-            "num_skill_types": _as_int(recruitment.get("num_skill_types"),
-                                       "hr_recruitment.num_skill_types", 0, 50, default=3),
-            "skills_per_type": _as_int(recruitment.get("skills_per_type"),
-                                       "hr_recruitment.skills_per_type", 0, 50, default=4),
-        }
+        sel.hr_recruitment = RecruitmentConfig(
+            num_jobs=_as_int(recruitment.get("num_jobs"), "hr_recruitment.num_jobs", 0, 200, default=5),
+            num_candidates=_as_int(recruitment.get("num_candidates"),
+                                   "hr_recruitment.num_candidates", 0, 500, default=15),
+            create_skills=_as_bool(recruitment.get("create_skills"), default=True),
+            num_skill_types=_as_int(recruitment.get("num_skill_types"),
+                                    "hr_recruitment.num_skill_types", 0, 50, default=3),
+            skills_per_type=_as_int(recruitment.get("skills_per_type"),
+                                    "hr_recruitment.skills_per_type", 0, 50, default=4),
+        )
 
     purchase = _as_dict(modules.get("purchase"), "modules.purchase")
     if _enabled(purchase):
@@ -406,35 +408,35 @@ def build_selections(payload: Dict[str, Any]) -> Tuple[ModuleSelections, Set[str
             stock.get("orderpoint_max_qty"), "stock.orderpoint_max_qty", 1, 100000, default=20)
         if orderpoint_max_qty <= orderpoint_min_qty:
             orderpoint_max_qty = orderpoint_min_qty + 1
-        sel.stock = {
-            "avg_qty": _as_int(stock.get("avg_qty"), "stock.avg_qty", 0, 100000, default=50),
-            "sub_locations": _as_int(stock.get("sub_locations"), "stock.sub_locations", 0, 50, default=0),
-            "second_warehouse": _as_bool(stock.get("second_warehouse")),
-            "tracking_lot_pct": lot_pct,
-            "tracking_serial_pct": serial_pct,
-            "tracking_serial_max": _as_int(
+        sel.stock = StockConfig(
+            avg_qty=_as_int(stock.get("avg_qty"), "stock.avg_qty", 0, 100000, default=50),
+            sub_locations=_as_int(stock.get("sub_locations"), "stock.sub_locations", 0, 50, default=0),
+            second_warehouse=_as_bool(stock.get("second_warehouse")),
+            tracking_lot_pct=lot_pct,
+            tracking_serial_pct=serial_pct,
+            tracking_serial_max=_as_int(
                 stock.get("tracking_serial_max"), "stock.tracking_serial_max", 1, 1000, default=10),
-            "orderpoints_pct": _as_pct(stock.get("orderpoints_pct"), "stock.orderpoints_pct", default=0),
-            "orderpoint_min_qty": orderpoint_min_qty,
-            "orderpoint_max_qty": orderpoint_max_qty,
-        }
+            orderpoints_pct=_as_pct(stock.get("orderpoints_pct"), "stock.orderpoints_pct", default=0),
+            orderpoint_min_qty=orderpoint_min_qty,
+            orderpoint_max_qty=orderpoint_max_qty,
+        )
 
     hr_expense = _as_dict(modules.get("hr_expense"), "modules.hr_expense")
     if _enabled(hr_expense):
         selected.add("hr_expense")
-        sel.hr_expense = {
-            "count_per_employee": _as_int(hr_expense.get("count_per_employee"),
-                                          "hr_expense.count_per_employee", 0, 100, default=3),
-            "approved_pct": _as_pct(hr_expense.get("approved_pct"), "hr_expense.approved_pct", 70),
-        }
+        sel.hr_expense = ExpenseConfig(
+            count_per_employee=_as_int(hr_expense.get("count_per_employee"),
+                                       "hr_expense.count_per_employee", 0, 100, default=3),
+            approved_pct=_as_pct(hr_expense.get("approved_pct"), "hr_expense.approved_pct", 70),
+        )
 
     documents = _as_dict(modules.get("documents"), "modules.documents")
     if _enabled(documents):
         selected.add("documents")
-        sel.documents = {
-            "bill_pdfs_enabled": _as_bool(documents.get("bill_pdfs"), default=True),
-            "cv_pdfs_enabled": _as_bool(documents.get("cv_pdfs"), default=True),
-        }
+        sel.documents = DocumentsConfig(
+            bill_pdfs_enabled=_as_bool(documents.get("bill_pdfs"), default=True),
+            cv_pdfs_enabled=_as_bool(documents.get("cv_pdfs"), default=True),
+        )
 
     # S15/R20: not its own orchestrated module (no WANTED_MODULES/
     # MODULE_RUN_ORDER/orchestrator.py entry, no progress row — see
@@ -447,12 +449,11 @@ def build_selections(payload: Dict[str, Any]) -> Tuple[ModuleSelections, Set[str
     analytic = _as_dict(modules.get("analytic"), "modules.analytic")
     if _enabled(analytic):
         selected.add("analytic")
-        sel.analytic = {
-            "enabled": True,
-            "sale_pct": _as_pct(analytic.get("sale_pct"), "analytic.sale_pct", 0),
-            "purchase_pct": _as_pct(analytic.get("purchase_pct"), "analytic.purchase_pct", 0),
-            "expense_pct": _as_pct(analytic.get("expense_pct"), "analytic.expense_pct", 0),
-        }
+        sel.analytic = AnalyticConfig(
+            sale_pct=_as_pct(analytic.get("sale_pct"), "analytic.sale_pct", 0),
+            purchase_pct=_as_pct(analytic.get("purchase_pct"), "analytic.purchase_pct", 0),
+            expense_pct=_as_pct(analytic.get("expense_pct"), "analytic.expense_pct", 0),
+        )
 
     return sel, selected
 
@@ -649,17 +650,17 @@ def estimate_record_counts(ctx: RunContext, selected: Set[str],
         if sel.leads:
             counts["Leads"] = sel.leads
         if sel.crm_chatter:
-            counts["Chatter-Nachrichten"] = sel.crm * int(sel.crm_chatter.get("messages_per_opp", 0))
+            counts["Chatter-Nachrichten"] = sel.crm * int(sel.crm_chatter.messages_per_opp)
         if sel.crm_activities:
             counts["Aktivitäten"] = sel.crm
         if sel.crm_lost:
             # Upper bound, not exact: the actual share is applied only to
             # opportunities sale.py leaves unlinked, which this arithmetic
             # pre-flight can't know ahead of the run.
-            counts["Verlorene Opportunities (max.)"] = round(sel.crm * sel.crm_lost.get("pct", 0) / 100)
+            counts["Verlorene Opportunities (max.)"] = round(sel.crm * sel.crm_lost.pct / 100)
     if "sale" in selected and sel.sale:
         counts["Aufträge"] = sel.sale
-        if "analytic" in selected and sel.analytic.get("sale_pct"):
+        if "analytic" in selected and sel.analytic and sel.analytic.sale_pct:
             # (ca.): only confirmed orders' lines are eligible (sale.py's
             # own post-confirm step, see modules/sale.py), and only those
             # still lacking a distribution — a service_tracking line
@@ -667,7 +668,7 @@ def estimate_record_counts(ctx: RunContext, selected: Set[str],
             # sale.py's own average of its 1-5 random draw, not a real count.
             num_confirmed = max(1, round(sel.sale * sel.sale_confirm_pct / 100))
             counts["Kostenrechnungs-Zeilen Verkauf (ca.)"] = round(
-                num_confirmed * 3 * sel.analytic["sale_pct"] / 100)
+                num_confirmed * 3 * sel.analytic.sale_pct / 100)
     if "account" in selected:
         if sel.account:
             counts["Kundenrechnungen"] = sel.account
@@ -676,53 +677,53 @@ def estimate_record_counts(ctx: RunContext, selected: Set[str],
     if "hr" in selected and sel.hr:
         counts["Mitarbeiter"] = sel.hr
         if sel.hr_timeoff:
-            counts["Urlaubsanträge"] = sel.hr * int(sel.hr_timeoff.get("entries_per_employee", 0))
+            counts["Urlaubsanträge"] = sel.hr * int(sel.hr_timeoff.entries_per_employee)
     if "project" in selected and sel.project:
         counts["Projekte"] = sel.project
         counts["Aufgaben"] = sel.project * sel.tasks_per_project
     if "hr_timesheet" in selected and sel.hr_timesheet:
         counts["Zeiteinträge"] = sel.hr_timesheet
     if "mrp" in selected and sel.mrp:
-        counts["Fertigungsprodukte"] = int(sel.mrp.get("num_products", 0))
-        counts["Arbeitszentren"] = int(sel.mrp.get("num_workcenters", 0))
-        counts["Fertigungsaufträge"] = int(sel.mrp.get("num_manufacturing_orders", 0))
-        if sel.mrp.get("create_quality_points"):
+        counts["Fertigungsprodukte"] = int(sel.mrp.num_products)
+        counts["Arbeitszentren"] = int(sel.mrp.num_workcenters)
+        counts["Fertigungsaufträge"] = int(sel.mrp.num_manufacturing_orders)
+        if sel.mrp.create_quality_points:
             # S14/R18: one quality.point per BOM (main + sub-BOMs, same
             # count mrp.py's own bom_vals_list produces) — exact, not "(ca.)",
             # since it doesn't depend on a random roll like the MO count
             # below does. quality.check needs a CONFIRMED MO to link to
             # (mrp.py's ~70% action_confirm roll), so that estimate stays
             # approximate like Nachbestellregeln above.
-            num_products_mrp = int(sel.mrp.get("num_products", 0))
-            sub_boms = int(sel.mrp.get("sub_boms_per_product", 0))
+            num_products_mrp = int(sel.mrp.num_products)
+            sub_boms = int(sel.mrp.sub_boms_per_product)
             counts["Qualitätsprüfpunkte"] = num_products_mrp * (1 + sub_boms)
-            num_mo = int(sel.mrp.get("num_manufacturing_orders", 0))
+            num_mo = int(sel.mrp.num_manufacturing_orders)
             if num_mo:
                 counts["Qualitätsprüfungen (ca.)"] = round(num_mo * 0.7)
     if "hr_recruitment" in selected and sel.hr_recruitment:
-        counts["Stellen"] = int(sel.hr_recruitment.get("num_jobs", 0))
-        counts["Bewerbungen"] = int(sel.hr_recruitment.get("num_candidates", 0))
+        counts["Stellen"] = int(sel.hr_recruitment.num_jobs)
+        counts["Bewerbungen"] = int(sel.hr_recruitment.num_candidates)
     if "purchase" in selected and sel.purchase:
         counts["Bestellungen"] = sel.purchase
-        if "analytic" in selected and sel.analytic.get("purchase_pct"):
+        if "analytic" in selected and sel.analytic and sel.analytic.purchase_pct:
             # 2 is purchase.py's own average of its 1-3 random draw, not a real count.
             counts["Kostenrechnungs-Zeilen Einkauf (ca.)"] = round(
-                sel.purchase * 2 * sel.analytic["purchase_pct"] / 100)
+                sel.purchase * 2 * sel.analytic.purchase_pct / 100)
     if "stock" in selected and sel.stock:
         # S14: gated on avg_qty>0 — an orderpoints-only run (avg_qty=0,
         # orderpoints_pct>0) never seeds any stock quantities, and S14 turns
         # that from an edge case into a normal config path.
-        if int(sel.stock.get("avg_qty", 0)) > 0:
+        if int(sel.stock.avg_qty) > 0:
             counts["Lagerbestände"] = c.num_storables or 0
-        counts["Lagerplätze"] = int(sel.stock.get("sub_locations", 0))
-        if sel.stock.get("second_warehouse"):
+        counts["Lagerplätze"] = int(sel.stock.sub_locations)
+        if sel.stock.second_warehouse:
             counts["Zweites Lager"] = 1
-        lot_pct = int(sel.stock.get("tracking_lot_pct", 0))
-        serial_pct = int(sel.stock.get("tracking_serial_pct", 0))
+        lot_pct = int(sel.stock.tracking_lot_pct)
+        serial_pct = int(sel.stock.tracking_serial_pct)
         if lot_pct:
             counts["Chargen (Lot-Nummern)"] = round((c.num_storables or 0) * lot_pct / 100)
         if serial_pct:
-            serial_max = int(sel.stock.get("tracking_serial_max", 10))
+            serial_max = int(sel.stock.tracking_serial_max)
             # Upper bound, not exact — N per serial product is random up to
             # serial_max (crm_lost's "(max.)" pattern above), soft-capped at
             # modules/inventory.py's own _MAX_SERIAL_RECORDS_PER_RUN (500,
@@ -736,7 +737,7 @@ def estimate_record_counts(ctx: RunContext, selected: Set[str],
             # in that edge case rather than lying about a smaller number.
             counts["Seriennummern (max.)"] = min(
                 round((c.num_storables or 0) * serial_pct / 100) * serial_max, 500)
-        orderpoints_pct = int(sel.stock.get("orderpoints_pct", 0))
+        orderpoints_pct = int(sel.stock.orderpoints_pct)
         if orderpoints_pct:
             # Approximate in both directions, not just one (unlike the lot/
             # serial rows above): undercounts because it only reads
@@ -747,11 +748,11 @@ def estimate_record_counts(ctx: RunContext, selected: Set[str],
             # signals both, deliberately not "(max.)" like the row above.
             counts["Nachbestellregeln (ca.)"] = round((c.num_storables or 0) * orderpoints_pct / 100)
     if "hr_expense" in selected and sel.hr_expense:
-        counts["Spesen"] = sel.hr * int(sel.hr_expense.get("count_per_employee", 0))
-        if "analytic" in selected and sel.analytic.get("expense_pct"):
+        counts["Spesen"] = sel.hr * int(sel.hr_expense.count_per_employee)
+        if "analytic" in selected and sel.analytic and sel.analytic.expense_pct:
             counts["Kostenrechnungs-Zeilen Spesen (ca.)"] = round(
-                counts["Spesen"] * sel.analytic["expense_pct"] / 100)
-    if "analytic" in selected and sel.analytic.get("enabled"):
+                counts["Spesen"] * sel.analytic.expense_pct / 100)
+    if "analytic" in selected and sel.analytic is not None:
         # Fixed set (odoo_actions._ANALYTIC_COST_CENTER_NAMES), created once
         # per run regardless of how many of sale/purchase/hr_expense end up
         # using them.

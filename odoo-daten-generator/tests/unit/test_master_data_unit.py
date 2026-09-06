@@ -7,7 +7,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from config import DemoCriteria, ModuleSelections, RunContext
+from config import DemoCriteria, ModuleSelections, RunContext, StockConfig
 from modules import master_data
 
 
@@ -134,9 +134,8 @@ def run():
         client = _mock_client_for_batches()
         ctx = _make_ctx()
         ctx.installed_modules = {"stock"}
-        ctx.module_selections.stock = {
-            "avg_qty": 10, "tracking_lot_pct": 20, "tracking_serial_pct": 5,
-        }
+        ctx.module_selections.stock = StockConfig(avg_qty=10, tracking_lot_pct=20,
+                                                  tracking_serial_pct=5)
         atoms = {"product_names": {"services": [], "consumables": [], "storables": ["Regal"]}}
         with patch.object(master_data.data_factory, "assign_tracking") as mocked:
             master_data._create_products(client, atoms, ctx)
@@ -165,7 +164,8 @@ def run():
         client = _mock_client_for_batches()
         ctx = _make_ctx()
         ctx.installed_modules = {"stock"}
-        ctx.module_selections.stock = {"avg_qty": 0, "tracking_lot_pct": 50, "tracking_serial_pct": 0}
+        ctx.module_selections.stock = StockConfig(avg_qty=0, tracking_lot_pct=50,
+                                                  tracking_serial_pct=0)
         atoms = {"product_names": {"services": [], "consumables": [], "storables": ["Regal"]}}
         with patch.object(master_data.data_factory, "assign_tracking") as mocked:
             master_data._create_products(client, atoms, ctx)
@@ -181,7 +181,8 @@ def run():
         client = _mock_client_for_batches()
         ctx = _make_ctx()
         ctx.installed_modules = set()
-        ctx.module_selections.stock = {"avg_qty": 10, "tracking_lot_pct": 50, "tracking_serial_pct": 0}
+        ctx.module_selections.stock = StockConfig(avg_qty=10, tracking_lot_pct=50,
+                                                  tracking_serial_pct=0)
         atoms = {"product_names": {"services": [], "consumables": [], "storables": ["Regal"]}}
         with patch.object(master_data.data_factory, "assign_tracking") as mocked:
             master_data._create_products(client, atoms, ctx)
@@ -232,7 +233,8 @@ def run():
         client.create_batch.side_effect = _create_batch
         ctx = _make_ctx()
         ctx.installed_modules = {"stock"}
-        ctx.module_selections.stock = {"avg_qty": 10, "tracking_lot_pct": 100, "tracking_serial_pct": 0}
+        ctx.module_selections.stock = StockConfig(avg_qty=10, tracking_lot_pct=100,
+                                                  tracking_serial_pct=0)
         atoms = {"product_names": {"services": [], "consumables": [], "storables": ["Regal"]}}
         master_data._create_products(client, atoms, ctx)
         assert len(calls) == 2, f"expected exactly one retry, got {len(calls)} calls"
